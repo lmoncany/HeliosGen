@@ -1,0 +1,221 @@
+@import "tailwindcss";
+
+/* ── Base ─────────────────────────────────────────────── */
+html, body, #__next { height: 100%; }
+
+body {
+  background: #090909;
+  color: #d4d4d4;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── Node design system ──────────────────────────────── */
+.node-card {
+  background: #111111;
+  border: 1px solid #333333;
+  border-radius: 8px;
+  overflow: visible;
+  position: relative;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.6);
+  transition: border-color 120ms;
+}
+.node-card:hover {
+  border-color: #444444;
+}
+
+.node-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 10px;
+  border-bottom: 1px solid #252525;
+}
+
+.node-label {
+  font-size: 11px;
+  font-weight: 500;
+  color: #666;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.node-field-label {
+  display: block;
+  font-size: 10px;
+  color: #404040;
+  margin-bottom: 4px;
+  letter-spacing: 0.02em;
+}
+
+.node-textarea {
+  width: 100%;
+  background: #0e0e0e;
+  border: 1px solid #1e1e1e;
+  border-radius: 5px;
+  color: #c8c8c8;
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 7px 8px;
+  resize: none;
+  outline: none;
+  font-family: inherit;
+  transition: border-color 100ms;
+}
+.node-textarea::placeholder { color: #333; }
+.node-textarea:focus { border-color: #303030; }
+
+.node-input {
+  width: 100%;
+  background: #0e0e0e;
+  border: 1px solid #1e1e1e;
+  border-radius: 5px;
+  color: #c8c8c8;
+  font-size: 11px;
+  padding: 5px 8px;
+  outline: none;
+  font-family: inherit;
+  transition: border-color 100ms;
+}
+.node-input::placeholder { color: #2e2e2e; }
+.node-input:focus { border-color: #2e2e2e; }
+
+.node-select {
+  width: 100%;
+  background: #0e0e0e;
+  border: 1px solid #1e1e1e;
+  border-radius: 5px;
+  color: #888;
+  font-size: 11px;
+  padding: 5px 8px;
+  outline: none;
+  font-family: inherit;
+  appearance: none;
+  cursor: pointer;
+  transition: border-color 100ms;
+}
+.node-select:focus { border-color: #2e2e2e; }
+
+/* ── Floating node label (above frame) ───────────────── */
+.node-above-label {
+  position: absolute;
+  top: -18px;
+  left: 2px;
+  font-size: 10px;
+  color: #444;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 500;
+  user-select: none;
+  pointer-events: none;
+}
+
+/* ── Handles ─────────────────────────────────────────── */
+/* ── Base handle ─────────────────────────────────────────────────────────── */
+.node-handle.react-flow__handle {
+  width: 14px !important;
+  height: 14px !important;
+  border-radius: 50% !important;
+  border: 2px solid #111 !important;
+  z-index: 10;
+  transition: transform 120ms;
+}
+
+/* Move handles fully outside the node border.
+   RF default: left → translate(-50%,-50%), right → translate(50%,-50%).
+   Using -100% / 100% puts the entire circle outside. */
+.react-flow__handle-left.node-handle {
+  transform: translate(-100%, -50%) !important;
+}
+.react-flow__handle-right.node-handle {
+  transform: translate(100%, -50%) !important;
+}
+.react-flow__handle-left.node-handle:hover {
+  transform: translate(-100%, -50%) scale(1.35) !important;
+}
+.react-flow__handle-right.node-handle:hover {
+  transform: translate(100%, -50%) scale(1.35) !important;
+}
+
+/* ── Per-role colours ────────────────────────────────────────────────────── */
+.node-handle-prompt.react-flow__handle {
+  background: #a78bfa !important;   /* violet  — text / prompt */
+}
+.node-handle-image.react-flow__handle {
+  background: #fb923c !important;   /* amber   — image input   */
+}
+.node-handle-source.react-flow__handle {
+  background: #34d399 !important;   /* emerald — output        */
+}
+
+/* ── Selection rectangle ─────────────────────────────── */
+.react-flow__selection {
+  background: rgba(167, 139, 250, 0.06) !important;
+  border: 1px solid rgba(167, 139, 250, 0.5) !important;
+  border-radius: 3px;
+}
+
+/* ── React Flow overrides ────────────────────────────── */
+.react-flow__node.selected .node-card {
+  border-color: #555;
+}
+.react-flow__edge.selected .react-flow__edge-path {
+  filter: brightness(1.4);
+}
+.react-flow__attribution { display: none; }
+.react-flow__controls {
+  box-shadow: none !important;
+  border: 1px solid #1e1e1e !important;
+  border-radius: 6px !important;
+  overflow: hidden;
+}
+.react-flow__controls-button {
+  background: #111 !important;
+  border: none !important;
+  border-bottom: 1px solid #1e1e1e !important;
+  color: #555 !important;
+}
+.react-flow__controls-button:hover {
+  background: #191919 !important;
+  color: #999 !important;
+}
+.react-flow__controls-button:last-child {
+  border-bottom: none !important;
+}
+
+/* ── Toolbar buttons ─────────────────────────────────── */
+.toolbar-btn {
+  font-size: 12px;
+  font-weight: 500;
+  color: #555;
+  background: #111;
+  border: 1px solid #222;
+  border-radius: 6px;
+  padding: 5px 12px;
+  cursor: pointer;
+  transition: color 100ms, border-color 100ms;
+  font-family: inherit;
+}
+.toolbar-btn:hover:not(:disabled) {
+  color: #999;
+  border-color: #333;
+}
+.toolbar-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+
+.toolbar-btn-primary {
+  font-size: 12px;
+  font-weight: 500;
+  color: #e8e8e8;
+  background: #191919;
+  border: 1px solid #2e2e2e;
+  border-radius: 6px;
+  padding: 5px 14px;
+  cursor: pointer;
+  transition: background 100ms, border-color 100ms;
+  font-family: inherit;
+}
+.toolbar-btn-primary:hover:not(:disabled) {
+  background: #222;
+  border-color: #3a3a3a;
+}
+.toolbar-btn-primary:disabled { opacity: 0.3; cursor: not-allowed; }
