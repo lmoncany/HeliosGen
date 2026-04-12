@@ -1,6 +1,7 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
-import { Handle, Position, NodeProps, Node, NodeResizer } from "@xyflow/react";
+import { Handle, Position, NodeProps, Node } from "@xyflow/react";
+import CornerResizer from "./CornerResizer";
 import { useWorkflowStore, NodeData } from "@/lib/store";
 import { resolveInputs } from "@/lib/executor";
 
@@ -46,25 +47,25 @@ function ratioRect(value: string) {
 // ── Status dot ────────────────────────────────────────────────────────────────
 
 const STATUS_DOT: Record<string, string> = {
-  idle:    "bg-[#2a2a2a]",
+  idle:    "bg-[#2A1A14]",
   running: "bg-amber-400 animate-pulse",
-  done:    "bg-emerald-500",
+  done:    "bg-[#77E544]",
   error:   "bg-red-500",
 };
 
 // ── Component ────────────────────────────────────────────────────────────────
 
-export default function GenerateNode({ id, data, selected }: NodeProps<GenerateNodeType>) {
+export default function GenerateNode({ id, data }: NodeProps<GenerateNodeType>) {
   const updateNodeData       = useWorkflowStore((s) => s.updateNodeData);
   const removeEdgesForHandle = useWorkflowStore((s) => s.removeEdgesForHandle);
   const nodes                = useWorkflowStore((s) => s.nodes);
   const edges                = useWorkflowStore((s) => s.edges);
+  const debugMode            = useWorkflowStore((s) => s.debugMode);
 
   const [modelOpen, setModelOpen]     = useState(false);
   const [ratioOpen, setRatioOpen]     = useState(false);
   const [qualityOpen, setQualityOpen] = useState(false);
   const [loading, setLoading]         = useState(false);
-  const [hovered, setHovered]         = useState(false);
 
   const model       = (data.model as string) ?? "nano-banana-2";
   const caps        = MODEL_CAPS[model] ?? DEFAULT_CAPS;
@@ -120,10 +121,28 @@ export default function GenerateNode({ id, data, selected }: NodeProps<GenerateN
   }, [data.taskId, status, id, updateNodeData]);
 
   // ── Submit generation job ────────────────────────────────────────────────────
+  // Returns the source node id of the connected prompt handle, or undefined
+  const connectedPromptNodeId = edges.find(
+    (e) => e.target === id && e.targetHandle === "prompt"
+  )?.source;
+
   const generate = useCallback(async () => {
     const upstream  = resolveInputs(id, nodes as Node<NodeData>[], edges);
     const prompt    = upstream.prompt;
     const imageUrls = upstream.imageUrls;
+    const payload   = { model, prompt, imageUrls, aspectRatio, quality };
+
+    if (!prompt.trim()) {
+      if (connectedPromptNodeId) {
+        updateNodeData(connectedPromptNodeId, { hasError: true });
+      }
+      return;
+    }
+
+    if (debugMode) {
+      console.log(`[DEBUG] node=${id}`, payload);
+      return;
+    }
 
     setLoading(true);
     updateNodeData(id, { status: "running", imageUrl: undefined, errorMsg: undefined, taskId: undefined });
@@ -131,7 +150,7 @@ export default function GenerateNode({ id, data, selected }: NodeProps<GenerateN
       const res  = await fetch("/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model, prompt, imageUrls, aspectRatio, quality }),
+        body: JSON.stringify(payload),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error);
@@ -142,49 +161,46 @@ export default function GenerateNode({ id, data, selected }: NodeProps<GenerateN
     } finally {
       setLoading(false);
     }
-  }, [id, nodes, edges, model, aspectRatio, quality, updateNodeData]);
+  }, [id, nodes, edges, model, aspectRatio, quality, debugMode, connectedPromptNodeId, updateNodeData]);
 
+  // node-card has position:relative — handles and label position relative to it
   return (
     <div
-      className="relative h-full"
+      className="node-card w-full h-full flex flex-col"
       style={{ minWidth: 280 }}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => { setHovered(false); closeDropdowns(); }}
+      onMouseLeave={closeDropdowns}
     >
-      <NodeResizer
-        isVisible={selected || hovered}
-        minWidth={220}
-        minHeight={120}
-        keepAspectRatio
-        handleStyle={{ width: 8, height: 8, borderRadius: 2, background: "#a78bfa", border: "none" }}
-        lineStyle={{ borderColor: "#a78bfa", borderWidth: 1, opacity: 0.5 }}
-      />
-      {/* Floating label */}
-      <span className="node-above-label">Image Generator</span>
+      <CornerResizer minWidth={220} minHeight={120} keepAspectRatio />
+      <span className="node-above-label">{data.label as string}</span>
 
-      <div className="node-card h-full flex flex-col">
-        {/* ── Handles ───────────────────────────────────────────────────── */}
+        {/* ── Icon handles ──────────────────────────────────────────────── */}
         <Handle
           type="target"
           position={Position.Left}
           id="prompt"
           style={{ top: "36%" }}
-          className="node-handle node-handle-prompt"
-        />
+          className="node-handle-icon node-handle-icon-prompt"
+        >
+          <PromptIcon />
+        </Handle>
+
         {caps.supportsImages && (
           <Handle
             type="target"
             position={Position.Left}
             id="image"
             style={{ top: "72%" }}
-            className="node-handle node-handle-image"
-          />
+            className="node-handle-icon node-handle-icon-image"
+          >
+            <PhotoIcon />
+          </Handle>
         )}
+
         <Handle type="source" position={Position.Right} className="node-handle node-handle-source" />
 
         {/* ── Image area — top corners clip to card border-radius ───────── */}
         <div
-          className="relative bg-[#0d0d0d] overflow-hidden rounded-t-[7px] flex-1"
+          className="relative bg-[#090B0D] overflow-hidden rounded-t-[7px] flex-1"
           style={{ aspectRatio: cssRatio, minHeight: 60 }}
         >
           {data.imageUrl ? (
@@ -214,7 +230,7 @@ export default function GenerateNode({ id, data, selected }: NodeProps<GenerateN
 
         {/* ── Control bar ─────────────────────────────────────────────────
              Lives outside the image area — dropdowns open freely.          */}
-        <div className="flex items-center gap-2 px-2.5 py-[7px] border-t border-[#252525] shrink-0">
+        <div className="flex items-center gap-2 px-2.5 py-[7px] border-t border-[#1E1410] shrink-0">
           {/* Status dot */}
           <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${STATUS_DOT[status]}`} />
 
@@ -225,14 +241,14 @@ export default function GenerateNode({ id, data, selected }: NodeProps<GenerateN
               onClick={() => { setModelOpen((o) => !o); setRatioOpen(false); setQualityOpen(false); }}
               className="flex items-center gap-1 w-full text-left"
             >
-              <span className="text-[11px] text-[#888] hover:text-[#ccc] transition-colors truncate">
+              <span className="text-[11px] text-[#8D8E89] hover:text-white transition-colors truncate">
                 {modelInfo.name}
               </span>
               <ChevronIcon open={modelOpen} />
             </button>
 
             {modelOpen && (
-              <div className="absolute bottom-full left-0 mb-2 w-44 bg-[#141414] border border-[#2a2a2a] rounded-md overflow-hidden z-50 shadow-2xl">
+              <div className="absolute bottom-full left-0 mb-2 w-44 bg-[#0F1214] border border-[#2A1A14] rounded-md overflow-hidden z-50 shadow-2xl">
                 {MODELS.map((m) => (
                   <button
                     key={m.id}
@@ -245,12 +261,12 @@ export default function GenerateNode({ id, data, selected }: NodeProps<GenerateN
                       if (!newCaps.supportsImages) removeEdgesForHandle(id, "image");
                       setModelOpen(false);
                     }}
-                    className={`w-full flex items-center justify-between px-3 py-[7px] text-[11px] hover:bg-[#1e1e1e] transition-colors ${
-                      model === m.id ? "text-white" : "text-[#666]"
+                    className={`w-full flex items-center justify-between px-3 py-[7px] text-[11px] hover:bg-[#161214] transition-colors ${
+                      model === m.id ? "text-white" : "text-[#8D8E89]"
                     }`}
                   >
                     <span>{m.name}</span>
-                    <span className="text-[#383838]">{m.meta}</span>
+                    <span className="text-[#4A4A45]">{m.meta}</span>
                   </button>
                 ))}
               </div>
@@ -258,7 +274,7 @@ export default function GenerateNode({ id, data, selected }: NodeProps<GenerateN
           </div>
 
           {/* Divider */}
-          <span className="w-px h-3 bg-[#282828] shrink-0" />
+          <span className="w-px h-3 bg-[#2A1A14] shrink-0" />
 
           {/* Aspect ratio dropdown */}
           <div className="relative shrink-0">
@@ -267,14 +283,14 @@ export default function GenerateNode({ id, data, selected }: NodeProps<GenerateN
               onClick={() => { setRatioOpen((o) => !o); setModelOpen(false); setQualityOpen(false); }}
               className="flex items-center gap-1"
             >
-              <span className="text-[11px] text-[#888] hover:text-[#ccc] transition-colors tabular-nums">
+              <span className="text-[11px] text-[#8D8E89] hover:text-white transition-colors tabular-nums">
                 {aspectRatio}
               </span>
               <ChevronIcon open={ratioOpen} />
             </button>
 
             {ratioOpen && (
-              <div className="absolute bottom-full right-0 mb-2 w-32 bg-[#141414] border border-[#2a2a2a] rounded-md overflow-hidden z-50 shadow-2xl">
+              <div className="absolute bottom-full right-0 mb-2 w-32 bg-[#0F1214] border border-[#2A1A14] rounded-md overflow-hidden z-50 shadow-2xl">
                 {caps.ratios.map((r) => {
                   const { rw: iw, rh: ih, x, y } = ratioRect(r);
                   const active = r === aspectRatio;
@@ -283,15 +299,15 @@ export default function GenerateNode({ id, data, selected }: NodeProps<GenerateN
                       key={r}
                       onMouseDown={(e) => e.stopPropagation()}
                       onClick={() => { updateNodeData(id, { aspectRatio: r }); setRatioOpen(false); }}
-                      className={`w-full flex items-center gap-2.5 px-3 py-[7px] text-[11px] hover:bg-[#1e1e1e] transition-colors ${
-                        active ? "text-white" : "text-[#666]"
+                      className={`w-full flex items-center gap-2.5 px-3 py-[7px] text-[11px] hover:bg-[#161214] transition-colors ${
+                        active ? "text-white" : "text-[#8D8E89]"
                       }`}
                     >
                       <svg width="20" height="14" viewBox="0 0 20 14" className="shrink-0">
                         <rect
                           x={x} y={y} width={iw} height={ih} rx="1"
-                          fill={active ? "#d4d4d4" : "none"}
-                          stroke={active ? "#d4d4d4" : "#444"}
+                          fill={active ? "#FFFFFF" : "none"}
+                          stroke={active ? "#FFFFFF" : "#5A5A55"}
                           strokeWidth="1"
                         />
                       </svg>
@@ -306,7 +322,7 @@ export default function GenerateNode({ id, data, selected }: NodeProps<GenerateN
           {caps.supportsQuality && (
             <>
               {/* Divider */}
-              <span className="w-px h-3 bg-[#282828] shrink-0" />
+              <span className="w-px h-3 bg-[#2A1A14] shrink-0" />
 
               {/* Quality dropdown */}
               <div className="relative shrink-0">
@@ -315,14 +331,14 @@ export default function GenerateNode({ id, data, selected }: NodeProps<GenerateN
                   onClick={() => { setQualityOpen((o) => !o); setModelOpen(false); setRatioOpen(false); }}
                   className="flex items-center gap-1"
                 >
-                  <span className="text-[11px] text-[#888] hover:text-[#ccc] transition-colors uppercase">
+                  <span className="text-[11px] text-[#8D8E89] hover:text-white transition-colors uppercase">
                     {quality}
                   </span>
                   <ChevronIcon open={qualityOpen} />
                 </button>
 
                 {qualityOpen && (
-                  <div className="absolute bottom-full right-0 mb-2 w-36 bg-[#141414] border border-[#2a2a2a] rounded-md overflow-hidden z-50 shadow-2xl">
+                  <div className="absolute bottom-full right-0 mb-2 w-36 bg-[#0F1214] border border-[#2A1A14] rounded-md overflow-hidden z-50 shadow-2xl">
                     {[
                       { id: "1k", label: "1K", meta: "Standard" },
                       { id: "2k", label: "2K", meta: "High" },
@@ -332,12 +348,12 @@ export default function GenerateNode({ id, data, selected }: NodeProps<GenerateN
                         key={q.id}
                         onMouseDown={(e) => e.stopPropagation()}
                         onClick={() => { updateNodeData(id, { quality: q.id }); setQualityOpen(false); }}
-                        className={`w-full flex items-center justify-between px-3 py-[7px] text-[11px] hover:bg-[#1e1e1e] transition-colors ${
-                          quality === q.id ? "text-white" : "text-[#666]"
+                        className={`w-full flex items-center justify-between px-3 py-[7px] text-[11px] hover:bg-[#161214] transition-colors ${
+                          quality === q.id ? "text-white" : "text-[#8D8E89]"
                         }`}
                       >
                         <span className="uppercase font-medium">{q.label}</span>
-                        <span className="text-[#383838]">{q.meta}</span>
+                        <span className="text-[#4A4A45]">{q.meta}</span>
                       </button>
                     ))}
                   </div>
@@ -347,14 +363,14 @@ export default function GenerateNode({ id, data, selected }: NodeProps<GenerateN
           )}
 
           {/* Divider */}
-          <span className="w-px h-3 bg-[#282828] shrink-0" />
+          <span className="w-px h-3 bg-[#2A1A14] shrink-0" />
 
           {/* Generate button */}
           <button
             onMouseDown={(e) => e.stopPropagation()}
             onClick={generate}
             disabled={busy}
-            className="shrink-0 w-5 h-5 flex items-center justify-center rounded-full border border-[#2a2a2a] hover:border-[#555] text-[#666] hover:text-white transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+            className="shrink-0 w-5 h-5 flex items-center justify-center rounded-full border border-[#2A1A14] hover:border-[#77E544] text-[#8D8E89] hover:text-[#77E544] transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
           >
             {busy ? (
               <Spinner size="sm" />
@@ -366,18 +382,35 @@ export default function GenerateNode({ id, data, selected }: NodeProps<GenerateN
           </button>
 
         </div>
-      </div>
     </div>
   );
 }
 
 // ── Small helpers ─────────────────────────────────────────────────────────────
 
+function PromptIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="white">
+      <path d="M2 2h12v2.5H9.5V14h-3V4.5H2V2z" />
+    </svg>
+  );
+}
+
+function PhotoIcon() {
+  return (
+    <svg width="15" height="13" viewBox="0 0 18 15" fill="none" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="1" y="1" width="16" height="13" rx="2" />
+      <circle cx="5.5" cy="5" r="1.5" fill="white" stroke="none" />
+      <path d="m1 11 4.5-4.5 3 3 2.5-2.5 6 4" />
+    </svg>
+  );
+}
+
 function ChevronIcon({ open }: { open: boolean }) {
   return (
     <svg
       width="8" height="8" viewBox="0 0 8 8" fill="none"
-      stroke="#3a3a3a" strokeWidth="1.5" strokeLinecap="round"
+      stroke="#5A5A55" strokeWidth="1.5" strokeLinecap="round"
       className={`shrink-0 transition-transform duration-100 ${open ? "rotate-180" : ""}`}
     >
       <path d="M1 2.5 4 5.5 7 2.5"/>
@@ -388,6 +421,6 @@ function ChevronIcon({ open }: { open: boolean }) {
 function Spinner({ size = "md" }: { size?: "sm" | "md" }) {
   const cls = size === "sm" ? "w-2.5 h-2.5" : "w-5 h-5";
   return (
-    <span className={`${cls} border border-[#444] border-t-[#999] rounded-full animate-spin inline-block`} />
+    <span className={`${cls} border border-[#2A1A14] border-t-[#77E544] rounded-full animate-spin inline-block`} />
   );
 }

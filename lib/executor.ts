@@ -36,9 +36,21 @@ export function resolveInputs(
   nodeId: string,
   nodes: Node<NodeData>[],
   edges: Edge[]
-): { prompt?: string; imageUrls: string[] } {
+): {
+  prompt?: string;
+  imageUrls: string[];
+  startFrameUrl?: string;
+  endFrameUrl?: string;
+  resources: Array<{ url: string; label: string }>;
+} {
   const incoming = edges.filter((e) => e.target === nodeId);
-  const result: { prompt?: string; imageUrls: string[] } = { imageUrls: [] };
+  const result = {
+    imageUrls:    [] as string[],
+    resources:    [] as Array<{ url: string; label: string }>,
+    startFrameUrl: undefined as string | undefined,
+    endFrameUrl:   undefined as string | undefined,
+    prompt:        undefined as string | undefined,
+  };
 
   for (const edge of incoming) {
     const src = nodes.find((n) => n.id === edge.source);
@@ -46,17 +58,43 @@ export function resolveInputs(
 
     // Prompt sources
     if (src.type === "promptNode") {
-      result.prompt = src.data.prompt;
+      result.prompt = src.data.prompt as string | undefined;
     }
 
-    // Image input sources — collect all (up to 14 enforced by isValidConnection)
-    if (src.type === "imageInputNode" && src.data.inputImage) {
-      result.imageUrls.push(src.data.inputImage as string);
+    // "image" handle — multi-image input for generateNode (up to 14)
+    if (edge.targetHandle === "image") {
+      if (src.type === "imageInputNode" && src.data.inputImage) {
+        result.imageUrls.push(src.data.inputImage as string);
+      }
+      if (src.type === "generateNode") {
+        if (src.data.imageUrl) result.imageUrls.push(src.data.imageUrl as string);
+        if (src.data.prompt && !result.prompt) result.prompt = src.data.prompt as string;
+      }
     }
 
-    // Upstream generate node — carry its output image and prompt
-    if (src.type === "generateNode") {
-      if (src.data.imageUrl) result.imageUrls.push(src.data.imageUrl as string);
+    // "startFrame" handle — Kling first frame
+    if (edge.targetHandle === "startFrame") {
+      const url = (src.data.inputImage ?? src.data.imageUrl) as string | undefined;
+      if (url) result.startFrameUrl = url;
+    }
+
+    // "endFrame" handle — Kling last frame
+    if (edge.targetHandle === "endFrame") {
+      const url = (src.data.inputImage ?? src.data.imageUrl) as string | undefined;
+      if (url) result.endFrameUrl = url;
+    }
+
+    // "resource" handle — Kling element references (max 3)
+    if (edge.targetHandle === "resource") {
+      const url   = (src.data.inputImage ?? src.data.imageUrl) as string | undefined;
+      const label = src.data.label as string | undefined;
+      if (url && result.resources.length < 3) {
+        result.resources.push({ url, label: label ?? "element" });
+      }
+    }
+
+    // Upstream video generator — carry its prompt downstream
+    if (src.type === "videoGeneratorNode") {
       if (src.data.prompt && !result.prompt) result.prompt = src.data.prompt as string;
     }
   }

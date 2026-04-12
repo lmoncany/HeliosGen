@@ -1,0 +1,190 @@
+"use client";
+import { useEffect, useRef } from "react";
+import { useReactFlow, Node, Edge } from "@xyflow/react";
+import { useWorkflowStore, NodeData } from "@/lib/store";
+import { edgeStyle, EDGE_COLORS } from "@/lib/edgeStyles";
+import { NODES, NODE_SIZE, FALLBACK_SIZE } from "@/lib/nodeTypes";
+
+export interface DropState {
+  screenX: number;
+  screenY: number;
+  sourceNodeId: string;
+  sourceNodeType: string | undefined;
+  sourceHandleId: string | null;
+}
+
+interface Props {
+  dropState: DropState;
+  onClose: () => void;
+}
+
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+
+function targetHandleFor(sourceNodeType: string | undefined, targetNodeType: string): string | null {
+  if (sourceNodeType === "promptNode") return "prompt";
+  if (sourceNodeType === "imageInputNode" || sourceNodeType === "generateNode") {
+    if (targetNodeType === "videoGeneratorNode") return "startFrame";
+    if (targetNodeType === "generateNode")       return "image";
+  }
+  return null;
+}
+
+export default function NodePickerMenu({ dropState, onClose }: Props) {
+  const { screenToFlowPosition, flowToScreenPosition, getInternalNode } = useReactFlow();
+  const addNode    = useWorkflowStore((s) => s.addNode);
+  const insertEdge = useWorkflowStore((s) => s.insertEdge);
+
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  // Close on outside click
+  useEffect(() => {
+    const handle = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as HTMLElement)) {
+        onClose();
+      }
+    };
+    document.addEventListener("mousedown", handle, true);
+    return () => document.removeEventListener("mousedown", handle, true);
+  }, [onClose]);
+
+  // Close on Escape
+  useEffect(() => {
+    const handle = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", handle);
+    return () => document.removeEventListener("keydown", handle);
+  }, [onClose]);
+
+  const handleSelect = (type: string) => {
+    const flowPos = screenToFlowPosition({ x: dropState.screenX, y: dropState.screenY });
+    const size    = NODE_SIZE[type] ?? FALLBACK_SIZE;
+
+    const position = {
+      x: flowPos.x + 20,
+      y: flowPos.y - size.h / 2,
+    };
+
+    const nodeStyle = type === "imageInputNode"
+      ? { width: size.w }
+      : { width: size.w, height: size.h };
+
+    const nodeId = `${type}-${uid()}`;
+    const node: Node<NodeData> = {
+      id:   nodeId,
+      type,
+      position,
+      style: nodeStyle,
+      data: { label: type, status: "idle" },
+    };
+    addNode(node);
+
+    const targetHandle = targetHandleFor(dropState.sourceNodeType, type);
+    if (targetHandle) {
+      const edge: Edge = {
+        id:           `edge-${dropState.sourceNodeId}-${nodeId}`,
+        source:       dropState.sourceNodeId,
+        sourceHandle: dropState.sourceHandleId ?? undefined,
+        target:       nodeId,
+        targetHandle,
+        animated:     false,
+        style:        edgeStyle(targetHandle),
+      };
+      insertEdge(edge);
+    }
+
+    onClose();
+  };
+
+  // ── Pending connection line ──────────────────────────────────────────────────
+  // Convert source handle position (right-center of the source node) to screen space
+  const internal = getInternalNode(dropState.sourceNodeId);
+  const absX  = internal?.internals?.positionAbsolute?.x ?? 0;
+  const absY  = internal?.internals?.positionAbsolute?.y ?? 0;
+  const nodeW = internal?.measured?.width  ?? (NODE_SIZE[dropState.sourceNodeType ?? ""] ?? FALLBACK_SIZE).w;
+  const nodeH = internal?.measured?.height ?? (NODE_SIZE[dropState.sourceNodeType ?? ""] ?? FALLBACK_SIZE).h;
+  const src   = flowToScreenPosition({ x: absX + nodeW, y: absY + nodeH / 2 });
+  const dst   = { x: dropState.screenX, y: dropState.screenY };
+
+  // Bezier control points — horizontal pull matching React Flow's default edge style
+  const dx = Math.abs(dst.x - src.x) * 0.5;
+  const svgPath = [
+    `M ${src.x} ${src.y}`,
+    `C ${src.x + dx} ${src.y}, ${dst.x - dx} ${dst.y}, ${dst.x} ${dst.y}`,
+  ].join(" ");
+
+  // ── Only show nodes that can receive a connection ───────────────────────────
+  const linkable = NODES.filter((n) => n.canReceiveConnection);
+
+  // Use a representative target for the preview line color (first linkable node type)
+  const lineColor =
+    EDGE_COLORS[targetHandleFor(dropState.sourceNodeType, linkable[0]?.type ?? "") ?? "default"] ??
+    EDGE_COLORS.default;
+
+  const menuW = 208;
+  const menuH = linkable.length * 58 + 36;
+  const left  = Math.min(dropState.screenX + 16, window.innerWidth  - menuW - 16);
+  const top   = Math.min(dropState.screenY - 10,  window.innerHeight - menuH - 16);
+
+  return (
+    <>
+      {/* Animated dashed preview line from source handle to drop point */}
+      <svg
+        style={{
+          position: "fixed",
+          inset: 0,
+          width: "100vw",
+          height: "100vh",
+          pointerEvents: "none",
+          zIndex: 999,
+          overflow: "visible",
+        }}
+      >
+        <path
+          d={svgPath}
+          fill="none"
+          stroke={lineColor}
+          strokeWidth={2}
+          strokeDasharray="6 3"
+          strokeDashoffset={0}
+          strokeLinecap="round"
+          className="pending-edge-line"
+          opacity={0.75}
+        />
+      </svg>
+
+      {/* Node picker */}
+      <div
+        ref={menuRef}
+        style={{ position: "fixed", left, top, zIndex: 1000 }}
+        className="w-52 bg-[#0F1214] border border-[#2A2A2A] rounded-lg shadow-2xl overflow-hidden"
+        onMouseDown={(e) => e.stopPropagation()}
+      >
+        <div className="px-3 py-2 border-b border-[#1E1E1E]">
+          <p className="text-[10px] text-[#4A4A45] uppercase tracking-widest font-medium">
+            Connect to
+          </p>
+        </div>
+
+        {linkable.map((n) => (
+          <button
+            key={n.type}
+            onClick={() => handleSelect(n.type)}
+            onMouseDown={(e) => e.stopPropagation()}
+            className="w-full text-left px-3 py-2.5 hover:bg-[#161A1E] transition-colors group"
+          >
+            <div className="flex items-center gap-2.5 text-[#8D8E89] group-hover:text-[#77E544] transition-colors">
+              {n.icon}
+              <span className="text-[13px] text-white font-medium leading-none">
+                {n.label}
+              </span>
+            </div>
+            <p className="text-[10px] text-[#4A4A45] mt-1 pl-[22px] leading-none">
+              {n.description}
+            </p>
+          </button>
+        ))}
+      </div>
+    </>
+  );
+}

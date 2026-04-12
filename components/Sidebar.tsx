@@ -3,51 +3,8 @@ import { useCallback } from "react";
 import { useWorkflowStore, NodeData } from "@/lib/store";
 import { edgeStyle } from "@/lib/edgeStyles";
 import { Node, Edge } from "@xyflow/react";
+import { NODES, NODE_SIZE, FALLBACK_SIZE } from "@/lib/nodeTypes";
 
-const NODES = [
-  {
-    type: "generateNode",
-    icon: (
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-        <rect width="18" height="18" x="3" y="3" rx="2" />
-        <path d="m3 9 4-4 4 4 4-4 4 4" />
-        <path d="M3 15h18" />
-      </svg>
-    ),
-    label: "Image",
-    description: "Nano Banana 2 · always paired with text",
-  },
-  {
-    type: "imageInputNode",
-    icon: (
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-        <rect width="18" height="18" x="3" y="3" rx="2" ry="2" />
-        <circle cx="9" cy="9" r="2" />
-        <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21" />
-      </svg>
-    ),
-    label: "Image",
-    description: "Upload or URL source",
-  },
-  {
-    type: "promptNode",
-    icon: (
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-      </svg>
-    ),
-    label: "Text",
-    description: "Standalone text source",
-  },
-];
-
-// Rough size estimates per node type (width × height in px)
-const NODE_SIZE: Record<string, { w: number; h: number }> = {
-  generateNode:   { w: 280, h: 340 },
-  promptNode:     { w: 260, h: 130 },
-  imageInputNode: { w: 240, h: 220 },
-};
-const FALLBACK_SIZE = { w: 280, h: 280 };
 const GAP = 10;
 
 // Find the closest free position to the existing cluster.
@@ -132,6 +89,7 @@ export default function Sidebar() {
           type: "promptNode",
           position: { x, y: y + 20 },
           deletable: false,
+          style: { width: NODE_SIZE.promptNode.w, height: NODE_SIZE.promptNode.h },
           data: { label: "promptNode" },
         };
 
@@ -139,6 +97,7 @@ export default function Sidebar() {
           id: genId,
           type: "generateNode",
           position: { x: x + 320, y },
+          style: { width: NODE_SIZE.generateNode.w, height: NODE_SIZE.generateNode.h },
           data: { label: "generateNode", status: "idle", model: "nano-banana-2", aspectRatio: "1:1" },
         };
 
@@ -162,10 +121,16 @@ export default function Sidebar() {
       const size = NODE_SIZE[type] ?? FALLBACK_SIZE;
       const { x, y } = findFreePosition(nodes, size.w, size.h);
 
+      // imageInputNode height is content-driven (sized by the image ratio at runtime)
+      const nodeStyle = type === "imageInputNode"
+        ? { width: size.w }
+        : { width: size.w, height: size.h };
+
       const node: Node<NodeData> = {
         id: `${type}-${uid()}`,
         type,
         position: { x, y },
+        style: nodeStyle,
         data: { label: type, status: "idle" },
       };
       addNode(node);
@@ -174,40 +139,40 @@ export default function Sidebar() {
   );
 
   return (
-    <aside className="w-48 bg-[#0c0c0c] border-r border-[#181818] flex flex-col shrink-0">
+    <aside className="w-48 bg-[#0A0C0E] border-r border-[#1A100C] flex flex-col shrink-0">
       {/* Brand */}
-      <div className="px-4 py-4 border-b border-[#181818]">
-        <span className="text-[#e8e8e8] text-sm font-medium tracking-tight">
+      <div className="px-4 py-4 border-b border-[#1A100C]">
+        <span className="text-white text-sm font-medium tracking-tight">
           AI Workflow
         </span>
       </div>
 
       {/* Node list */}
       <div className="flex-1 p-3 space-y-1">
-        <p className="text-[#383838] text-[10px] uppercase tracking-widest px-1 py-2">
+        <p className="text-[#8D8E89] text-[10px] uppercase tracking-widest px-1 py-2">
           Nodes
         </p>
         {NODES.map((n) => (
           <button
             key={n.type + n.label}
             onClick={() => add(n.type)}
-            className="w-full text-left px-3 py-2.5 rounded hover:bg-[#161616] transition-colors group"
+            className="w-full text-left px-3 py-2.5 rounded hover:bg-[#0D1012] transition-colors group"
           >
-            <div className="flex items-center gap-2.5 text-[#666] group-hover:text-[#aaa] transition-colors">
+            <div className="flex items-center gap-2.5 text-[#8D8E89] group-hover:text-[#77E544] transition-colors">
               {n.icon}
-              <span className="text-[13px] text-[#aaa] group-hover:text-[#ddd] font-medium transition-colors">
+              <span className="text-[13px] text-white group-hover:text-white font-medium transition-colors">
                 {n.label}
               </span>
             </div>
-            <p className="text-[10px] text-[#383838] group-hover:text-[#555] mt-0.5 pl-[22px] transition-colors">
+            <p className="text-[10px] text-[#8D8E89] group-hover:text-[#8D8E89] mt-0.5 pl-[22px] transition-colors">
               {n.description}
             </p>
           </button>
         ))}
       </div>
 
-      <div className="p-3 border-t border-[#181818]">
-        <p className="text-[10px] text-[#2e2e2e] leading-4">
+      <div className="p-3 border-t border-[#1A100C]">
+        <p className="text-[10px] text-[#4A4A45] leading-4">
           Click to add nodes · Drag handles to connect
         </p>
       </div>

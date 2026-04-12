@@ -26,23 +26,43 @@ export interface NodeData extends Record<string, unknown> {
   aspectRatio?: string;
   duration?: number;
   // image (input or output)
-  imageUrl?: string;            // generated or piped output
-  inputImage?: string;          // base64 dataURL or remote URL set by user
-  imageNaturalRatio?: string;   // CSS aspect-ratio of the uploaded image, e.g. "1920 / 1080"
+  imageUrl?: string;
+  inputImage?: string;
+  imageNaturalRatio?: string;
   // generation settings
-  quality?: string;             // "1k" | "2k" | "4k"
+  quality?: string;
   // video output
   videoUrl?: string;
-  // error message
+  // kling 3.0 settings
+  sound?: boolean;
+  klingMode?: string;
+  count?: number;
+  // error
   errorMsg?: string;
+  // validation
+  hasError?: boolean;
   // pending job
   taskId?: string;
+}
+
+/** Human-readable label for each node type, including the counter */
+export function getNodeLabel(type: string, n: number): string {
+  const map: Record<string, string> = {
+    promptNode:          `Text #${n}`,
+    imageInputNode:      `Image #${n}`,
+    generateNode:        `Generator #${n}`,
+    videoGeneratorNode:  `Video Generator #${n}`,
+  };
+  return map[type] ?? `Node #${n}`;
 }
 
 interface WorkflowStore {
   nodes: Node<NodeData>[];
   edges: Edge[];
   isRunning: boolean;
+  debugMode: boolean;
+  /** Monotonically-increasing counter per node type — never resets on delete */
+  nodeCounters: Record<string, number>;
   onNodesChange: (changes: NodeChange[]) => void;
   onEdgesChange: (changes: EdgeChange[]) => void;
   onConnect: (connection: Connection) => void;
@@ -52,6 +72,7 @@ interface WorkflowStore {
   updateNodeData: (id: string, data: Partial<NodeData>) => void;
   updateNodeSize: (id: string, width: number, height: number) => void;
   setIsRunning: (v: boolean) => void;
+  toggleDebug: () => void;
 }
 
 export const useWorkflowStore = create<WorkflowStore>()(
@@ -60,6 +81,8 @@ export const useWorkflowStore = create<WorkflowStore>()(
       nodes: [],
       edges: [],
       isRunning: false,
+      debugMode: false,
+      nodeCounters: {},
 
       onNodesChange: (changes) =>
         set((s) => ({ nodes: applyNodeChanges(changes, s.nodes) as Node<NodeData>[] })),
@@ -75,7 +98,17 @@ export const useWorkflowStore = create<WorkflowStore>()(
           ),
         })),
 
-      addNode: (node) => set((s) => ({ nodes: [...s.nodes, node] })),
+      /** Auto-assigns a human-readable label with counter, e.g. "Image #2" */
+      addNode: (node) =>
+        set((s) => {
+          const type    = node.type ?? "unknown";
+          const count   = (s.nodeCounters[type] ?? 0) + 1;
+          const label   = getNodeLabel(type, count);
+          return {
+            nodes:        [...s.nodes, { ...node, data: { ...node.data, label } }],
+            nodeCounters: { ...s.nodeCounters, [type]: count },
+          };
+        }),
 
       insertEdge: (edge) => set((s) => ({ edges: [...s.edges, edge] })),
 
@@ -96,17 +129,23 @@ export const useWorkflowStore = create<WorkflowStore>()(
       updateNodeSize: (id, width, height) =>
         set((s) => ({
           nodes: s.nodes.map((n) =>
-            n.id === id ? { ...n, width, height } : n
+            n.id === id
+              ? { ...n, width, height, style: { ...n.style, width, height } }
+              : n
           ),
         })),
 
       setIsRunning: (v) => set({ isRunning: v }),
+      toggleDebug:  () => set((s) => ({ debugMode: !s.debugMode })),
     }),
     {
       name: "ai-workflow",
       storage: createJSONStorage(() => localStorage),
-      // Only persist graph state — isRunning always resets to false on load
-      partialize: (s) => ({ nodes: s.nodes, edges: s.edges }),
+      partialize: (s) => ({
+        nodes:        s.nodes,
+        edges:        s.edges,
+        nodeCounters: s.nodeCounters,
+      }),
     }
   )
 );

@@ -1,75 +1,80 @@
 import { NextRequest, NextResponse } from "next/server";
 
+const KIE_BASE = "https://api.kie.ai";
+
+interface Resource {
+  url: string;
+  label: string;
+}
+
+function extractVideoUrl(resultJson?: string): string | undefined {
+  if (!resultJson) return undefined;
+  try {
+    const parsed = JSON.parse(resultJson);
+    const urls = parsed.resultUrls ?? parsed.resultUrl ?? parsed.videoUrl;
+    return Array.isArray(urls) ? urls[0] : urls;
+  } catch {
+    return undefined;
+  }
+}
+
 export async function POST(req: NextRequest) {
-  const { prompt, imageUrl, model = "wan-t2v", duration = 5 } = await req.json();
+  const {
+    prompt,
+    startFrameUrl,
+    endFrameUrl,
+    resources    = [] as Resource[],
+    sound        = false,
+    duration     = 5,
+    aspectRatio  = "16:9",
+    mode         = "pro",
+  } = await req.json();
 
-  const apiKey = process.env.REPLICATE_API_TOKEN;
+  const apiKey = process.env.KIE_API_TOKEN;
   if (!apiKey) {
-    return NextResponse.json(
-      { error: "REPLICATE_API_TOKEN not set" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: "KIE_API_TOKEN not set" }, { status: 500 });
   }
 
-  // Model configs
-  type ModelConfig = {
-    model: string;
-    input: Record<string, unknown>;
+  // Build image_urls array (first frame, then last frame)
+  const image_urls: string[] = [];
+  if (startFrameUrl) image_urls.push(startFrameUrl);
+  if (endFrameUrl)   image_urls.push(endFrameUrl);
+
+  // Build kling_elements from resource connections
+  // Each resource image is passed as an element with the URL repeated twice (Kling requires min 2 URLs)
+  const kling_elements = (resources as Resource[]).slice(0, 3).map((r) => {
+    const safeName = r.label
+      .toLowerCase()
+      .replace(/\s+#/g, "_")
+      .replace(/[^a-z0-9_]/g, "")
+      || "element";
+    return {
+      name:               safeName,
+      description:        r.label,
+      element_input_urls: [r.url, r.url],
+    };
+  });
+
+  const input: Record<string, unknown> = {
+    prompt:       prompt ?? "",
+    sound:        Boolean(sound),
+    duration:     String(Math.max(3, Math.min(15, Number(duration)))),
+    aspect_ratio: aspectRatio,
+    mode,
+    multi_shots:  false,
   };
 
-  const modelConfigs: Record<string, ModelConfig> = {
-    // Wan 2.1 text-to-video (no image required)
-    "wan-t2v": {
-      model: "wavespeedai/wan-2.1-t2v-480p",
-      input: { prompt, num_frames: duration * 16 },
-    },
-    // Wan 2.1 image-to-video
-    "wan-i2v": {
-      model: "wavespeedai/wan-2.1-i2v-480p",
-      input: {
-        prompt: prompt || "animate this image",
-        image: imageUrl,
-        num_frames: duration * 16,
-      },
-    },
-    // Stable Video Diffusion (image-to-video)
-    svd: {
-      model:
-        "stability-ai/stable-video-diffusion:3f0457e4619daac51203dedb472816fd4af51f3149fa7a9e0b5ffcf1b8172438",
-      input: {
-        input_image: imageUrl,
-        video_length: "25_frames_with_svd_xt",
-        sizing_strategy: "maintain_aspect_ratio",
-        frames_per_second: 6,
-        motion_bucket_id: 127,
-      },
-    },
-  };
+  if (image_urls.length > 0)     input.image_urls     = image_urls;
+  if (kling_elements.length > 0) input.kling_elements = kling_elements;
 
-  const cfg = modelConfigs[model] || modelConfigs["wan-t2v"];
-
-  // Validate: i2v models need an image
-  if ((model === "wan-i2v" || model === "svd") && !imageUrl) {
-    return NextResponse.json(
-      { error: "This model requires an image input. Connect an image generation node first." },
-      { status: 400 }
-    );
-  }
-
-  const body: Record<string, unknown> = { input: cfg.input };
-  if (cfg.model.includes(":")) {
-    body.version = cfg.model.split(":")[1];
-  } else {
-    body.model = cfg.model;
-  }
-
-  const createRes = await fetch("https://api.replicate.com/v1/predictions", {
-    method: "POST",
+  // Submit task
+  const createRes = await fetch(`${KIE_BASE}/api/v1/jobs/createTask`, {
+    method:  "POST",
     headers: {
-      Authorization: `Bearer ${apiKey}`,
+      Authorization:  `Bearer ${apiKey}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify(body),
+    body: JSON.stringify({ model: "kling-3.0/video", input }),
   });
 
   if (!createRes.ok) {
@@ -77,24 +82,46 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: err }, { status: 500 });
   }
 
-  const prediction = await createRes.json();
-
-  // Poll
-  const id = prediction.id;
-  for (let i = 0; i < 60; i++) {
-    await new Promise((r) => setTimeout(r, 3000));
-    const poll = await fetch(`https://api.replicate.com/v1/predictions/${id}`, {
-      headers: { Authorization: `Bearer ${apiKey}` },
-    });
-    const data = await poll.json();
-    if (data.status === "succeeded") {
-      const output = Array.isArray(data.output) ? data.output[0] : data.output;
-      return NextResponse.json({ videoUrl: output });
-    }
-    if (data.status === "failed") {
-      return NextResponse.json({ error: data.error }, { status: 500 });
-    }
+  const created = await createRes.json();
+  if (created.code !== 200) {
+    return NextResponse.json({ error: created.msg ?? "Task creation failed" }, { status: 500 });
   }
 
-  return NextResponse.json({ error: "Timed out" }, { status: 504 });
+  const taskId = created.data?.taskId;
+  if (!taskId) {
+    return NextResponse.json({ error: "No taskId returned" }, { status: 500 });
+  }
+
+  // Poll recordInfo — up to 5 min (60 × 5 s)
+  for (let i = 0; i < 60; i++) {
+    await new Promise((r) => setTimeout(r, 5000));
+
+    const poll = await fetch(
+      `${KIE_BASE}/api/v1/jobs/recordInfo?taskId=${taskId}`,
+      { headers: { Authorization: `Bearer ${apiKey}` } },
+    );
+
+    if (!poll.ok) continue;
+
+    const data = await poll.json();
+    if (data.code !== 200) continue;
+
+    const state = String(data.data?.state ?? "").toLowerCase();
+
+    if (state === "success") {
+      const videoUrl = extractVideoUrl(data.data?.resultJson);
+      if (videoUrl) return NextResponse.json({ videoUrl });
+      return NextResponse.json({ error: "Generation succeeded but no video URL found" }, { status: 500 });
+    }
+
+    if (state === "fail") {
+      return NextResponse.json(
+        { error: data.data?.failMsg ?? "Generation failed" },
+        { status: 500 },
+      );
+    }
+    // waiting / queuing / generating → keep polling
+  }
+
+  return NextResponse.json({ error: "Timed out after 5 minutes" }, { status: 504 });
 }

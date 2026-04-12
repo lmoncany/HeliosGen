@@ -4,24 +4,28 @@
 html, body, #__next { height: 100%; }
 
 body {
-  background: #090909;
-  color: #d4d4d4;
+  background: #0A0C0E;
+  color: #FFFFFF;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   -webkit-font-smoothing: antialiased;
 }
 
 /* ── Node design system ──────────────────────────────── */
 .node-card {
-  background: #111111;
+  background: #0D1012;
   border: 1px solid #333333;
   border-radius: 8px;
   overflow: visible;
   position: relative;
-  box-shadow: 0 2px 12px rgba(0,0,0,0.6);
-  transition: border-color 120ms;
+  box-shadow: 0 0 0 1px rgba(80, 80, 80, 0.08), 0 2px 16px rgba(0,0,0,0.5);
+  transition: border-color 120ms, box-shadow 120ms;
 }
 .node-card:hover {
-  border-color: #444444;
+  border-color: #555555;
+  box-shadow: 0 0 0 1px rgba(120, 120, 120, 0.3), 0 2px 20px rgba(0,0,0,0.6);
+}
+.node-card:hover .node-above-label {
+  color: #9A9A95;
 }
 
 .node-header {
@@ -29,13 +33,13 @@ body {
   align-items: center;
   gap: 6px;
   padding: 7px 10px;
-  border-bottom: 1px solid #252525;
+  border-bottom: 1px solid #1E1410;
 }
 
 .node-label {
   font-size: 11px;
   font-weight: 500;
-  color: #666;
+  color: #8D8E89;
   letter-spacing: 0.02em;
   text-transform: uppercase;
 }
@@ -43,17 +47,17 @@ body {
 .node-field-label {
   display: block;
   font-size: 10px;
-  color: #404040;
+  color: #8D8E89;
   margin-bottom: 4px;
   letter-spacing: 0.02em;
 }
 
 .node-textarea {
   width: 100%;
-  background: #0e0e0e;
-  border: 1px solid #1e1e1e;
+  background: #090B0D;
+  border: 1px solid #1A100C;
   border-radius: 5px;
-  color: #c8c8c8;
+  color: #FFFFFF;
   font-size: 12px;
   line-height: 1.5;
   padding: 7px 8px;
@@ -62,30 +66,30 @@ body {
   font-family: inherit;
   transition: border-color 100ms;
 }
-.node-textarea::placeholder { color: #333; }
-.node-textarea:focus { border-color: #303030; }
+.node-textarea::placeholder { color: #444444; }
+.node-textarea:focus { border-color: #444444; }
 
 .node-input {
   width: 100%;
-  background: #0e0e0e;
-  border: 1px solid #1e1e1e;
+  background: #090B0D;
+  border: 1px solid #1A100C;
   border-radius: 5px;
-  color: #c8c8c8;
+  color: #FFFFFF;
   font-size: 11px;
   padding: 5px 8px;
   outline: none;
   font-family: inherit;
   transition: border-color 100ms;
 }
-.node-input::placeholder { color: #2e2e2e; }
-.node-input:focus { border-color: #2e2e2e; }
+.node-input::placeholder { color: #444444; }
+.node-input:focus { border-color: #444444; }
 
 .node-select {
   width: 100%;
-  background: #0e0e0e;
-  border: 1px solid #1e1e1e;
+  background: #090B0D;
+  border: 1px solid #1A100C;
   border-radius: 5px;
-  color: #888;
+  color: #8D8E89;
   font-size: 11px;
   padding: 5px 8px;
   outline: none;
@@ -94,36 +98,33 @@ body {
   cursor: pointer;
   transition: border-color 100ms;
 }
-.node-select:focus { border-color: #2e2e2e; }
+.node-select:focus { border-color: #2A1A14; }
 
 /* ── Floating node label (above frame) ───────────────── */
 .node-above-label {
   position: absolute;
-  top: -18px;
+  top: -20px;
   left: 2px;
   font-size: 10px;
-  color: #444;
+  color: #707070;
   text-transform: uppercase;
   letter-spacing: 0.05em;
   font-weight: 500;
   user-select: none;
   pointer-events: none;
+  transition: color 120ms;
 }
 
 /* ── Handles ─────────────────────────────────────────── */
-/* ── Base handle ─────────────────────────────────────────────────────────── */
+/* ── Base dot handle ─────────────────────────────────────────────────────── */
 .node-handle.react-flow__handle {
   width: 14px !important;
   height: 14px !important;
   border-radius: 50% !important;
-  border: 2px solid #111 !important;
+  border: 2px solid #0D1012 !important;
   z-index: 10;
   transition: transform 120ms;
 }
-
-/* Move handles fully outside the node border.
-   RF default: left → translate(-50%,-50%), right → translate(50%,-50%).
-   Using -100% / 100% puts the entire circle outside. */
 .react-flow__handle-left.node-handle {
   transform: translate(-100%, -50%) !important;
 }
@@ -136,22 +137,46 @@ body {
 .react-flow__handle-right.node-handle:hover {
   transform: translate(100%, -50%) scale(1.35) !important;
 }
+.node-handle-prompt.react-flow__handle  { background: #77E544 !important; }
+.node-handle-image.react-flow__handle   { background: #fb923c !important; }
+.node-handle-source.react-flow__handle  { background: #34d399 !important; }
 
-/* ── Per-role colours ────────────────────────────────────────────────────── */
-.node-handle-prompt.react-flow__handle {
-  background: #a78bfa !important;   /* violet  — text / prompt */
+/* ── Icon handles (circular badge-style, generator input handles) ─────────── */
+.node-handle-icon.react-flow__handle {
+  width: 28px !important;
+  height: 28px !important;
+  border-radius: 50% !important;
+  background: #0A0C0E !important;
+  border: 1.5px solid transparent !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  z-index: 10;
+  transition: transform 120ms, box-shadow 120ms;
+  cursor: crosshair;
 }
-.node-handle-image.react-flow__handle {
-  background: #fb923c !important;   /* amber   — image input   */
+/* Fully outside the node border (same direction as dot handles) */
+.react-flow__handle-left.node-handle-icon {
+  transform: translate(-100%, -50%) !important;
 }
-.node-handle-source.react-flow__handle {
-  background: #34d399 !important;   /* emerald — output        */
+.react-flow__handle-left.node-handle-icon:hover {
+  transform: translate(-100%, -50%) scale(1.15) !important;
+}
+/* Per-role border colours */
+.node-handle-icon-prompt.react-flow__handle {
+  border-color: #77E544 !important;
+}
+.node-handle-icon-image.react-flow__handle {
+  border-color: #818cf8 !important;
+}
+.node-handle-icon-resource.react-flow__handle {
+  border-color: #fb923c !important;
 }
 
 /* ── Selection rectangle (drag) + post-release overlay ── */
 .react-flow__selection {
-  background: rgba(167, 139, 250, 0.08) !important;
-  border: 1px solid rgba(167, 139, 250, 0.45) !important;
+  background: rgba(90, 90, 90, 0.06) !important;
+  border: 1px solid rgba(90, 90, 90, 0.4) !important;
   border-radius: 3px;
   z-index: 0 !important;
   pointer-events: none;
@@ -162,15 +187,15 @@ body {
   z-index: 1 !important;   /* below viewport z-index:2 where nodes live */
 }
 .react-flow__nodesselection-rect {
-  background: rgba(167, 139, 250, 0.05) !important;
-  border: 1px solid rgba(167, 139, 250, 0.35) !important;
+  background: rgba(90, 90, 90, 0.04) !important;
+  border: 1px solid rgba(90, 90, 90, 0.3) !important;
   border-radius: 3px;
 }
 
 /* ── React Flow overrides ────────────────────────────── */
 .react-flow__node.selected .node-card {
-  border-color: #a78bfa !important;
-  box-shadow: 0 0 0 1px rgba(167, 139, 250, 0.2), 0 2px 12px rgba(0,0,0,0.6);
+  border-color: #77E544 !important;
+  box-shadow: 0 0 0 1px rgba(119, 229, 68, 0.2), 0 2px 16px rgba(42,26,20,0.5);
 }
 .react-flow__edge.selected .react-flow__edge-path {
   filter: brightness(1.4);
@@ -178,31 +203,87 @@ body {
 .react-flow__attribution { display: none; }
 .react-flow__controls {
   box-shadow: none !important;
-  border: 1px solid #1e1e1e !important;
+  border: 1px solid #1A100C !important;
   border-radius: 6px !important;
   overflow: hidden;
 }
 .react-flow__controls-button {
-  background: #111 !important;
+  background: #0D1012 !important;
   border: none !important;
-  border-bottom: 1px solid #1e1e1e !important;
-  color: #555 !important;
+  border-bottom: 1px solid #1A100C !important;
+  color: #8D8E89 !important;
 }
 .react-flow__controls-button:hover {
-  background: #191919 !important;
-  color: #999 !important;
+  background: #111618 !important;
+  color: #FFFFFF !important;
 }
 .react-flow__controls-button:last-child {
   border-bottom: none !important;
+}
+
+/* ── Prompt node error blink ─────────────────────────── */
+@keyframes node-error-blink {
+  0%, 100% {
+    border-color: #333333;
+    box-shadow: 0 0 0 1px rgba(80,80,80,0.08), 0 2px 16px rgba(0,0,0,0.5);
+  }
+  20%, 55% {
+    border-color: #ef4444;
+    box-shadow: 0 0 0 1px rgba(239,68,68,0.4), 0 2px 20px rgba(239,68,68,0.15);
+  }
+  37%, 72% {
+    border-color: #333333;
+    box-shadow: 0 0 0 1px rgba(80,80,80,0.08), 0 2px 16px rgba(0,0,0,0.5);
+  }
+}
+
+@keyframes label-error-blink {
+  0%, 100% { color: #707070; }
+  20%, 55%  { color: #f87171; }
+  37%, 72%  { color: #707070; }
+}
+
+.node-error-blink {
+  animation: node-error-blink 1.4s ease 1 forwards;
+}
+
+.node-error-blink .node-above-label {
+  animation: label-error-blink 1.4s ease 1 forwards;
+}
+
+/* ── Animated dashed edge (drag ghost + pending connection line) ── */
+@keyframes dash-flow {
+  from { stroke-dashoffset: 0; }
+  to   { stroke-dashoffset: -18; }
+}
+
+/* Ghost line while dragging — stroke-dasharray set via connectionLineStyle prop */
+.react-flow__connection-path {
+  animation: dash-flow 0.45s linear infinite;
+}
+
+/* Persistent preview line while node-picker menu is open */
+.pending-edge-line {
+  animation: dash-flow 0.45s linear infinite;
+}
+
+/* ── Corner resize handles — show per-handle on hover ── */
+.corner-handle {
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+.corner-handle:hover,
+.node-card:hover .corner-handle {
+  opacity: 1;
 }
 
 /* ── Toolbar buttons ─────────────────────────────────── */
 .toolbar-btn {
   font-size: 12px;
   font-weight: 500;
-  color: #555;
-  background: #111;
-  border: 1px solid #222;
+  color: #8D8E89;
+  background: #0D1012;
+  border: 1px solid #2A1A14;
   border-radius: 6px;
   padding: 5px 12px;
   cursor: pointer;
@@ -210,17 +291,17 @@ body {
   font-family: inherit;
 }
 .toolbar-btn:hover:not(:disabled) {
-  color: #999;
-  border-color: #333;
+  color: #FFFFFF;
+  border-color: #3A2820;
 }
 .toolbar-btn:disabled { opacity: 0.3; cursor: not-allowed; }
 
 .toolbar-btn-primary {
   font-size: 12px;
   font-weight: 500;
-  color: #e8e8e8;
-  background: #191919;
-  border: 1px solid #2e2e2e;
+  color: #0A0C0E;
+  background: #77E544;
+  border: 1px solid #77E544;
   border-radius: 6px;
   padding: 5px 14px;
   cursor: pointer;
@@ -228,7 +309,31 @@ body {
   font-family: inherit;
 }
 .toolbar-btn-primary:hover:not(:disabled) {
-  background: #222;
-  border-color: #3a3a3a;
+  background: #8FEE60;
+  border-color: #8FEE60;
 }
 .toolbar-btn-primary:disabled { opacity: 0.3; cursor: not-allowed; }
+
+/* ── Video Generator node — blue identity border ─────────────────────────── */
+.video-node-card.node-card {
+  border-color: #3A6FFF !important;
+  box-shadow: 0 0 0 1px rgba(58, 111, 255, 0.12), 0 0 18px rgba(58, 111, 255, 0.06) !important;
+}
+.video-node-card.node-card:hover {
+  border-color: #5A8FFF !important;
+  box-shadow: 0 0 0 1px rgba(90, 143, 255, 0.22), 0 0 22px rgba(90, 143, 255, 0.10) !important;
+}
+.react-flow__node.selected .video-node-card.node-card {
+  border-color: #6A9FFF !important;
+  box-shadow: 0 0 0 1px rgba(106, 159, 255, 0.35), 0 0 28px rgba(106, 159, 255, 0.15) !important;
+}
+
+/* ── @mention chip in PromptNode ─────────────────────────────────────────── */
+/* No padding — must occupy exactly the same space as the raw text in the
+   underlying textarea so the overlay stays pixel-aligned with the cursor. */
+.mention-chip {
+  display: inline;
+  background: rgba(255, 255, 255, 0.13);
+  border-radius: 3px;
+  color: #FFFFFF;
+}
