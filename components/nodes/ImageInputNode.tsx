@@ -18,6 +18,20 @@ export default function ImageInputNode({ id, data }: NodeProps<ImageInputNodeTyp
           inputImage: src,
           imageNaturalRatio: `${img.naturalWidth} / ${img.naturalHeight}`,
         });
+
+        // Upload to R2 in the background; swap inputImage for the durable CDN URL
+        if (src.startsWith("data:") || src.startsWith("http")) {
+          fetch("/api/upload-to-r2", {
+            method:  "POST",
+            headers: { "Content-Type": "application/json" },
+            body:    JSON.stringify({ dataUrl: src, folder: "references" }),
+          })
+            .then((r) => r.json())
+            .then(({ cdnUrl }) => {
+              if (cdnUrl) updateNodeData(id, { r2Url: cdnUrl });
+            })
+            .catch(() => {/* R2 unavailable — base64 stays as fallback */});
+        }
       };
       img.src = src;
     },
@@ -42,7 +56,9 @@ export default function ImageInputNode({ id, data }: NodeProps<ImageInputNodeTyp
     [loadFile]
   );
 
-  const hasImage = !!data.inputImage;
+  // Prefer the durable R2 CDN URL; fall back to base64 in the current session
+  const imageSrc = (data.r2Url ?? data.inputImage) as string | undefined;
+  const hasImage = !!imageSrc;
   // CSS aspect-ratio accepts "width / height" string directly (e.g. "1920 / 1080")
   const ratio    = (data.imageNaturalRatio as string | undefined) ?? "1 / 1";
 
@@ -65,7 +81,7 @@ export default function ImageInputNode({ id, data }: NodeProps<ImageInputNodeTyp
         <div className="relative w-full h-full" style={{ borderRadius: 7, overflow: "hidden" }}>
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
-            src={data.inputImage as string}
+            src={imageSrc}
             alt="Input"
             style={{ width: "100%", height: "100%", display: "block", objectFit: "fill" }}
           />

@@ -1,52 +1,35 @@
 import { NextRequest, NextResponse } from "next/server";
 import { jobStore } from "@/lib/jobStore";
+import { ensureR2 } from "@/lib/r2";
+import { supabaseAdmin } from "@/lib/supabase/admin";
 
 const BASE   = "https://api.kie.ai";
 const CREATE = `${BASE}/api/v1/jobs/createTask`;
-const UPLOAD = "https://kieai.redpandaai.co/api/file-base64-upload";
 
-// ── Upload a base64 data URL, return an http URL ──────────────────────────────
-async function uploadDataUrl(dataUrl: string, token: string): Promise<string> {
-  const res = await fetch(UPLOAD, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      base64Data: dataUrl,
-      uploadPath: "images/uploads",
-    }),
-  });
-
-  if (!res.ok) throw new Error(`Image upload failed: ${await res.text()}`);
-  const d = await res.json();
-  if (!d.success) throw new Error(d.msg ?? "Upload failed");
-  const url = d.data?.downloadUrl;
-  if (!url) throw new Error("Upload succeeded but no downloadUrl in response");
-  return url;
-}
-
-// ── Resolve every image to an http URL ───────────────────────────────────────
-async function resolveImages(imageUrls: string[], token: string): Promise<string[]> {
+// Resolve every image URL to an R2 CDN URL (uploads base64 / mirrors external URLs)
+async function resolveImages(imageUrls: string[]): Promise<string[]> {
   const resolved = await Promise.all(
-    imageUrls.slice(0, 14).map(async (u) => {
-      if (u.startsWith("http")) return u;
-      if (u.startsWith("data:")) return uploadDataUrl(u, token);
-      return null;
-    })
+    imageUrls.slice(0, 14).map((u) => ensureR2(u, "references").catch(() => null))
   );
   return resolved.filter((u): u is string => u !== null);
 }
 
-// ── Route ──────────────────────────────────────────────────────────────────────
+// Extract user_id from the Authorization header (Bearer <access_token>)
+async function getUserId(req: NextRequest): Promise<string | null> {
+  const auth = req.headers.get("authorization") ?? "";
+  const token = auth.startsWith("Bearer ") ? auth.slice(7) : null;
+  if (!token) return null;
+  const { data } = await supabaseAdmin.auth.getUser(token);
+  return data.user?.id ?? null;
+}
+
 export async function POST(req: NextRequest) {
   const {
-    model      = "nano-banana-2",
+    model       = "nano-banana-2",
     prompt,
-    imageUrls  = [],
+    imageUrls   = [],
     aspectRatio = "1:1",
-    quality    = "1k",
+    quality     = "1k",
   } = (await req.json()) as {
     model?:       string;
     prompt?:      string;
@@ -66,29 +49,29 @@ export async function POST(req: NextRequest) {
   const callBackUrl = `${callbackBase.replace(/\/$/, "")}/api/callback`;
 
   try {
+    // Upload all reference images to R2
+    const r2ImageUrls = await resolveImages(imageUrls);
+
     let requestBody: Record<string, unknown>;
 
     if (model === "z-image") {
-      // z-image: text-only, no image_input, no resolution, no output_format
       requestBody = {
         model: "z-image",
         callBackUrl,
         input: {
-          prompt: prompt.slice(0, 1000), // max 1000 chars per spec
+          prompt:       prompt.slice(0, 1000),
           aspect_ratio: aspectRatio,
           nsfw_checker: true,
         },
       };
     } else {
-      // nano-banana-2 (default): supports image_input + resolution
-      const resolution  = quality === "4k" ? "4K" : quality === "2k" ? "2K" : "1K";
-      const httpImages  = await resolveImages(imageUrls ?? [], token);
+      const resolution = quality === "4k" ? "4K" : quality === "2k" ? "2K" : "1K";
       requestBody = {
         model: "nano-banana-2",
         callBackUrl,
         input: {
           prompt,
-          image_input: httpImages,
+          image_input:  r2ImageUrls,
           aspect_ratio: aspectRatio,
           resolution,
           output_format: "jpg",
@@ -97,26 +80,37 @@ export async function POST(req: NextRequest) {
     }
 
     const res = await fetch(CREATE, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(requestBody),
+      method:  "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body:    JSON.stringify(requestBody),
     });
 
     if (!res.ok) throw new Error(await res.text());
     const d = await res.json();
-
-    if (d.code !== undefined && d.code !== 200) {
-      throw new Error(d.msg ?? `API error ${d.code}`);
-    }
+    if (d.code !== undefined && d.code !== 200) throw new Error(d.msg ?? `API error ${d.code}`);
 
     const taskId = d.data?.taskId ?? d.data?.id ?? d.taskId ?? d.id;
     if (!taskId) throw new Error("No task ID in response");
 
     jobStore.set(taskId, { status: "pending" });
-    return NextResponse.json({ taskId });
+
+    // Save metadata to Supabase (fire-and-forget — don't block the response)
+    const userId = await getUserId(req);
+    supabaseAdmin.from("generations").insert({
+      task_id:              taskId,
+      user_id:              userId,
+      generation_type:      "image",
+      status:               "pending",
+      prompt,
+      model,
+      aspect_ratio:         aspectRatio,
+      quality,
+      reference_image_urls: r2ImageUrls,
+    }).then(({ error }) => {
+      if (error) console.error("[generate] supabase insert error:", error.message);
+    });
+
+    return NextResponse.json({ taskId, referenceImageUrls: r2ImageUrls });
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
     return NextResponse.json({ error: msg }, { status: 500 });

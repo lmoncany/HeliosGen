@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import { ensureR2, mirrorToR2 } from "@/lib/r2";
+import { supabaseAdmin } from "@/lib/supabase/admin";
 
 const KIE_BASE = "https://api.kie.ai";
 
@@ -18,11 +20,19 @@ function extractVideoUrl(resultJson?: string): string | undefined {
   }
 }
 
+async function getUserId(req: NextRequest): Promise<string | null> {
+  const auth = req.headers.get("authorization") ?? "";
+  const token = auth.startsWith("Bearer ") ? auth.slice(7) : null;
+  if (!token) return null;
+  const { data } = await supabaseAdmin.auth.getUser(token);
+  return data.user?.id ?? null;
+}
+
 export async function POST(req: NextRequest) {
   const {
     prompt,
-    startFrameUrl,
-    endFrameUrl,
+    startFrameUrl:  rawStartFrame,
+    endFrameUrl:    rawEndFrame,
     resources    = [] as Resource[],
     sound        = false,
     duration     = 5,
@@ -35,14 +45,23 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "KIE_API_TOKEN not set" }, { status: 500 });
   }
 
-  // Build image_urls array (first frame, then last frame)
+  // Upload any base64 / non-R2 URLs to R2 first
+  const [startFrameUrl, endFrameUrl, r2Resources] = await Promise.all([
+    rawStartFrame ? ensureR2(rawStartFrame, "references") : Promise.resolve(undefined),
+    rawEndFrame   ? ensureR2(rawEndFrame,   "references") : Promise.resolve(undefined),
+    Promise.all(
+      (resources as Resource[]).slice(0, 3).map(async (r) => ({
+        ...r,
+        url: await ensureR2(r.url, "references").catch(() => r.url),
+      }))
+    ),
+  ]);
+
   const image_urls: string[] = [];
   if (startFrameUrl) image_urls.push(startFrameUrl);
   if (endFrameUrl)   image_urls.push(endFrameUrl);
 
-  // Build kling_elements from resource connections
-  // Each resource image is passed as an element with the URL repeated twice (Kling requires min 2 URLs)
-  const kling_elements = (resources as Resource[]).slice(0, 3).map((r) => {
+  const kling_elements = r2Resources.map((r) => {
     const safeName = r.label
       .toLowerCase()
       .replace(/\s+#/g, "_")
@@ -70,16 +89,12 @@ export async function POST(req: NextRequest) {
   // Submit task
   const createRes = await fetch(`${KIE_BASE}/api/v1/jobs/createTask`, {
     method:  "POST",
-    headers: {
-      Authorization:  `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ model: "kling-3.0/video", input }),
+    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+    body:    JSON.stringify({ model: "kling-3.0/video", input }),
   });
 
   if (!createRes.ok) {
-    const err = await createRes.text();
-    return NextResponse.json({ error: err }, { status: 500 });
+    return NextResponse.json({ error: await createRes.text() }, { status: 500 });
   }
 
   const created = await createRes.json();
@@ -91,6 +106,29 @@ export async function POST(req: NextRequest) {
   if (!taskId) {
     return NextResponse.json({ error: "No taskId returned" }, { status: 500 });
   }
+
+  // Save pending record to Supabase
+  const userId = await getUserId(req);
+  const referenceUrls = [
+    ...(startFrameUrl ? [startFrameUrl] : []),
+    ...(endFrameUrl   ? [endFrameUrl]   : []),
+    ...r2Resources.map((r) => r.url),
+  ];
+
+  supabaseAdmin.from("generations").insert({
+    task_id:              taskId,
+    user_id:              userId,
+    generation_type:      "video",
+    status:               "pending",
+    prompt,
+    aspect_ratio:         aspectRatio,
+    duration:             Number(duration),
+    kling_mode:           mode,
+    sound:                Boolean(sound),
+    reference_image_urls: referenceUrls,
+  }).then(({ error }) => {
+    if (error) console.error("[generate-video] supabase insert error:", error.message);
+  });
 
   // Poll recordInfo — up to 5 min (60 × 5 s)
   for (let i = 0; i < 60; i++) {
@@ -109,18 +147,40 @@ export async function POST(req: NextRequest) {
     const state = String(data.data?.state ?? "").toLowerCase();
 
     if (state === "success") {
-      const videoUrl = extractVideoUrl(data.data?.resultJson);
-      if (videoUrl) return NextResponse.json({ videoUrl });
-      return NextResponse.json({ error: "Generation succeeded but no video URL found" }, { status: 500 });
+      const kieVideoUrl = extractVideoUrl(data.data?.resultJson);
+      if (!kieVideoUrl) {
+        return NextResponse.json({ error: "Generation succeeded but no video URL found" }, { status: 500 });
+      }
+
+      // Upload video to R2
+      let videoUrl = kieVideoUrl;
+      try {
+        videoUrl = await mirrorToR2(kieVideoUrl, "videos");
+      } catch (err) {
+        console.error("[generate-video] R2 upload failed, using kie.ai URL:", err);
+      }
+
+      // Update Supabase record
+      supabaseAdmin
+        .from("generations")
+        .update({ status: "done", video_url: videoUrl })
+        .eq("task_id", taskId)
+        .then(({ error }) => {
+          if (error) console.error("[generate-video] supabase update error:", error.message);
+        });
+
+      return NextResponse.json({ videoUrl });
     }
 
     if (state === "fail") {
-      return NextResponse.json(
-        { error: data.data?.failMsg ?? "Generation failed" },
-        { status: 500 },
-      );
+      const errMsg = data.data?.failMsg ?? "Generation failed";
+      supabaseAdmin
+        .from("generations")
+        .update({ status: "error", error_msg: errMsg })
+        .eq("task_id", taskId)
+        .then(() => {});
+      return NextResponse.json({ error: errMsg }, { status: 500 });
     }
-    // waiting / queuing / generating → keep polling
   }
 
   return NextResponse.json({ error: "Timed out after 5 minutes" }, { status: 504 });

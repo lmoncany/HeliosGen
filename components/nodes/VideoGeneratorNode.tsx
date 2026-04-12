@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { Handle, Position, NodeProps, Node } from "@xyflow/react";
 import CornerResizer from "./CornerResizer";
 import { useWorkflowStore, NodeData } from "@/lib/store";
@@ -37,9 +37,12 @@ const STATUS_DOT: Record<string, string> = {
 
 export default function VideoGeneratorNode({ id, data }: NodeProps<VideoGeneratorNodeType>) {
   const updateNodeData = useWorkflowStore((s) => s.updateNodeData);
+  const updateNodeSize = useWorkflowStore((s) => s.updateNodeSize);
   const nodes          = useWorkflowStore((s) => s.nodes);
   const edges          = useWorkflowStore((s) => s.edges);
   const debugMode      = useWorkflowStore((s) => s.debugMode);
+
+  const cardRef = useRef<HTMLDivElement>(null);
 
   const [loading,     setLoading]     = useState(false);
   const [hoveredHand, setHoveredHand] = useState<HandleId | null>(null);
@@ -86,7 +89,7 @@ export default function VideoGeneratorNode({ id, data }: NodeProps<VideoGenerato
     }
 
     setLoading(true);
-    updateNodeData(id, { status: "running", videoUrl: undefined, errorMsg: undefined });
+    updateNodeData(id, { status: "running", videoUrl: undefined, imageNaturalRatio: undefined, errorMsg: undefined });
 
     try {
       const res  = await fetch("/api/generate-video", {
@@ -113,11 +116,12 @@ export default function VideoGeneratorNode({ id, data }: NodeProps<VideoGenerato
   // ── Render ────────────────────────────────────────────────────────────────
   return (
     <div
+      ref={cardRef}
       className="video-node-card node-card w-full h-full flex flex-col"
       style={{ minWidth: 320, minHeight: 280 }}
       onMouseLeave={closeAll}
     >
-      <CornerResizer minWidth={280} minHeight={240} />
+      <CornerResizer minWidth={280} minHeight={80} keepAspectRatio={!!data.videoUrl} />
 
       {/* ── Label above card ────────────────────────────────────────── */}
       <span className="node-above-label" style={{ display: "flex", alignItems: "center", gap: 4 }}>
@@ -150,53 +154,75 @@ export default function VideoGeneratorNode({ id, data }: NodeProps<VideoGenerato
       )}
 
       {/* ── Main content area ───────────────────────────────────────── */}
-      <div
-        className="relative flex-1 bg-[#090B0D] rounded-t-[7px] overflow-hidden"
-        style={{ minHeight: 160 }}
-      >
-        {data.videoUrl ? (
-          // eslint-disable-next-line jsx-a11y/media-has-caption
+      {data.videoUrl ? (
+        // Video present: aspect-ratio container so video fills edge-to-edge at its natural ratio
+        <div
+          className="relative bg-[#090B0D] rounded-t-[7px] overflow-hidden"
+          style={{
+            aspectRatio: (data.imageNaturalRatio as string | undefined) ?? "16 / 9",
+            width: "100%",
+          }}
+        >
+          {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
           <video
             src={data.videoUrl as string}
-            className="w-full h-full object-cover block"
+            className="w-full h-full object-fill block"
             controls loop playsInline
+            onLoadedMetadata={(e) => {
+              const v = e.currentTarget;
+              if (!v.videoWidth || !v.videoHeight) return;
+              const nw = v.videoWidth, nh = v.videoHeight;
+              updateNodeData(id, { imageNaturalRatio: `${nw} / ${nh}` });
+              // Calculate correct node dimensions from video ratio + control bar
+              const nodeWidth = cardRef.current?.offsetWidth ?? 320;
+              const videoH    = nodeWidth * (nh / nw);
+              const BAR_H     = 38; // control bar height (px)
+              updateNodeSize(id, nodeWidth, videoH + BAR_H);
+            }}
           />
-        ) : (
-          <>
-            {/* Error message */}
-            {status === "error" && (
-              <p className="absolute top-3 left-0 right-0 text-center text-[10px] text-red-600 px-4 leading-5">
-                {(data.errorMsg as string) ?? "Generation failed"}
-              </p>
-            )}
+          {busy && (
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/60 z-20">
+              <Spinner />
+              <span className="text-[10px] text-[#8D8E89]">Generating…</span>
+            </div>
+          )}
+        </div>
+      ) : (
+        // No video: flex-1 area with prompt textarea
+        <div
+          className="relative flex-1 bg-[#090B0D] rounded-t-[7px] overflow-hidden"
+          style={{ minHeight: 160 }}
+        >
+          {status === "error" && (
+            <p className="absolute top-3 left-0 right-0 text-center text-[10px] text-red-600 px-4 leading-5">
+              {(data.errorMsg as string) ?? "Generation failed"}
+            </p>
+          )}
 
-            {/* Prompt area — textarea when no text node connected, chip when connected */}
-            {textNode ? (
-              <div className="absolute bottom-3 left-4 flex items-center gap-1.5">
-                <span className="w-1.5 h-1.5 rounded-full bg-[#77E544] shrink-0" />
-                <span className="text-[11px] text-[#555]">{textNode.data.label as string}</span>
-              </div>
-            ) : (
-              <textarea
-                className="absolute bottom-0 left-0 right-0 bg-transparent text-[13px] leading-relaxed resize-none outline-none px-4 pt-3 pb-3 z-10 placeholder-[#3A3A3A]"
-                style={{ color: "#666", minHeight: 80 }}
-                placeholder="Describe the video you want to generate..."
-                value={prompt}
-                onMouseDown={(e) => e.stopPropagation()}
-                onChange={(e) => updateNodeData(id, { prompt: e.target.value })}
-              />
-            )}
-          </>
-        )}
+          {textNode ? (
+            <div className="absolute bottom-3 left-4 flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-[#77E544] shrink-0" />
+              <span className="text-[11px] text-[#555]">{textNode.data.label as string}</span>
+            </div>
+          ) : (
+            <textarea
+              className="absolute bottom-0 left-0 right-0 bg-transparent text-[13px] leading-relaxed resize-none outline-none px-4 pt-3 pb-3 z-10 placeholder-[#3A3A3A]"
+              style={{ color: "#666", minHeight: 80 }}
+              placeholder="Describe the video you want to generate..."
+              value={prompt}
+              onMouseDown={(e) => e.stopPropagation()}
+              onChange={(e) => updateNodeData(id, { prompt: e.target.value })}
+            />
+          )}
 
-        {/* Busy overlay */}
-        {busy && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/60 z-20">
-            <Spinner />
-            <span className="text-[10px] text-[#8D8E89]">Generating…</span>
-          </div>
-        )}
-      </div>
+          {busy && (
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/60 z-20">
+              <Spinner />
+              <span className="text-[10px] text-[#8D8E89]">Generating…</span>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* ── Row 1: model · ratio · duration ────────────────────────── */}
       <div className="flex items-center gap-1.5 px-3 py-2 border-t border-[#111]">

@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Handle, Position, NodeProps, Node } from "@xyflow/react";
 import CornerResizer from "./CornerResizer";
 import { useWorkflowStore, NodeData } from "@/lib/store";
@@ -57,10 +57,13 @@ const STATUS_DOT: Record<string, string> = {
 
 export default function GenerateNode({ id, data }: NodeProps<GenerateNodeType>) {
   const updateNodeData       = useWorkflowStore((s) => s.updateNodeData);
+  const updateNodeSize       = useWorkflowStore((s) => s.updateNodeSize);
   const removeEdgesForHandle = useWorkflowStore((s) => s.removeEdgesForHandle);
   const nodes                = useWorkflowStore((s) => s.nodes);
   const edges                = useWorkflowStore((s) => s.edges);
   const debugMode            = useWorkflowStore((s) => s.debugMode);
+
+  const cardRef = useRef<HTMLDivElement>(null);
 
   const [modelOpen, setModelOpen]     = useState(false);
   const [ratioOpen, setRatioOpen]     = useState(false);
@@ -145,7 +148,7 @@ export default function GenerateNode({ id, data }: NodeProps<GenerateNodeType>) 
     }
 
     setLoading(true);
-    updateNodeData(id, { status: "running", imageUrl: undefined, errorMsg: undefined, taskId: undefined });
+    updateNodeData(id, { status: "running", imageUrl: undefined, imageNaturalRatio: undefined, errorMsg: undefined, taskId: undefined });
     try {
       const res  = await fetch("/api/generate", {
         method: "POST",
@@ -166,11 +169,12 @@ export default function GenerateNode({ id, data }: NodeProps<GenerateNodeType>) 
   // node-card has position:relative — handles and label position relative to it
   return (
     <div
-      className="node-card w-full h-full flex flex-col"
+      ref={cardRef}
+      className="node-card w-full flex flex-col"
       style={{ minWidth: 280 }}
       onMouseLeave={closeDropdowns}
     >
-      <CornerResizer minWidth={220} minHeight={120} keepAspectRatio />
+      <CornerResizer minWidth={220} minHeight={80} keepAspectRatio={!!data.imageUrl} />
       <span className="node-above-label">{data.label as string}</span>
 
         {/* ── Icon handles ──────────────────────────────────────────────── */}
@@ -200,15 +204,31 @@ export default function GenerateNode({ id, data }: NodeProps<GenerateNodeType>) 
 
         {/* ── Image area — top corners clip to card border-radius ───────── */}
         <div
-          className="relative bg-[#090B0D] overflow-hidden rounded-t-[7px] flex-1"
-          style={{ aspectRatio: cssRatio, minHeight: 60 }}
+          className="relative bg-[#090B0D] overflow-hidden rounded-t-[7px]"
+          style={{
+            aspectRatio: (data.imageNaturalRatio as string | undefined) ?? cssRatio,
+            width: "100%",
+          }}
         >
           {data.imageUrl ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img
               src={data.imageUrl as string}
               alt="Generated"
-              className="w-full h-full object-cover block"
+              className="w-full h-full object-fill block"
+              onLoad={(e) => {
+                const img = e.currentTarget;
+                const nw = img.naturalWidth, nh = img.naturalHeight;
+                updateNodeData(id, { imageNaturalRatio: `${nw} / ${nh}` });
+                // Sync node stored size to the rendered card dimensions so
+                // ReactFlow and keepAspectRatio work from the correct base.
+                requestAnimationFrame(() => {
+                  if (!cardRef.current) return;
+                  const w = cardRef.current.offsetWidth;
+                  const h = cardRef.current.offsetHeight;
+                  if (w > 0 && h > 0) updateNodeSize(id, w, h);
+                });
+              }}
             />
           ) : (
             <div className="w-full h-full flex items-center justify-center">

@@ -1,27 +1,20 @@
 "use client";
-import { useCallback } from "react";
-import { useWorkflowStore, NodeData } from "@/lib/store";
+import { useCallback, useRef, useState } from "react";
+import { useWorkflowStore, NodeData, Space } from "@/lib/store";
 import { edgeStyle } from "@/lib/edgeStyles";
 import { Node, Edge } from "@xyflow/react";
 import { NODES, NODE_SIZE, FALLBACK_SIZE } from "@/lib/nodeTypes";
 
 const GAP = 10;
 
-// Find the closest free position to the existing cluster.
-// Generates candidates adjacent to every existing node (right, left, below, above)
-// then picks the one nearest to the centroid that doesn't overlap anything.
 function findFreePosition(
   nodes: Node<NodeData>[],
-  fw: number, // footprint width
-  fh: number, // footprint height
+  fw: number,
+  fh: number,
 ): { x: number; y: number } {
   if (nodes.length === 0) return { x: 80, y: 80 };
-
-  // Centroid of existing nodes (used to rank candidates by proximity)
   const cx = nodes.reduce((s, n) => s + n.position.x, 0) / nodes.length;
   const cy = nodes.reduce((s, n) => s + n.position.y, 0) / nodes.length;
-
-  // Does a candidate rect (x,y,fw,fh) collide with any existing node?
   const hits = (x: number, y: number) =>
     nodes.some((n) => {
       const s = NODE_SIZE[n.type ?? ""] ?? FALLBACK_SIZE;
@@ -32,25 +25,16 @@ function findFreePosition(
         y            >= n.position.y + s.h + GAP
       );
     });
-
-  // Build candidates: all 4 sides of every existing node
   const candidates: { x: number; y: number }[] = [];
   for (const n of nodes) {
     const s = NODE_SIZE[n.type ?? ""] ?? FALLBACK_SIZE;
-    // right
     candidates.push({ x: n.position.x + s.w + GAP, y: n.position.y });
-    // left
     candidates.push({ x: n.position.x - fw - GAP,  y: n.position.y });
-    // below
     candidates.push({ x: n.position.x, y: n.position.y + s.h + GAP });
-    // above
     candidates.push({ x: n.position.x, y: n.position.y - fh - GAP });
-    // right, vertically centred on existing node
     candidates.push({ x: n.position.x + s.w + GAP, y: n.position.y + (s.h - fh) / 2 });
-    // below, horizontally centred on existing node
     candidates.push({ x: n.position.x + (s.w - fw) / 2, y: n.position.y + s.h + GAP });
   }
-
   const valid = candidates
     .filter((c) => !hits(c.x, c.y))
     .sort((a, b) => {
@@ -58,17 +42,125 @@ function findFreePosition(
       const db = Math.hypot(b.x + fw / 2 - cx, b.y + fh / 2 - cy);
       return da - db;
     });
-
   if (valid.length > 0) return valid[0];
-
-  // Fallback: place to the right of everything
   const maxX = Math.max(...nodes.map((n) => n.position.x + (NODE_SIZE[n.type ?? ""] ?? FALLBACK_SIZE).w));
   return { x: maxX + GAP, y: cy - fh / 2 };
 }
 
-// Unique ID that survives hot-reloads and page refreshes without colliding
-// with IDs already persisted in localStorage.
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+
+// ── Spaces panel ──────────────────────────────────────────────────────────────
+
+function SpacesPanel() {
+  const spaces        = useWorkflowStore((s) => s.spaces);
+  const activeSpaceId = useWorkflowStore((s) => s.activeSpaceId);
+  const createSpace   = useWorkflowStore((s) => s.createSpace);
+  const switchSpace   = useWorkflowStore((s) => s.switchSpace);
+  const renameSpace   = useWorkflowStore((s) => s.renameSpace);
+  const deleteSpace   = useWorkflowStore((s) => s.deleteSpace);
+
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [draft, setDraft]         = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const startRename = (sp: Space) => {
+    setEditingId(sp.id);
+    setDraft(sp.name);
+    setTimeout(() => inputRef.current?.select(), 0);
+  };
+
+  const commitRename = () => {
+    if (editingId && draft.trim()) renameSpace(editingId, draft.trim());
+    setEditingId(null);
+  };
+
+  const addSpace = () => {
+    const n = spaces.length + 1;
+    createSpace(`Space ${n}`);
+  };
+
+  return (
+    <div className="border-b border-[#1A100C]">
+      <div className="flex items-center justify-between px-4 py-3">
+        <span className="text-[10px] uppercase tracking-widest text-[#8D8E89]">Spaces</span>
+        <button
+          onClick={addSpace}
+          className="w-4 h-4 flex items-center justify-center rounded text-[#8D8E89] hover:text-white hover:bg-[#1A100C] transition-colors"
+          title="New space"
+        >
+          <svg width="8" height="8" viewBox="0 0 8 8" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+            <path d="M4 1v6M1 4h6" />
+          </svg>
+        </button>
+      </div>
+
+      <div className="pb-2 space-y-px px-2">
+        {spaces.map((sp) => {
+          const active = sp.id === activeSpaceId;
+          const nodeCount = sp.nodes.filter(
+            (n) => n.type === "generateNode" || n.type === "videoGeneratorNode"
+          ).length;
+
+          return (
+            <div
+              key={sp.id}
+              onClick={() => { if (!active) switchSpace(sp.id); }}
+              className={`group flex items-center gap-2 px-2 py-2 rounded cursor-pointer transition-colors ${
+                active ? "bg-[#0D1012]" : "hover:bg-[#0A0C0E]"
+              }`}
+            >
+              {/* Space icon */}
+              <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${active ? "bg-[#77E544]" : "bg-[#2A1A14]"}`} />
+
+              {/* Name / rename input */}
+              {editingId === sp.id ? (
+                <input
+                  ref={inputRef}
+                  value={draft}
+                  onChange={(e) => setDraft(e.target.value)}
+                  onBlur={commitRename}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") commitRename();
+                    if (e.key === "Escape") setEditingId(null);
+                  }}
+                  onClick={(e) => e.stopPropagation()}
+                  className="flex-1 min-w-0 bg-transparent text-[12px] text-white outline-none border-b border-[#77E544]"
+                />
+              ) : (
+                <span
+                  onDoubleClick={(e) => { e.stopPropagation(); startRename(sp); }}
+                  className={`flex-1 min-w-0 text-[12px] truncate ${active ? "text-white" : "text-[#8D8E89]"}`}
+                >
+                  {sp.name}
+                </span>
+              )}
+
+              {/* Node count badge */}
+              {nodeCount > 0 && (
+                <span className="text-[10px] text-[#4A4A45] tabular-nums shrink-0">{nodeCount}</span>
+              )}
+
+              {/* Delete button — hidden until hover, disabled if only space */}
+              {spaces.length > 1 && (
+                <button
+                  onClick={(e) => { e.stopPropagation(); deleteSpace(sp.id); }}
+                  className="opacity-0 group-hover:opacity-100 shrink-0 w-3.5 h-3.5 flex items-center justify-center text-[#8D8E89] hover:text-red-400 transition-colors"
+                  title="Delete space"
+                >
+                  <svg width="8" height="8" viewBox="0 0 8 8" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                    <path d="M1 1l6 6M7 1L1 7" />
+                  </svg>
+                </button>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ── Sidebar ───────────────────────────────────────────────────────────────────
 
 export default function Sidebar() {
   const addNode    = useWorkflowStore((s) => s.addNode);
@@ -78,7 +170,6 @@ export default function Sidebar() {
   const add = useCallback(
     (type: string) => {
       if (type === "generateNode") {
-        // Footprint = prompt node (260) + gap (60) + generator (280) wide, tallest = generator
         const { x, y } = findFreePosition(nodes, 260 + 60 + 280, 340);
 
         const genId    = `gen-${uid()}`;
@@ -121,7 +212,6 @@ export default function Sidebar() {
       const size = NODE_SIZE[type] ?? FALLBACK_SIZE;
       const { x, y } = findFreePosition(nodes, size.w, size.h);
 
-      // imageInputNode height is content-driven (sized by the image ratio at runtime)
       const nodeStyle = type === "imageInputNode"
         ? { width: size.w }
         : { width: size.w, height: size.h };
@@ -147,8 +237,11 @@ export default function Sidebar() {
         </span>
       </div>
 
+      {/* Spaces */}
+      <SpacesPanel />
+
       {/* Node list */}
-      <div className="flex-1 p-3 space-y-1">
+      <div className="flex-1 p-3 space-y-1 overflow-y-auto">
         <p className="text-[#8D8E89] text-[10px] uppercase tracking-widest px-1 py-2">
           Nodes
         </p>

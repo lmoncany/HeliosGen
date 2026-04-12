@@ -15,12 +15,30 @@ import "@xyflow/react/dist/style.css";
 
 import { useWorkflowStore, NodeData } from "@/lib/store";
 import { topoSort, resolveInputs } from "@/lib/executor";
+import { createClient } from "@/lib/supabase/client";
 
 import PromptNode          from "./nodes/PromptNode";
 import ImageInputNode      from "./nodes/ImageInputNode";
 import GenerateNode        from "./nodes/GenerateNode";
 import VideoGeneratorNode  from "./nodes/VideoGeneratorNode";
 import NodePickerMenu, { DropState } from "./NodePickerMenu";
+import AuthButton from "./AuthButton";
+
+async function getAccessToken(): Promise<string | undefined> {
+  try {
+    const { data } = await createClient().auth.getSession();
+    return data.session?.access_token;
+  } catch {
+    return undefined;
+  }
+}
+
+function authHeaders(token: string | undefined): HeadersInit {
+  return {
+    "Content-Type": "application/json",
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  };
+}
 
 const nodeTypes = {
   promptNode:          PromptNode,
@@ -167,6 +185,7 @@ export default function WorkflowCanvas() {
     setLog([]);
     push("Running workflow…");
 
+    const token = await getAccessToken();
     const order = topoSort(nodes, edges);
 
     for (const nodeId of order) {
@@ -201,14 +220,45 @@ export default function WorkflowCanvas() {
         updateNodeData(nodeId, { status: "running", imageUrl: undefined });
 
         try {
+          // Submit job
           const res  = await fetch("/api/generate", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(payload),
+            method:  "POST",
+            headers: authHeaders(token),
+            body:    JSON.stringify(payload),
           });
           const data = await res.json();
           if (!res.ok) throw new Error(data.error);
-          updateNodeData(nodeId, { status: "done", imageUrl: data.imageUrl, videoUrl: data.videoUrl });
+
+          const { taskId, referenceImageUrls } = data as {
+            taskId: string;
+            referenceImageUrls?: string[];
+          };
+
+          // If reference images were uploaded to R2, update those nodes immediately
+          if (referenceImageUrls?.length) {
+            const imageEdges = edges.filter(
+              (e) => e.target === nodeId && e.targetHandle === "image"
+            );
+            referenceImageUrls.forEach((cdnUrl, i) => {
+              const srcId = imageEdges[i]?.source;
+              if (srcId) updateNodeData(srcId, { r2Url: cdnUrl });
+            });
+          }
+
+          // Poll /api/job-status until done (image generate is async/callback-based)
+          push(`[${node.id}] waiting for result…`);
+          let imageUrl: string | undefined;
+          for (let attempt = 0; attempt < 120; attempt++) {
+            await new Promise((r) => setTimeout(r, 3000));
+            const poll   = await fetch(`/api/job-status?taskId=${taskId}`);
+            const result = await poll.json();
+            if (result.status === "done")  { imageUrl = result.imageUrl; break; }
+            if (result.status === "error") throw new Error(result.error ?? "Generation failed");
+            if (attempt > 0 && attempt % 5 === 0) push(`[${node.id}] still waiting…`);
+          }
+
+          if (!imageUrl) throw new Error("Timed out waiting for generation result");
+          updateNodeData(nodeId, { status: "done", imageUrl });
           push(`[${node.id}] done`);
         } catch (e: unknown) {
           const msg = e instanceof Error ? e.message : String(e);
@@ -254,9 +304,9 @@ export default function WorkflowCanvas() {
 
         try {
           const res  = await fetch("/api/generate-video", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(payload),
+            method:  "POST",
+            headers: authHeaders(token),
+            body:    JSON.stringify(payload),
           });
           const data = await res.json();
           if (!res.ok) throw new Error(data.error);
@@ -275,7 +325,14 @@ export default function WorkflowCanvas() {
   }, [nodes, edges, updateNodeData, setIsRunning, debugMode, push]);
 
   const clear = useCallback(() => {
-    useWorkflowStore.setState({ nodes: [], edges: [] });
+    const { activeSpaceId, spaces } = useWorkflowStore.getState();
+    useWorkflowStore.setState({
+      nodes: [],
+      edges: [],
+      spaces: spaces.map((sp) =>
+        sp.id === activeSpaceId ? { ...sp, nodes: [], edges: [] } : sp
+      ),
+    });
     setLog([]);
   }, []);
 
@@ -319,6 +376,8 @@ export default function WorkflowCanvas() {
         />
 
         <Panel position="top-right" className="flex items-center gap-2 m-3">
+          <AuthButton />
+
           {/* Debug toggle */}
           <button
             onClick={toggleDebug}
