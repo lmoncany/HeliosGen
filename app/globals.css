@@ -148,16 +148,29 @@ body {
   background: #34d399 !important;   /* emerald — output        */
 }
 
-/* ── Selection rectangle ─────────────────────────────── */
+/* ── Selection rectangle (drag) + post-release overlay ── */
 .react-flow__selection {
-  background: rgba(167, 139, 250, 0.06) !important;
-  border: 1px solid rgba(167, 139, 250, 0.5) !important;
+  background: rgba(167, 139, 250, 0.08) !important;
+  border: 1px solid rgba(167, 139, 250, 0.45) !important;
+  border-radius: 3px;
+  z-index: 0 !important;
+  pointer-events: none;
+}
+
+/* Post-release selection bounding box — keep it below nodes */
+.react-flow__nodesselection {
+  z-index: 1 !important;   /* below viewport z-index:2 where nodes live */
+}
+.react-flow__nodesselection-rect {
+  background: rgba(167, 139, 250, 0.05) !important;
+  border: 1px solid rgba(167, 139, 250, 0.35) !important;
   border-radius: 3px;
 }
 
 /* ── React Flow overrides ────────────────────────────── */
 .react-flow__node.selected .node-card {
-  border-color: #555;
+  border-color: #a78bfa !important;
+  box-shadow: 0 0 0 1px rgba(167, 139, 250, 0.2), 0 2px 12px rgba(0,0,0,0.6);
 }
 .react-flow__edge.selected .react-flow__edge-path {
   filter: brightness(1.4);

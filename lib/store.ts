@@ -50,6 +50,7 @@ interface WorkflowStore {
   insertEdge: (edge: Edge) => void;
   removeEdgesForHandle: (nodeId: string, handleId: string) => void;
   updateNodeData: (id: string, data: Partial<NodeData>) => void;
+  updateNodeSize: (id: string, width: number, height: number) => void;
   setIsRunning: (v: boolean) => void;
 }
 
@@ -89,6 +90,13 @@ export const useWorkflowStore = create<WorkflowStore>()(
         set((s) => ({
           nodes: s.nodes.map((n) =>
             n.id === id ? { ...n, data: { ...n.data, ...data } } : n
+          ),
+        })),
+
+      updateNodeSize: (id, width, height) =>
+        set((s) => ({
+          nodes: s.nodes.map((n) =>
+            n.id === id ? { ...n, width, height } : n
           ),
         })),
 

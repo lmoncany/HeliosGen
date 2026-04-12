@@ -1,26 +1,33 @@
 "use client";
-import { useRef, useCallback } from "react";
-import { Handle, Position, NodeProps, Node } from "@xyflow/react";
+import { useRef, useCallback, useState } from "react";
+import { Handle, Position, NodeProps, Node, NodeResizer } from "@xyflow/react";
 import { useWorkflowStore, NodeData } from "@/lib/store";
 
 type ImageInputNodeType = Node<NodeData, "imageInputNode">;
 
-export default function ImageInputNode({ id, data }: NodeProps<ImageInputNodeType>) {
+const MAX_DISPLAY = 280; // max px for either dimension on first load
+
+export default function ImageInputNode({ id, data, selected }: NodeProps<ImageInputNodeType>) {
   const updateNodeData = useWorkflowStore((s) => s.updateNodeData);
+  const updateNodeSize = useWorkflowStore((s) => s.updateNodeSize);
   const fileRef        = useRef<HTMLInputElement>(null);
 
   const setImage = useCallback(
     (src: string) => {
       const img = new Image();
       img.onload = () => {
+        const scale  = Math.min(MAX_DISPLAY / img.naturalWidth, MAX_DISPLAY / img.naturalHeight, 1);
+        const w      = Math.round(img.naturalWidth  * scale);
+        const h      = Math.round(img.naturalHeight * scale);
         updateNodeData(id, {
           inputImage: src,
           imageNaturalRatio: `${img.naturalWidth} / ${img.naturalHeight}`,
         });
+        updateNodeSize(id, w, h);
       };
       img.src = src;
     },
-    [id, updateNodeData]
+    [id, updateNodeData, updateNodeSize]
   );
 
   const loadFile = useCallback(
@@ -41,29 +48,41 @@ export default function ImageInputNode({ id, data }: NodeProps<ImageInputNodeTyp
     [loadFile]
   );
 
+  const [hovered, setHovered] = useState(false);
   const hasImage = !!data.inputImage;
   const ratio    = (data.imageNaturalRatio as string | undefined) ?? "1 / 1";
 
   return (
-    <div className="relative" style={{ width: 240 }}>
+    <div
+      className="relative w-full h-full"
+      style={!hasImage ? { minWidth: 240 } : undefined}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+    >
+      <NodeResizer
+        isVisible={selected || hovered}
+        minWidth={120}
+        minHeight={80}
+        keepAspectRatio={hasImage}
+        handleStyle={{ width: 8, height: 8, borderRadius: 2, background: "#a78bfa", border: "none" }}
+        lineStyle={{ borderColor: "#a78bfa", borderWidth: 1, opacity: 0.5 }}
+      />
       {/* Floating label */}
       <span className="node-above-label">Image</span>
 
-      <div className="node-card">
+      <div className="node-card w-full h-full">
         <Handle type="source" position={Position.Right} className="node-handle node-handle-source" />
 
         {/* Inner wrapper — clips everything to the card's rounded corners */}
-        <div className="overflow-hidden rounded-[7px]">
+        <div className="overflow-hidden rounded-[7px] w-full h-full">
           {hasImage ? (
-            <div
-              className="relative group"
-              style={{ aspectRatio: ratio }}
-            >
+            <div className="relative group w-full h-full">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
                 src={data.inputImage as string}
                 alt="Input"
                 className="w-full h-full object-cover block"
+                style={{ aspectRatio: ratio }}
               />
               {/* Hover controls */}
               <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity">

@@ -1,6 +1,6 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
-import { Handle, Position, NodeProps, Node } from "@xyflow/react";
+import { Handle, Position, NodeProps, Node, NodeResizer } from "@xyflow/react";
 import { useWorkflowStore, NodeData } from "@/lib/store";
 import { resolveInputs } from "@/lib/executor";
 
@@ -54,7 +54,7 @@ const STATUS_DOT: Record<string, string> = {
 
 // ── Component ────────────────────────────────────────────────────────────────
 
-export default function GenerateNode({ id, data }: NodeProps<GenerateNodeType>) {
+export default function GenerateNode({ id, data, selected }: NodeProps<GenerateNodeType>) {
   const updateNodeData       = useWorkflowStore((s) => s.updateNodeData);
   const removeEdgesForHandle = useWorkflowStore((s) => s.removeEdgesForHandle);
   const nodes                = useWorkflowStore((s) => s.nodes);
@@ -64,6 +64,7 @@ export default function GenerateNode({ id, data }: NodeProps<GenerateNodeType>) 
   const [ratioOpen, setRatioOpen]     = useState(false);
   const [qualityOpen, setQualityOpen] = useState(false);
   const [loading, setLoading]         = useState(false);
+  const [hovered, setHovered]         = useState(false);
 
   const model       = (data.model as string) ?? "nano-banana-2";
   const caps        = MODEL_CAPS[model] ?? DEFAULT_CAPS;
@@ -145,14 +146,23 @@ export default function GenerateNode({ id, data }: NodeProps<GenerateNodeType>) 
 
   return (
     <div
-      className="relative"
-      style={{ width: 280 }}
-      onMouseLeave={closeDropdowns}
+      className="relative h-full"
+      style={{ minWidth: 280 }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => { setHovered(false); closeDropdowns(); }}
     >
+      <NodeResizer
+        isVisible={selected || hovered}
+        minWidth={220}
+        minHeight={120}
+        keepAspectRatio
+        handleStyle={{ width: 8, height: 8, borderRadius: 2, background: "#a78bfa", border: "none" }}
+        lineStyle={{ borderColor: "#a78bfa", borderWidth: 1, opacity: 0.5 }}
+      />
       {/* Floating label */}
       <span className="node-above-label">Image Generator</span>
 
-      <div className="node-card">
+      <div className="node-card h-full flex flex-col">
         {/* ── Handles ───────────────────────────────────────────────────── */}
         <Handle
           type="target"
@@ -174,8 +184,8 @@ export default function GenerateNode({ id, data }: NodeProps<GenerateNodeType>) 
 
         {/* ── Image area — top corners clip to card border-radius ───────── */}
         <div
-          className="relative bg-[#0d0d0d] overflow-hidden rounded-t-[7px]"
-          style={{ aspectRatio: cssRatio }}
+          className="relative bg-[#0d0d0d] overflow-hidden rounded-t-[7px] flex-1"
+          style={{ aspectRatio: cssRatio, minHeight: 60 }}
         >
           {data.imageUrl ? (
             // eslint-disable-next-line @next/next/no-img-element
@@ -204,7 +214,7 @@ export default function GenerateNode({ id, data }: NodeProps<GenerateNodeType>) 
 
         {/* ── Control bar ─────────────────────────────────────────────────
              Lives outside the image area — dropdowns open freely.          */}
-        <div className="flex items-center gap-2 px-2.5 py-[7px] border-t border-[#252525]">
+        <div className="flex items-center gap-2 px-2.5 py-[7px] border-t border-[#252525] shrink-0">
           {/* Status dot */}
           <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${STATUS_DOT[status]}`} />
 
