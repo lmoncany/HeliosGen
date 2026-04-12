@@ -1,53 +1,7 @@
 "use client";
-import { useCallback, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { useWorkflowStore, NodeData, Space } from "@/lib/store";
-import { edgeStyle } from "@/lib/edgeStyles";
-import { Node, Edge } from "@xyflow/react";
-import { NODES, NODE_SIZE, FALLBACK_SIZE } from "@/lib/nodeTypes";
-
-const GAP = 10;
-
-function findFreePosition(
-  nodes: Node<NodeData>[],
-  fw: number,
-  fh: number,
-): { x: number; y: number } {
-  if (nodes.length === 0) return { x: 80, y: 80 };
-  const cx = nodes.reduce((s, n) => s + n.position.x, 0) / nodes.length;
-  const cy = nodes.reduce((s, n) => s + n.position.y, 0) / nodes.length;
-  const hits = (x: number, y: number) =>
-    nodes.some((n) => {
-      const s = NODE_SIZE[n.type ?? ""] ?? FALLBACK_SIZE;
-      return !(
-        x + fw + GAP <= n.position.x ||
-        x            >= n.position.x + s.w + GAP ||
-        y + fh + GAP <= n.position.y ||
-        y            >= n.position.y + s.h + GAP
-      );
-    });
-  const candidates: { x: number; y: number }[] = [];
-  for (const n of nodes) {
-    const s = NODE_SIZE[n.type ?? ""] ?? FALLBACK_SIZE;
-    candidates.push({ x: n.position.x + s.w + GAP, y: n.position.y });
-    candidates.push({ x: n.position.x - fw - GAP,  y: n.position.y });
-    candidates.push({ x: n.position.x, y: n.position.y + s.h + GAP });
-    candidates.push({ x: n.position.x, y: n.position.y - fh - GAP });
-    candidates.push({ x: n.position.x + s.w + GAP, y: n.position.y + (s.h - fh) / 2 });
-    candidates.push({ x: n.position.x + (s.w - fw) / 2, y: n.position.y + s.h + GAP });
-  }
-  const valid = candidates
-    .filter((c) => !hits(c.x, c.y))
-    .sort((a, b) => {
-      const da = Math.hypot(a.x + fw / 2 - cx, a.y + fh / 2 - cy);
-      const db = Math.hypot(b.x + fw / 2 - cx, b.y + fh / 2 - cy);
-      return da - db;
-    });
-  if (valid.length > 0) return valid[0];
-  const maxX = Math.max(...nodes.map((n) => n.position.x + (NODE_SIZE[n.type ?? ""] ?? FALLBACK_SIZE).w));
-  return { x: maxX + GAP, y: cy - fh / 2 };
-}
-
-const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+import { NODES } from "@/lib/nodeTypes";
 
 // ── Spaces panel ──────────────────────────────────────────────────────────────
 
@@ -109,10 +63,8 @@ function SpacesPanel() {
                 active ? "bg-[#0D1012]" : "hover:bg-[#0A0C0E]"
               }`}
             >
-              {/* Space icon */}
               <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${active ? "bg-[#77E544]" : "bg-[#2A1A14]"}`} />
 
-              {/* Name / rename input */}
               {editingId === sp.id ? (
                 <input
                   ref={inputRef}
@@ -135,12 +87,10 @@ function SpacesPanel() {
                 </span>
               )}
 
-              {/* Node count badge */}
               {nodeCount > 0 && (
                 <span className="text-[10px] text-[#4A4A45] tabular-nums shrink-0">{nodeCount}</span>
               )}
 
-              {/* Delete button — hidden until hover, disabled if only space */}
               {spaces.length > 1 && (
                 <button
                   onClick={(e) => { e.stopPropagation(); deleteSpace(sp.id); }}
@@ -163,73 +113,13 @@ function SpacesPanel() {
 // ── Sidebar ───────────────────────────────────────────────────────────────────
 
 export default function Sidebar() {
-  const addNode    = useWorkflowStore((s) => s.addNode);
-  const insertEdge = useWorkflowStore((s) => s.insertEdge);
-  const nodes      = useWorkflowStore((s) => s.nodes);
-
-  const add = useCallback(
-    (type: string) => {
-      if (type === "generateNode") {
-        const { x, y } = findFreePosition(nodes, 260 + 60 + 280, 340);
-
-        const genId    = `gen-${uid()}`;
-        const promptId = `prompt-${uid()}`;
-
-        const promptNode: Node<NodeData> = {
-          id: promptId,
-          type: "promptNode",
-          position: { x, y: y + 20 },
-          deletable: false,
-          style: { width: NODE_SIZE.promptNode.w, height: NODE_SIZE.promptNode.h },
-          data: { label: "promptNode" },
-        };
-
-        const genNode: Node<NodeData> = {
-          id: genId,
-          type: "generateNode",
-          position: { x: x + 320, y },
-          style: { width: NODE_SIZE.generateNode.w, height: NODE_SIZE.generateNode.h },
-          data: { label: "generateNode", status: "idle", model: "nano-banana-2", aspectRatio: "1:1" },
-        };
-
-        const edge: Edge = {
-          id: `edge-${promptId}-${genId}`,
-          source: promptId,
-          target: genId,
-          targetHandle: "prompt",
-          deletable: false,
-          reconnectable: false,
-          animated: false,
-          style: edgeStyle("prompt"),
-        };
-
-        addNode(promptNode);
-        addNode(genNode);
-        insertEdge(edge);
-        return;
-      }
-
-      const size = NODE_SIZE[type] ?? FALLBACK_SIZE;
-      const { x, y } = findFreePosition(nodes, size.w, size.h);
-
-      const nodeStyle = type === "imageInputNode"
-        ? { width: size.w }
-        : { width: size.w, height: size.h };
-
-      const node: Node<NodeData> = {
-        id: `${type}-${uid()}`,
-        type,
-        position: { x, y },
-        style: nodeStyle,
-        data: { label: type, status: "idle" },
-      };
-      addNode(node);
-    },
-    [addNode, insertEdge, nodes]
-  );
+  const onDragStart = (e: React.DragEvent, type: string) => {
+    e.dataTransfer.setData("application/reactflow-node", type);
+    e.dataTransfer.effectAllowed = "copy";
+  };
 
   return (
-    <aside className="w-48 bg-[#0A0C0E] border-r border-[#1A100C] flex flex-col shrink-0">
+    <aside className="w-48 bg-[#0A0C0E] border-r border-[#1A100C] flex flex-col shrink-0 select-none">
       {/* Brand */}
       <div className="px-4 py-4 border-b border-[#1A100C]">
         <span className="text-white text-sm font-medium tracking-tight">
@@ -246,10 +136,11 @@ export default function Sidebar() {
           Nodes
         </p>
         {NODES.map((n) => (
-          <button
+          <div
             key={n.type + n.label}
-            onClick={() => add(n.type)}
-            className="w-full text-left px-3 py-2.5 rounded hover:bg-[#0D1012] transition-colors group"
+            draggable
+            onDragStart={(e) => onDragStart(e, n.type)}
+            className="w-full text-left px-3 py-2.5 rounded hover:bg-[#0D1012] transition-colors group cursor-grab active:cursor-grabbing"
           >
             <div className="flex items-center gap-2.5 text-[#8D8E89] group-hover:text-[#77E544] transition-colors">
               {n.icon}
@@ -257,16 +148,16 @@ export default function Sidebar() {
                 {n.label}
               </span>
             </div>
-            <p className="text-[10px] text-[#8D8E89] group-hover:text-[#8D8E89] mt-0.5 pl-[22px] transition-colors">
+            <p className="text-[10px] text-[#8D8E89] mt-0.5 pl-[22px]">
               {n.description}
             </p>
-          </button>
+          </div>
         ))}
       </div>
 
       <div className="p-3 border-t border-[#1A100C]">
         <p className="text-[10px] text-[#4A4A45] leading-4">
-          Click to add nodes · Drag handles to connect
+          Drag nodes onto the canvas to add them
         </p>
       </div>
     </aside>

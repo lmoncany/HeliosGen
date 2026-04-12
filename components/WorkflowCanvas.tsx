@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import {
   ReactFlow,
   Background,
@@ -10,11 +10,14 @@ import {
   NodeChange,
   Connection,
   Edge,
+  Viewport,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 
 import { useWorkflowStore, NodeData } from "@/lib/store";
 import { topoSort, resolveInputs } from "@/lib/executor";
+import { NODE_SIZE, FALLBACK_SIZE } from "@/lib/nodeTypes";
+import { edgeStyle } from "@/lib/edgeStyles";
 import { createClient } from "@/lib/supabase/client";
 
 import PromptNode          from "./nodes/PromptNode";
@@ -47,10 +50,13 @@ const nodeTypes = {
   videoGeneratorNode:  VideoGeneratorNode,
 };
 
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+
 export default function WorkflowCanvas() {
   const {
     nodes, edges,
     onNodesChange: _onNodesChange, onEdgesChange, onConnect,
+    addNode, insertEdge,
     updateNodeData, isRunning, setIsRunning, debugMode, toggleDebug,
   } = useWorkflowStore();
 
@@ -84,6 +90,66 @@ export default function WorkflowCanvas() {
     _onNodesChange(changes);
   }, [_onNodesChange, nodes, edges]);
 
+  // ── Sidebar drag-and-drop ────────────────────────────────────────────────────
+  const wrapperRef  = useRef<HTMLDivElement>(null);
+  const viewportRef = useRef<Viewport>({ x: 0, y: 0, zoom: 1 });
+
+  const onDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+  }, []);
+
+  const onDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    const type = e.dataTransfer.getData("application/reactflow-node");
+    if (!type) return;
+
+    const rect = wrapperRef.current?.getBoundingClientRect();
+    if (!rect) return;
+
+    const { x: panX, y: panY, zoom } = viewportRef.current;
+    const position = {
+      x: (e.clientX - rect.left - panX) / zoom,
+      y: (e.clientY - rect.top  - panY) / zoom,
+    };
+
+    if (type === "generateNode") {
+      const genId    = `gen-${uid()}`;
+      const promptId = `prompt-${uid()}`;
+
+      addNode({
+        id: promptId, type: "promptNode",
+        position: { x: position.x - 320, y: position.y + 20 },
+        deletable: false,
+        style: { width: NODE_SIZE.promptNode.w, height: NODE_SIZE.promptNode.h },
+        data: { label: "promptNode" },
+      });
+      addNode({
+        id: genId, type: "generateNode",
+        position,
+        style: { width: NODE_SIZE.generateNode.w, height: NODE_SIZE.generateNode.h },
+        data: { label: "generateNode", status: "idle", model: "nano-banana-2", aspectRatio: "1:1" },
+      });
+      insertEdge({
+        id: `edge-${promptId}-${genId}`,
+        source: promptId, target: genId, targetHandle: "prompt",
+        deletable: false, reconnectable: false, animated: false,
+        style: edgeStyle("prompt"),
+      });
+      return;
+    }
+
+    const size = NODE_SIZE[type] ?? FALLBACK_SIZE;
+    addNode({
+      id: `${type}-${uid()}`,
+      type,
+      position,
+      style: type === "imageInputNode" ? { width: size.w } : { width: size.w, height: size.h },
+      data: { label: type, status: "idle" },
+    });
+  }, [addNode, insertEdge]);
+
+  // ── Edge drop → node picker ──────────────────────────────────────────────────
   const [dropState, setDropState] = useState<DropState | null>(null);
   const [log, setLog] = useState<{ text: string; ok: boolean }[]>([]);
 
@@ -337,7 +403,7 @@ export default function WorkflowCanvas() {
   }, []);
 
   return (
-    <div className="flex-1 flex flex-col min-w-0 h-full">
+    <div ref={wrapperRef} className="flex-1 flex flex-col min-w-0 h-full">
       <ReactFlow
         nodes={nodes}
         edges={edges}
@@ -346,6 +412,9 @@ export default function WorkflowCanvas() {
         onConnect={onConnect}
         onConnectEnd={onConnectEnd}
         isValidConnection={isValidConnection}
+        onMove={(_, vp) => { viewportRef.current = vp; }}
+        onDrop={onDrop}
+        onDragOver={onDragOver}
         nodeTypes={nodeTypes}
         fitView
         colorMode="dark"
