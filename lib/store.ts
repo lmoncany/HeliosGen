@@ -128,6 +128,8 @@ interface WorkflowStore {
   addNode:            (node: Node<NodeData>) => void;
   insertEdge:         (edge: Edge) => void;
   removeEdgesForHandle: (nodeId: string, handleId: string) => void;
+  killEdgesForHandles:  (nodeId: string, handleIds: string[]) => void;
+  flashEdgeError:       (edgeId: string) => void;
   updateNodeData:     (id: string, data: Partial<NodeData>) => void;
   updateNodeSize:     (id: string, width: number, height: number) => void;
   setIsRunning:       (v: boolean) => void;
@@ -276,6 +278,41 @@ export const useWorkflowStore = create<WorkflowStore>()(
               spaces: syncSpace(s.spaces, s.activeSpaceId, s.nodes, edges, s.nodeCounters),
             };
           }),
+
+        killEdgesForHandles: (nodeId, handleIds) => {
+          const handleSet = new Set(handleIds);
+          // Mark matching edges as dying
+          set((s) => ({
+            edges: s.edges.map((e) =>
+              e.target === nodeId && handleSet.has(e.targetHandle ?? "")
+                ? { ...e, data: { ...e.data, dying: true } }
+                : e
+            ),
+          }));
+          // Remove after animation
+          setTimeout(() => {
+            set((s) => {
+              const edges = s.edges.filter(
+                (e) => !(e.target === nodeId && handleSet.has(e.targetHandle ?? ""))
+              );
+              return {
+                edges,
+                spaces: syncSpace(s.spaces, s.activeSpaceId, s.nodes, edges, s.nodeCounters),
+              };
+            });
+          }, 450);
+        },
+
+        flashEdgeError: (edgeId) => {
+          const setError = (val: boolean) =>
+            set((s) => ({
+              edges: s.edges.map((e) =>
+                e.id === edgeId ? { ...e, data: { ...e.data, error: val } } : e
+              ),
+            }));
+          setError(true);
+          setTimeout(() => setError(false), 1400);
+        },
 
         updateNodeData: (id, data) =>
           set((s) => {

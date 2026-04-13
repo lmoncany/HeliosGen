@@ -333,6 +333,13 @@ body {
   to { transform: rotate(360deg); }
 }
 
+/* ── Edge error blink ────────────────────────────────────────────────────── */
+@keyframes edge-error-blink {
+  0%, 100%  { stroke: var(--edge-color); }
+  20%, 55%  { stroke: #ef4444; }
+  37%, 72%  { stroke: var(--edge-color); }
+}
+
 /* ── Generating border animation ─────────────────────────────────────────── */
 @keyframes node-pulse-glow {
   0%, 100% { box-shadow: 0 0 6px 2px rgba(119,229,68,0.15); }

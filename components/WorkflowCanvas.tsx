@@ -65,6 +65,16 @@ export default function WorkflowCanvas() {
     updateNodeData, isRunning, setIsRunning, debugMode, toggleDebug,
   } = useWorkflowStore();
 
+  const [dyingEdgeIds, setDyingEdgeIds] = useState<Set<string>>(new Set());
+
+  const handleEdgeClick = useCallback((_: React.MouseEvent, edge: Edge) => {
+    setDyingEdgeIds((prev) => new Set([...prev, edge.id]));
+    setTimeout(() => {
+      onEdgesChange([{ type: "remove", id: edge.id }]);
+      setDyingEdgeIds((prev) => { const s = new Set(prev); s.delete(edge.id); return s; });
+    }, 450);
+  }, [onEdgesChange]);
+
   // Intercept node deletions: when a generateNode is deleted, also delete
   // its paired locked prompt (deletable:false nodes are skipped by React Flow
   // normally, but we want them gone when their generator is removed).
@@ -520,10 +530,10 @@ export default function WorkflowCanvas() {
     >
       <ReactFlow
         nodes={nodes}
-        edges={edges}
+        edges={edges.map((e) => ({ ...e, data: { ...e.data, dying: dyingEdgeIds.has(e.id) || e.data?.dying === true } }))}
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
-        onEdgeClick={(_, edge) => onEdgesChange([{ type: "remove", id: edge.id }])}
+        onEdgeClick={handleEdgeClick}
         onConnect={onConnect}
         onConnectEnd={onConnectEnd}
         isValidConnection={isValidConnection}

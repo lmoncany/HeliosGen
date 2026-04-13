@@ -40,6 +40,8 @@ export default function VideoGeneratorNode({ id, data }: NodeProps<VideoGenerato
   const updateNodeData = useWorkflowStore((s) => s.updateNodeData);
   const updateNodeSize = useWorkflowStore((s) => s.updateNodeSize);
   const setAuthModalOpen = useWorkflowStore((s) => s.setAuthModalOpen);
+  const killEdgesForHandles = useWorkflowStore((s) => s.killEdgesForHandles);
+  const flashEdgeError = useWorkflowStore((s) => s.flashEdgeError);
   const nodes = useWorkflowStore((s) => s.nodes);
   const edges = useWorkflowStore((s) => s.edges);
   const debugMode = useWorkflowStore((s) => s.debugMode);
@@ -105,7 +107,10 @@ export default function VideoGeneratorNode({ id, data }: NodeProps<VideoGenerato
     const finalPrompt = upstream.prompt ?? prompt;
 
     if (!finalPrompt.trim()) {
-      if (textEdge) updateNodeData(textEdge.source, { hasError: true });
+      if (textEdge) {
+        updateNodeData(textEdge.source, { hasError: true });
+        flashEdgeError(textEdge.id);
+      }
       return;
     }
 
@@ -280,6 +285,11 @@ export default function VideoGeneratorNode({ id, data }: NodeProps<VideoGenerato
                     const validRatio = m.ratios.includes(aspectRatio) ? aspectRatio : m.defaultRatio;
                     const validDur = m.durations.includes(duration) ? duration : m.defaultDuration;
                     updateNodeData(id, { videoModel: m.id, aspectRatio: validRatio, duration: validDur });
+                    // Kill edges on handles the new model doesn't support
+                    const removedHandles = (cfg.handles as string[]).filter(
+                      (h) => !(m.handles as string[]).includes(h)
+                    );
+                    if (removedHandles.length) killEdgesForHandles(id, removedHandles);
                     setModelOpen(false);
                   }}
                   className={`w-full flex items-center justify-between px-3 py-2 text-[11px] hover:bg-[#161A1E] transition-colors ${videoModelId === m.id ? "text-white font-medium" : "text-[#8D8E89]"

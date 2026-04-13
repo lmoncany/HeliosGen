@@ -1,7 +1,6 @@
 "use client";
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import {
-  BaseEdge,
   EdgeLabelRenderer,
   getBezierPath,
   useReactFlow,
@@ -16,45 +15,55 @@ export default function CuttableEdge({
   sourcePosition, targetPosition,
   targetHandleId,
   markerEnd,
+  data,
 }: EdgeProps) {
+  const dying = (data as Record<string, unknown> | undefined)?.dying === true;
+  const error = (data as Record<string, unknown> | undefined)?.error === true;
+
   const [visible, setVisible] = useState(false);
   const [pos, setPos] = useState({ x: 0, y: 0 });
+  const [pathLength, setPathLength] = useState(0);
   const leaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pathRef = useRef<SVGPathElement>(null);
   const { screenToFlowPosition } = useReactFlow();
 
   const style = edgeStyle(targetHandleId);
   const color = (style.stroke as string) ?? "#555";
+  const strokeWidth = (style.strokeWidth as number) ?? 2;
 
   const [edgePath] = getBezierPath({
     sourceX, sourceY, sourcePosition,
     targetX, targetY, targetPosition,
   });
 
+  // Measure path length after render
+  useEffect(() => {
+    if (pathRef.current) setPathLength(pathRef.current.getTotalLength());
+  }, [edgePath]);
+
   function handleMouseMove(e: React.MouseEvent) {
     if (leaveTimer.current) { clearTimeout(leaveTimer.current); leaveTimer.current = null; }
-
     const cursor = screenToFlowPosition({ x: e.clientX, y: e.clientY });
-
-    // Find the point on the curve closest to the cursor
     const el = pathRef.current;
     if (el) {
       const total = el.getTotalLength();
       let lo = 0, hi = total;
-      // Coarse scan first
       let best = el.getPointAtLength(0);
       let bestDist = Infinity;
       const STEPS = 64;
       for (let i = 0; i <= STEPS; i++) {
         const pt = el.getPointAtLength((i / STEPS) * total);
         const d = Math.hypot(pt.x - cursor.x, pt.y - cursor.y);
-        if (d < bestDist) { bestDist = d; best = pt; lo = Math.max(0, (i - 1) / STEPS * total); hi = Math.min(total, (i + 1) / STEPS * total); }
+        if (d < bestDist) {
+          bestDist = d; best = pt;
+          lo = Math.max(0, (i - 1) / STEPS * total);
+          hi = Math.min(total, (i + 1) / STEPS * total);
+        }
       }
-      // Binary search refinement
       for (let i = 0; i < 8; i++) {
         const mid = (lo + hi) / 2;
-        const ptLo  = el.getPointAtLength(mid - (hi - lo) / 4);
-        const ptHi  = el.getPointAtLength(mid + (hi - lo) / 4);
+        const ptLo = el.getPointAtLength(mid - (hi - lo) / 4);
+        const ptHi = el.getPointAtLength(mid + (hi - lo) / 4);
         const dLo = Math.hypot(ptLo.x - cursor.x, ptLo.y - cursor.y);
         const dHi = Math.hypot(ptHi.x - cursor.x, ptHi.y - cursor.y);
         if (dLo < dHi) { hi = mid; best = ptLo; } else { lo = mid; best = ptHi; }
@@ -63,7 +72,6 @@ export default function CuttableEdge({
     } else {
       setPos(cursor);
     }
-
     setVisible(true);
   }
 
@@ -77,22 +85,33 @@ export default function CuttableEdge({
 
   return (
     <>
-      <BaseEdge
-        path={edgePath}
-        markerEnd={markerEnd}
-        style={{ ...style, pointerEvents: "none" }}
+      {/* Visible edge line — animates out right-to-left when dying */}
+      <path
+        ref={pathRef}
+        d={edgePath}
+        fill="none"
+        strokeWidth={strokeWidth}
+        strokeLinecap="round"
+        strokeDasharray={pathLength > 0 ? pathLength : undefined}
+        strokeDashoffset={dying ? pathLength : 0}
+        style={{
+          stroke: color,
+          ["--edge-color" as string]: color,
+          pointerEvents: "none",
+          transition: dying ? "stroke-dashoffset 0.42s ease-in" : undefined,
+          animation: error ? "edge-error-blink 1.4s ease 1 forwards" : undefined,
+        }}
       />
 
       {/* Wide transparent hit area on top */}
       <path
-        ref={pathRef}
         d={edgePath}
         fill="none"
         stroke="transparent"
         strokeWidth={20}
         onMouseMove={handleMouseMove}
         onMouseLeave={handleMouseLeave}
-        style={{ cursor: "pointer", pointerEvents: "stroke" }}
+        style={{ cursor: "pointer", pointerEvents: dying ? "none" : "stroke" }}
       />
 
       <EdgeLabelRenderer>
@@ -100,9 +119,9 @@ export default function CuttableEdge({
           style={{
             position: "absolute",
             transform: `translate(-50%, -50%) translate(${pos.x}px, ${pos.y}px)`,
-            pointerEvents: visible ? "all" : "none",
+            pointerEvents: visible && !dying ? "all" : "none",
             zIndex: 10,
-            opacity: visible ? 1 : 0,
+            opacity: visible && !dying ? 1 : 0,
             transition: "opacity 180ms ease",
           }}
           onMouseEnter={handleBadgeEnter}

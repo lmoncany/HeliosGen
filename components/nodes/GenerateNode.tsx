@@ -62,6 +62,7 @@ export default function GenerateNode({ id, data }: NodeProps<GenerateNodeType>) 
   const updateNodeSize       = useWorkflowStore((s) => s.updateNodeSize);
   const removeEdgesForHandle = useWorkflowStore((s) => s.removeEdgesForHandle);
   const setAuthModalOpen     = useWorkflowStore((s) => s.setAuthModalOpen);
+  const flashEdgeError       = useWorkflowStore((s) => s.flashEdgeError);
   const nodes                = useWorkflowStore((s) => s.nodes);
   const edges                = useWorkflowStore((s) => s.edges);
   const debugMode            = useWorkflowStore((s) => s.debugMode);
@@ -155,9 +156,11 @@ export default function GenerateNode({ id, data }: NodeProps<GenerateNodeType>) 
     const imageUrls = upstream.imageUrls;
     const payload   = { model, prompt, imageUrls, aspectRatio, quality };
 
-    if (!prompt.trim()) {
+    if (!prompt?.trim()) {
       if (connectedPromptNodeId) {
         updateNodeData(connectedPromptNodeId, { hasError: true });
+        const promptEdge = edges.find((e) => e.target === id && e.targetHandle === "prompt");
+        if (promptEdge) flashEdgeError(promptEdge.id);
       }
       return;
     }
