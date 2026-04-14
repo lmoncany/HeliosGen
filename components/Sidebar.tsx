@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import { useWorkflowStore, Space } from "@/lib/store";
-import { NODES } from "@/lib/nodeTypes";
+import { NODES, NodeCategory } from "@/lib/nodeTypes";
 import { useSpaceSync, timeAgo, SyncStatus } from "@/lib/useSpaceSync";
 
 // ── Spaces panel ──────────────────────────────────────────────────────────────
@@ -135,28 +135,37 @@ export default function Sidebar() {
       <SpacesPanel syncNow={syncNow} />
 
       {/* Node list */}
-      <div className="flex-1 p-3 space-y-1 overflow-y-auto">
-        <p className="text-[#8D8E89] text-[10px] uppercase tracking-widest px-1 py-2">
-          Nodes
-        </p>
-        {NODES.map((n) => (
-          <div
-            key={n.type + n.label}
-            draggable
-            onDragStart={(e) => onDragStart(e, n.type)}
-            className="w-full text-left px-3 py-2.5 rounded hover:bg-[#0D1012] transition-colors group cursor-grab active:cursor-grabbing"
-          >
-            <div className="flex items-center gap-2.5 text-[#8D8E89] group-hover:text-[#77E544] transition-colors">
-              {n.icon}
-              <span className="text-[13px] text-white group-hover:text-white font-medium transition-colors">
-                {n.label}
-              </span>
+      <div className="flex-1 overflow-y-auto">
+        {(["generators", "resources"] as NodeCategory[]).map((cat) => {
+          const group = NODES.filter((n) => n.category === cat);
+          return (
+            <div key={cat} className="border-b border-[#1A100C] last:border-b-0">
+              <p className="text-[#8D8E89] text-[10px] uppercase tracking-widest px-4 pt-3 pb-1.5">
+                {cat}
+              </p>
+              <div className="px-2 pb-2 space-y-px">
+                {group.map((n) => (
+                  <div
+                    key={n.type}
+                    draggable
+                    onDragStart={(e) => onDragStart(e, n.type)}
+                    className="w-full text-left px-3 py-2.5 rounded hover:bg-[#0D1012] transition-colors group cursor-grab active:cursor-grabbing"
+                  >
+                    <div className="flex items-center gap-2.5 text-[#8D8E89] group-hover:text-[#77E544] transition-colors">
+                      {n.icon}
+                      <span className="text-[13px] text-white group-hover:text-white font-medium transition-colors">
+                        {n.label}
+                      </span>
+                    </div>
+                    <p className="text-[10px] text-[#8D8E89] mt-0.5 pl-[22px]">
+                      {n.description}
+                    </p>
+                  </div>
+                ))}
+              </div>
             </div>
-            <p className="text-[10px] text-[#8D8E89] mt-0.5 pl-[22px]">
-              {n.description}
-            </p>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       <div className="p-3 border-t border-[#1A100C] flex flex-col gap-2">

@@ -39,17 +39,22 @@ export function resolveInputs(
 ): {
   prompt?: string;
   imageUrls: string[];
+  /** Node labels in the same order as imageUrls — used to resolve @mentions */
+  imageNodeLabels: string[];
   startFrameUrl?: string;
   endFrameUrl?: string;
+  videoRefUrl?: string;
   resources: Array<{ url: string; label: string }>;
 } {
   const incoming = edges.filter((e) => e.target === nodeId);
   const result = {
-    imageUrls:    [] as string[],
-    resources:    [] as Array<{ url: string; label: string }>,
-    startFrameUrl: undefined as string | undefined,
-    endFrameUrl:   undefined as string | undefined,
-    prompt:        undefined as string | undefined,
+    imageUrls:       [] as string[],
+    imageNodeLabels: [] as string[],
+    resources:       [] as Array<{ url: string; label: string }>,
+    startFrameUrl:   undefined as string | undefined,
+    endFrameUrl:     undefined as string | undefined,
+    videoRefUrl:     undefined as string | undefined,
+    prompt:          undefined as string | undefined,
   };
 
   for (const edge of incoming) {
@@ -66,10 +71,16 @@ export function resolveInputs(
       if (src.type === "imageInputNode") {
         // Prefer R2 CDN URL; fall back to base64 data URL if not yet uploaded
         const imgSrc = (src.data.r2Url ?? src.data.inputImage) as string | undefined;
-        if (imgSrc) result.imageUrls.push(imgSrc);
+        if (imgSrc) {
+          result.imageUrls.push(imgSrc);
+          result.imageNodeLabels.push((src.data.label as string | undefined) ?? "");
+        }
       }
       if (src.type === "generateNode") {
-        if (src.data.imageUrl) result.imageUrls.push(src.data.imageUrl as string);
+        if (src.data.imageUrl) {
+          result.imageUrls.push(src.data.imageUrl as string);
+          result.imageNodeLabels.push((src.data.label as string | undefined) ?? "");
+        }
         if (src.data.prompt && !result.prompt) result.prompt = src.data.prompt as string;
       }
     }
@@ -93,6 +104,12 @@ export function resolveInputs(
       if (url && result.resources.length < 3) {
         result.resources.push({ url, label: label ?? "element" });
       }
+    }
+
+    // "videoRef" handle — motion-control reference video
+    if (edge.targetHandle === "videoRef") {
+      const url = src.data.videoUrl as string | undefined;
+      if (url) result.videoRefUrl = url;
     }
 
     // Upstream video generator — carry its prompt downstream

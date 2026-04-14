@@ -14,17 +14,19 @@ type VideoGeneratorNodeType = Node<NodeData, "videoGeneratorNode">;
 type HandleDef = { id: string; label: string; topPct: number; className: string };
 
 const KLING_HANDLES: HandleDef[] = [
-  { id: "prompt", label: "Text prompt", topPct: 26, className: "node-handle-icon node-handle-icon-prompt" },
-  { id: "startFrame", label: "Start frame", topPct: 44, className: "node-handle-icon node-handle-icon-image" },
-  { id: "endFrame", label: "End frame", topPct: 60, className: "node-handle-icon node-handle-icon-image" },
-  { id: "resource", label: "Reference images (up to 3)", topPct: 77, className: "node-handle-icon node-handle-icon-resource" },
+  { id: "prompt",     label: "Text prompt",               topPct: 26, className: "node-handle-icon node-handle-icon-prompt" },
+  { id: "startFrame", label: "Reference image",           topPct: 44, className: "node-handle-icon node-handle-icon-image" },
+  { id: "endFrame",   label: "End frame",                 topPct: 60, className: "node-handle-icon node-handle-icon-image" },
+  { id: "resource",   label: "Reference images (up to 3)",topPct: 77, className: "node-handle-icon node-handle-icon-resource" },
+  { id: "videoRef",   label: "Reference video",           topPct: 77, className: "node-handle-icon node-handle-icon-videoref" },
 ];
 
 const HANDLE_COLORS: Record<string, string> = {
-  prompt: "#77E544",
+  prompt:     "#77E544",
   startFrame: "#818cf8",
-  endFrame: "#818cf8",
-  resource: "#fb923c",
+  endFrame:   "#818cf8",
+  resource:   "#fb923c",
+  videoRef:   "#22d3ee",
 };
 
 const STATUS_DOT: Record<string, string> = {
@@ -35,6 +37,7 @@ const STATUS_DOT: Record<string, string> = {
 };
 
 // ── Component ─────────────────────────────────────────────────────────────────
+
 
 export default function VideoGeneratorNode({ id, data }: NodeProps<VideoGeneratorNodeType>) {
   const updateNodeData = useWorkflowStore((s) => s.updateNodeData);
@@ -51,11 +54,18 @@ export default function VideoGeneratorNode({ id, data }: NodeProps<VideoGenerato
 
   const [loading, setLoading] = useState(false);
   const [hoveredHand, setHoveredHand] = useState<string | null>(null);
+  const [errorHandles, setErrorHandles] = useState<Set<string>>(new Set());
   const [modelOpen, setModelOpen] = useState(false);
   const [ratioOpen, setRatioOpen] = useState(false);
   const [durOpen, setDurOpen] = useState(false);
   const [modeOpen, setModeOpen] = useState(false);
   const [grokResOpen, setGrokResOpen] = useState(false);
+  const [muted, setMuted] = useState(true);
+  const [progress, setProgress] = useState(0);
+  const [currentSec, setCurrentSec] = useState(0);
+  const videoRef = useRef<HTMLVideoElement>(null);
+
+  const fmtTime = (s: number) => `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
 
   // ── Data ──────────────────────────────────────────────────────────────────
   const videoModelId = (data.videoModel as string) ?? "kling-3.0";
@@ -69,6 +79,16 @@ export default function VideoGeneratorNode({ id, data }: NodeProps<VideoGenerato
   const status = (data.status as string) ?? "idle";
   const prompt = (data.prompt as string) ?? "";
   const busy = loading || status === "running";
+  const videoUrl = data.videoUrl as string | undefined;
+
+  const handleVideoMeta = (e: React.SyntheticEvent<HTMLVideoElement>) => {
+    const v = e.currentTarget;
+    if (!v.videoWidth || !v.videoHeight) return;
+    updateNodeData(id, { imageNaturalRatio: `${v.videoWidth} / ${v.videoHeight}` });
+    const nodeWidth = cardRef.current?.offsetWidth ?? 320;
+    const videoH = nodeWidth * (v.videoHeight / v.videoWidth);
+    updateNodeSize(id, nodeWidth, videoH + 76);
+  };
 
   // Re-sync edge anchor positions whenever the node resizes
   useEffect(() => {
@@ -106,12 +126,49 @@ export default function VideoGeneratorNode({ id, data }: NodeProps<VideoGenerato
     const upstream = resolveInputs(id, nodes as Node<NodeData>[], edges);
     const finalPrompt = upstream.prompt ?? prompt;
 
-    if (!finalPrompt.trim()) {
+    if (!cfg.promptOptional && !finalPrompt.trim()) {
       if (textEdge) {
         updateNodeData(textEdge.source, { hasError: true });
         flashEdgeError(textEdge.id);
       }
       return;
+    }
+
+    // ── Motion-control: validate mandatory image + video handles ──────────────
+    if (cfg.apiInput.useMotionControl) {
+      const imageEdge = edges.find((e) => e.target === id && e.targetHandle === "startFrame");
+      const videoEdge = edges.find((e) => e.target === id && e.targetHandle === "videoRef");
+
+      const flashSet = new Set<string>();
+      let hasError = false;
+
+      // startFrame: not connected → flash handle; connected but empty → flash edge + source node
+      if (!imageEdge) {
+        flashSet.add("startFrame");
+        hasError = true;
+      } else if (!upstream.startFrameUrl) {
+        const srcNode = nodes.find((n) => n.id === imageEdge.source);
+        if (srcNode) updateNodeData(srcNode.id, { hasError: true });
+        flashEdgeError(imageEdge.id);
+        hasError = true;
+      }
+
+      // videoRef: not connected → flash handle; connected but empty → flash edge + source node
+      if (!videoEdge) {
+        flashSet.add("videoRef");
+        hasError = true;
+      } else if (!upstream.videoRefUrl) {
+        const srcNode = nodes.find((n) => n.id === videoEdge.source);
+        if (srcNode) updateNodeData(srcNode.id, { hasError: true });
+        flashEdgeError(videoEdge.id);
+        hasError = true;
+      }
+
+      if (flashSet.size > 0) {
+        setErrorHandles(flashSet);
+        setTimeout(() => setErrorHandles(new Set()), 1400);
+      }
+      if (hasError) return;
     }
 
     // Build full payload first so debug log matches what gets sent
@@ -123,9 +180,10 @@ export default function VideoGeneratorNode({ id, data }: NodeProps<VideoGenerato
       mode,
       resolution,
       sound,
-      startFrameUrl: upstream.startFrameUrl,
-      endFrameUrl: upstream.endFrameUrl,
-      resources: upstream.resources,
+      startFrameUrl:      upstream.startFrameUrl,
+      endFrameUrl:        upstream.endFrameUrl,
+      videoRefUrl:        upstream.videoRefUrl,
+      resources:          upstream.resources,
       referenceImageUrls: upstream.resources.length > 0
         ? upstream.resources.map((r) => r.url)
         : undefined,
@@ -160,7 +218,7 @@ export default function VideoGeneratorNode({ id, data }: NodeProps<VideoGenerato
       setLoading(false);
     }
   }, [id, nodes, edges, prompt, sound, duration, aspectRatio, videoModelId,
-    mode, resolution, cfg, debugMode, textEdge, updateNodeData, setAuthModalOpen]);
+    mode, resolution, cfg, debugMode, textEdge, updateNodeData, setAuthModalOpen, flashEdgeError]);
 
   const hoveredDef = hoveredHand && activeHandles.has(hoveredHand)
     ? handles.find((h) => h.id === hoveredHand)
@@ -170,9 +228,10 @@ export default function VideoGeneratorNode({ id, data }: NodeProps<VideoGenerato
   return (
     <div
       ref={cardRef}
-      className="video-node-card node-card w-full h-full flex flex-col"
+      className={`video-node-card node-card w-full h-full flex flex-col${(data.hasError as boolean) ? " node-error-blink" : ""}`}
       style={{ minWidth: 320, minHeight: 280, ...(busy ? { animation: "video-node-pulse-glow 2.4s ease-in-out infinite" } : {}) }}
       onMouseLeave={closeAll}
+      onAnimationEnd={(e) => { if (e.animationName === "node-error-blink") updateNodeData(id, { hasError: false }); }}
     >
       <CornerResizer minWidth={280} minHeight={80} keepAspectRatio={!!data.videoUrl} />
 
@@ -191,14 +250,15 @@ export default function VideoGeneratorNode({ id, data }: NodeProps<VideoGenerato
             position={Position.Left}
             id={h.id}
             style={{ top: `${h.topPct}%`, visibility: hidden ? "hidden" : "visible", pointerEvents: hidden ? "none" : "auto" }}
-            className={h.className}
+            className={`${h.className}${errorHandles.has(h.id) ? " node-handle-error" : ""}`}
             onMouseEnter={() => { if (!hidden) setHoveredHand(h.id); }}
             onMouseLeave={() => setHoveredHand(null)}
           >
-            {h.id === "prompt" && <PromptIcon />}
+            {h.id === "prompt"     && <PromptIcon />}
             {h.id === "startFrame" && <FrameStartIcon />}
-            {h.id === "endFrame" && <FrameEndIcon />}
-            {h.id === "resource" && <ResourceIcon />}
+            {h.id === "endFrame"   && <FrameEndIcon />}
+            {h.id === "resource"   && <ResourceIcon />}
+            {h.id === "videoRef"   && <VideoRefIcon />}
           </Handle>
         );
       })}
@@ -222,25 +282,75 @@ export default function VideoGeneratorNode({ id, data }: NodeProps<VideoGenerato
       )}
 
       {/* ── Main content ─────────────────────────────────────────────── */}
-      {data.videoUrl ? (
+      {videoUrl ? (
         <div
-          className="relative bg-[#090B0D] rounded-t-[7px] overflow-hidden"
+          className="relative bg-[#090B0D] rounded-t-[7px] overflow-hidden group/player"
           style={{ aspectRatio: (data.imageNaturalRatio as string | undefined) ?? "16 / 9", width: "100%" }}
         >
           {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
           <video
-            src={data.videoUrl as string}
-            className="w-full h-full object-fill block"
-            controls loop playsInline
-            onLoadedMetadata={(e) => {
+            ref={videoRef}
+            key={videoUrl}
+            src={videoUrl}
+            className="w-full h-full block"
+            style={{ objectFit: "fill" }}
+            autoPlay
+            loop
+            playsInline
+            muted={muted}
+            onLoadedMetadata={handleVideoMeta}
+            onTimeUpdate={(e) => {
               const v = e.currentTarget;
-              if (!v.videoWidth || !v.videoHeight) return;
-              updateNodeData(id, { imageNaturalRatio: `${v.videoWidth} / ${v.videoHeight}` });
-              const nodeWidth = cardRef.current?.offsetWidth ?? 320;
-              const videoH = nodeWidth * (v.videoHeight / v.videoWidth);
-              updateNodeSize(id, nodeWidth, videoH + 76); // 76 = two control rows
+              setCurrentSec(v.currentTime);
+              if (v.duration) setProgress(v.currentTime / v.duration);
             }}
           />
+
+          {/* Timer badge — top-left, visible on hover */}
+          <div className="absolute top-2 left-2 h-7 px-2 rounded-full bg-black/40 backdrop-blur-sm flex items-center justify-center opacity-0 group-hover/player:opacity-100 transition-opacity z-10 pointer-events-none">
+            <span className="text-[11px] text-white font-mono tabular-nums">{fmtTime(currentSec)}</span>
+          </div>
+
+          {/* Mute / unmute button — top-right, visible on hover */}
+          <button
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={(e) => { e.stopPropagation(); setMuted((m) => !m); }}
+            className="absolute top-2 right-2 w-7 h-7 rounded-full bg-black/40 backdrop-blur-sm flex items-center justify-center opacity-0 group-hover/player:opacity-100 transition-opacity pointer-events-auto z-10"
+            title={muted ? "Unmute" : "Mute"}
+          >
+            {muted ? (
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+                <line x1="23" y1="9" x2="17" y2="15" />
+                <line x1="17" y1="9" x2="23" y2="15" />
+              </svg>
+            ) : (
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+                <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
+                <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
+              </svg>
+            )}
+          </button>
+
+          {/* Progress bar — bottom, visible on hover */}
+          <div
+            className="absolute bottom-0 left-0 right-0 h-[3px] bg-white/10 opacity-0 group-hover/player:opacity-100 transition-opacity"
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.stopPropagation();
+              const rect = e.currentTarget.getBoundingClientRect();
+              const pct = (e.clientX - rect.left) / rect.width;
+              const v = videoRef.current;
+              if (v && v.duration) v.currentTime = pct * v.duration;
+            }}
+            style={{ cursor: "pointer" }}
+          >
+            <div
+              className="h-full bg-white/70 transition-none"
+              style={{ width: `${progress * 100}%` }}
+            />
+          </div>
         </div>
       ) : (
         <div className="relative flex-1 bg-[#090B0D] rounded-t-[7px] overflow-hidden" style={{ minHeight: 160 }}>
@@ -249,20 +359,11 @@ export default function VideoGeneratorNode({ id, data }: NodeProps<VideoGenerato
               {(data.errorMsg as string) ?? "Generation failed"}
             </p>
           )}
-          {textNode ? (
+          {textNode && (
             <div className="absolute bottom-3 left-4 flex items-center gap-1.5">
               <span className="w-1.5 h-1.5 rounded-full bg-[#77E544] shrink-0" />
               <span className="text-[11px] text-[#555]">{textNode.data.label as string}</span>
             </div>
-          ) : (
-            <textarea
-              className="absolute bottom-0 left-0 right-0 bg-transparent text-[13px] leading-relaxed resize-none outline-none px-4 pt-3 pb-3 z-10 placeholder-[#3A3A3A]"
-              style={{ color: "#666", minHeight: 80 }}
-              placeholder="Describe the video you want to generate..."
-              value={prompt}
-              onMouseDown={(e) => e.stopPropagation()}
-              onChange={(e) => updateNodeData(id, { prompt: e.target.value })}
-            />
           )}
         </div>
       )}
@@ -535,6 +636,15 @@ function VideoNodeIcon() {
 
 function PromptIcon() {
   return <svg width="12" height="12" viewBox="0 0 16 16" fill="white"><path d="M2 2h12v2.5H9.5V14h-3V4.5H2V2z" /></svg>;
+}
+
+function VideoRefIcon() {
+  return (
+    <svg width="13" height="11" viewBox="0 0 14 12" fill="none" stroke="white" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="0.7" y="0.7" width="12.6" height="10.6" rx="1.3" />
+      <path d="M5.5 4.5v3l3-1.5-3-1.5z" fill="white" stroke="none" />
+    </svg>
+  );
 }
 
 function FrameStartIcon() {

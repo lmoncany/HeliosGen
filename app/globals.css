@@ -140,6 +140,7 @@ body {
 .node-handle-prompt.react-flow__handle  { background: #77E544 !important; }
 .node-handle-image.react-flow__handle   { background: #fb923c !important; }
 .node-handle-source.react-flow__handle  { background: #34d399 !important; }
+.node-handle-video.react-flow__handle   { background: #22d3ee !important; }
 
 /* ── Icon handles (circular badge-style, generator input handles) ─────────── */
 .node-handle-icon.react-flow__handle {
@@ -165,12 +166,19 @@ body {
 /* Per-role border colours */
 .node-handle-icon-prompt.react-flow__handle {
   border-color: #77E544 !important;
+  --handle-color: #77E544;
 }
 .node-handle-icon-image.react-flow__handle {
   border-color: #818cf8 !important;
+  --handle-color: #818cf8;
 }
 .node-handle-icon-resource.react-flow__handle {
   border-color: #fb923c !important;
+  --handle-color: #fb923c;
+}
+.node-handle-icon-videoref.react-flow__handle {
+  border-color: #22d3ee !important;
+  --handle-color: #22d3ee;
 }
 
 /* ── Selection rectangle (drag) + post-release overlay ── */
@@ -338,6 +346,18 @@ body {
   0%, 100%  { stroke: var(--edge-color); }
   20%, 55%  { stroke: #ef4444; }
   37%, 72%  { stroke: var(--edge-color); }
+}
+
+/* ── Handle error blink ──────────────────────────────────────────────────── */
+/* border-color cannot be animated when the class uses !important (CSS spec ignores
+   !important inside @keyframes). Use box-shadow ring instead. */
+@keyframes handle-error-blink {
+  0%, 100%  { box-shadow: none; }
+  20%, 55%  { box-shadow: 0 0 0 2px #ef4444, 0 0 8px rgba(239,68,68,0.5); }
+  37%, 72%  { box-shadow: none; }
+}
+.node-handle-error.react-flow__handle {
+  animation: handle-error-blink 1.4s ease 1 forwards;
 }
 
 /* ── Generating border animation ─────────────────────────────────────────── */

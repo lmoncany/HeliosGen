@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { jobStore } from "@/lib/jobStore";
+import { mirrorToR2 } from "@/lib/r2";
+import { supabaseAdmin } from "@/lib/supabase/admin";
 
 const RECORD_INFO = "https://api.kie.ai/api/v1/jobs/recordInfo";
 
@@ -28,8 +30,25 @@ async function syncFromKie(taskId: string, token: string): Promise<void> {
     const state = String(d.data?.state ?? "").toLowerCase();
 
     if (state === "success") {
-      const imageUrl = extractUrl(d.data?.resultJson);
-      if (imageUrl) jobStore.set(taskId, { status: "done", imageUrl });
+      const kieUrl = extractUrl(d.data?.resultJson);
+      if (kieUrl) {
+        // Mirror to R2 so the node never shows a tempfile URL
+        let imageUrl = kieUrl;
+        try {
+          imageUrl = await mirrorToR2(kieUrl, "images");
+        } catch (err) {
+          console.error("[job-status] R2 mirror failed, using kie.ai URL:", err);
+        }
+        jobStore.set(taskId, { status: "done", imageUrl });
+        // Update Supabase (fire-and-forget)
+        supabaseAdmin
+          .from("generations")
+          .update({ status: "done", image_url: imageUrl })
+          .eq("task_id", taskId)
+          .then(({ error }) => {
+            if (error) console.error("[job-status] supabase update error:", error.message);
+          });
+      }
     } else if (state === "fail") {
       jobStore.set(taskId, { status: "error", error: d.data?.failMsg || "Generation failed" });
     }

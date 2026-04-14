@@ -1,8 +1,19 @@
 // Shared node type definitions — imported by both Sidebar and NodePickerMenu
 
-export const NODES = [
+export type NodeCategory = "generators" | "resources";
+
+export const NODES: Array<{
+  type: string;
+  category: NodeCategory;
+  canReceiveConnection: boolean;
+  icon: React.ReactNode;
+  label: string;
+  description: string;
+}> = [
+  /* ── Generators ─────────────────────────────────────────────────────────── */
   {
     type: "videoGeneratorNode",
+    category: "generators",
     canReceiveConnection: true,
     icon: (
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
@@ -15,7 +26,7 @@ export const NODES = [
   },
   {
     type: "generateNode",
-    /** true = has at least one target handle — shows in the edge-drop picker */
+    category: "generators",
     canReceiveConnection: true,
     icon: (
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
@@ -27,8 +38,11 @@ export const NODES = [
     label: "Image",
     description: "Nano Banana 2 · image generation",
   },
+
+  /* ── Resources ──────────────────────────────────────────────────────────── */
   {
     type: "promptNode",
+    category: "resources",
     canReceiveConnection: false,
     icon: (
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
@@ -40,6 +54,7 @@ export const NODES = [
   },
   {
     type: "imageInputNode",
+    category: "resources",
     canReceiveConnection: false,
     icon: (
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
@@ -51,6 +66,20 @@ export const NODES = [
     label: "Reference Image",
     description: "Upload or URL source",
   },
+  {
+    type: "videoInputNode",
+    category: "resources",
+    canReceiveConnection: false,
+    icon: (
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+        <rect width="18" height="14" x="3" y="5" rx="2" />
+        <path d="m16 10-4-2.5v5L16 10z" fill="currentColor" stroke="none" />
+        <path d="M12 2v3M12 19v3M4 12H2M22 12h-2" strokeWidth="1.2" />
+      </svg>
+    ),
+    label: "Reference Video",
+    description: "Upload a video · max 100 MB",
+  },
 ];
 
 // Rough pixel footprint per node type — used for placement + collision detection
@@ -59,6 +88,7 @@ export const NODE_SIZE: Record<string, { w: number; h: number }> = {
   generateNode:       { w: 280, h: 340 },
   promptNode:         { w: 260, h: 130 },
   imageInputNode:     { w: 200, h: 160 },
+  videoInputNode:     { w: 220, h: 180 },
 };
 
 export const FALLBACK_SIZE = { w: 280, h: 280 };

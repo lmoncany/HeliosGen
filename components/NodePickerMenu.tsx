@@ -5,6 +5,14 @@ import { useWorkflowStore, NodeData } from "@/lib/store";
 import { edgeStyle, EDGE_COLORS } from "@/lib/edgeStyles";
 import { NODES, NODE_SIZE, FALLBACK_SIZE } from "@/lib/nodeTypes";
 
+const NODE_DISPLAY_NAMES: Record<string, string> = {
+  videoInputNode:     "VIDEO",
+  imageInputNode:     "IMAGE",
+  promptNode:         "TEXT",
+  generateNode:       "IMAGE GEN",
+  videoGeneratorNode: "VIDEO GEN",
+};
+
 export interface DropState {
   screenX: number;
   screenY: number;
@@ -25,6 +33,9 @@ function targetHandleFor(sourceNodeType: string | undefined, targetNodeType: str
   if (sourceNodeType === "imageInputNode" || sourceNodeType === "generateNode") {
     if (targetNodeType === "videoGeneratorNode") return "startFrame";
     if (targetNodeType === "generateNode")       return "image";
+  }
+  if (sourceNodeType === "videoInputNode") {
+    if (targetNodeType === "videoGeneratorNode") return "videoRef";
   }
   return null;
 }
@@ -65,7 +76,11 @@ export default function NodePickerMenu({ dropState, onClose }: Props) {
       y: flowPos.y - size.h / 2,
     };
 
-    const nodeStyle = type === "imageInputNode"
+    const nodesInStore = useWorkflowStore.getState().nodes;
+    const count  = nodesInStore.filter((n) => n.type === type).length + 1;
+    const label  = `${NODE_DISPLAY_NAMES[type] ?? type} #${count}`;
+
+    const nodeStyle = type === "imageInputNode" || type === "videoInputNode"
       ? { width: size.w }
       : { width: size.w, height: size.h };
 
@@ -75,7 +90,7 @@ export default function NodePickerMenu({ dropState, onClose }: Props) {
       type,
       position,
       style: nodeStyle,
-      data: { label: type, status: "idle" },
+      data: { label, status: "idle" },
     };
     addNode(node);
 

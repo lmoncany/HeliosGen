@@ -1,6 +1,6 @@
 "use client";
 import {
-  useRef, useState, useCallback, useEffect, useLayoutEffect, forwardRef,
+  useRef, useState, useCallback, useEffect, useLayoutEffect,
   type ReactNode,
 } from "react";
 import { Handle, Position, NodeProps, Node } from "@xyflow/react";
@@ -10,6 +10,7 @@ import CornerResizer from "./CornerResizer";
 function cfImg(url: string, width: number): string {
   try {
     const u = new URL(url);
+    if (u.hostname.endsWith(".r2.dev")) return url;
     return `${u.origin}/cdn-cgi/image/width=${width},quality=75,format=webp${u.pathname}`;
   } catch {
     return url;
@@ -58,40 +59,52 @@ export default function PromptNode({ id, data }: NodeProps<PromptNodeType>) {
   const edges          = useWorkflowStore((s) => s.edges);
 
   const textareaRef      = useRef<HTMLTextAreaElement>(null);
+  const highlightRef     = useRef<HTMLDivElement>(null);
   const cardRef          = useRef<HTMLDivElement>(null);
-  // Cursor position to restore after the next React commit (programmatic edits)
+  // Desired cursor position after a programmatic text change (insertion / deletion)
   const pendingCursorRef = useRef<number | null>(null);
 
-  // ── Restore cursor after programmatic prompt updates ──────────────────────
+  const [mentionQuery, setMentionQuery] = useState<string | null>(null);
+  const [selectedIdx,  setSelectedIdx]  = useState(0);
+
+  const storePrompt = (data.prompt as string) ?? "";
+  const hasError    = !!data.hasError;
+
+  // localText drives the overlay and placeholder — always in sync with what's
+  // actually in the textarea (updated on every keystroke via handleChange).
+  const [localText, setLocalText] = useState(storePrompt);
+
+  // ── Keep uncontrolled textarea in sync with external store changes ────────
+  // (e.g. when the whole canvas is loaded from saved state, or programmatic
+  //  edits like insertMention / atomic deletion call updateNodeData directly)
+  useLayoutEffect(() => {
+    const ta = textareaRef.current;
+    if (!ta || ta.value === storePrompt) return;
+    ta.value = storePrompt;
+    setLocalText(storePrompt);
+  }, [storePrompt]);
+
+  // ── Restore cursor after programmatic edits ───────────────────────────────
+  // Runs synchronously after every commit. When pendingCursorRef is set (by
+  // insertMention / atomic deletion), places the cursor before the browser
+  // paints — no rAF race possible.
   useLayoutEffect(() => {
     const pos = pendingCursorRef.current;
     if (pos === null) return;
     pendingCursorRef.current = null;
     const ta = textareaRef.current;
     if (!ta) return;
-    ta.style.height = "auto";
-    ta.style.height = `${ta.scrollHeight}px`;
-    ta.focus();
     ta.selectionStart = pos;
     ta.selectionEnd   = pos;
   });
 
-  const [mentionQuery, setMentionQuery] = useState<string | null>(null);
-  const [selectedIdx,  setSelectedIdx]  = useState(0);
-
-  const prompt   = (data.prompt as string) ?? "";
-  const hasError = !!data.hasError;
-
   // ── Resolve mentionable nodes ─────────────────────────────────────────────
-  // Only show nodes that are connected to the same downstream generator(s) as
-  // this text node — i.e. "siblings" of the text node at the generator.
   const downstreamTargetIds = edges
     .filter((e) => e.source === id)
     .map((e) => e.target);
 
   const mentionableNodes = nodes.filter((n) => {
     if (n.id === id || n.type === "promptNode") return false;
-    // This node must share at least one downstream target with our text node
     return edges.some(
       (e) => e.source === n.id && downstreamTargetIds.includes(e.target)
     );
@@ -108,11 +121,9 @@ export default function PromptNode({ id, data }: NodeProps<PromptNodeType>) {
         )
       : mentionableNodes;
 
-  // Reset selection when list changes
   useEffect(() => { setSelectedIdx(0); }, [filteredMentions.length]);
 
   // ── Elevate the RF node z-index while the menu is open ───────────────────
-  // (the menu is inline so it needs its stacking context to be on top)
   useEffect(() => {
     const rfNode = cardRef.current?.closest<HTMLElement>(".react-flow__node");
     if (!rfNode) return;
@@ -124,26 +135,28 @@ export default function PromptNode({ id, data }: NodeProps<PromptNodeType>) {
     return () => { rfNode.style.zIndex = ""; };
   }, [mentionQuery, filteredMentions.length]);
 
-  // ── Auto-resize ───────────────────────────────────────────────────────────
-  const autoResize = useCallback(() => {
-    const el = textareaRef.current;
-    if (!el) return;
-    el.style.height = "auto";
-    el.style.height = `${el.scrollHeight}px`;
+  // ── Sync highlight overlay scroll with textarea scroll ───────────────────
+  const syncScroll = useCallback(() => {
+    if (highlightRef.current && textareaRef.current) {
+      highlightRef.current.scrollTop = textareaRef.current.scrollTop;
+    }
   }, []);
 
-  // ── onChange ──────────────────────────────────────────────────────────────
+  // ── onChange — textarea is uncontrolled; React never writes .value ────────
   const handleChange = useCallback(
     (e: React.ChangeEvent<HTMLTextAreaElement>) => {
       const text   = e.target.value;
       const cursor = e.target.selectionStart ?? text.length;
+      // Sync overlay immediately (no re-render lag)
+      setLocalText(text);
+      // Persist to store (triggers a re-render, but textarea.value is never
+      // overwritten by React since there is no value= prop → cursor safe)
       updateNodeData(id, { prompt: text, hasError: false });
-      autoResize();
       const query = getMentionQuery(text, cursor);
       setMentionQuery(query);
       if (query !== null) setSelectedIdx(0);
     },
-    [id, updateNodeData, autoResize]
+    [id, updateNodeData]
   );
 
   // ── Insert selected mention ───────────────────────────────────────────────
@@ -151,18 +164,23 @@ export default function PromptNode({ id, data }: NodeProps<PromptNodeType>) {
     (label: string) => {
       const ta = textareaRef.current;
       if (!ta) return;
-      const cursor  = ta.selectionStart ?? prompt.length;
-      const before  = prompt.slice(0, cursor);
-      const after   = prompt.slice(cursor);
+      // Use ta.value (source of truth for uncontrolled textarea)
+      const text    = ta.value;
+      const cursor  = ta.selectionStart ?? text.length;
+      const before  = text.slice(0, cursor);
+      const after   = text.slice(cursor);
       const lastAt  = before.lastIndexOf("@");
       const newText = `${before.slice(0, lastAt)}@${label} ${after}`;
+      const newPos  = lastAt + label.length + 2;
 
-      const newPos = lastAt + label.length + 2;
+      // Update textarea value directly (uncontrolled)
+      ta.value = newText;
+      setLocalText(newText);
       pendingCursorRef.current = newPos;
       updateNodeData(id, { prompt: newText });
       setMentionQuery(null);
     },
-    [id, prompt, updateNodeData, autoResize]
+    [id, updateNodeData]
   );
 
   const menuOpen = mentionQuery !== null && filteredMentions.length > 0;
@@ -180,17 +198,18 @@ export default function PromptNode({ id, data }: NodeProps<PromptNodeType>) {
 
       {/* ── Text area ──────────────────────────────────────────────────── */}
       <div className="relative overflow-hidden rounded-[7px] h-full">
-        {/* Highlight overlay */}
+        {/* Highlight overlay — driven by localText so it updates on every keystroke */}
         <div
+          ref={highlightRef}
           aria-hidden
           className="absolute inset-0 px-3 py-2.5 text-[12px] text-white leading-[1.6] pointer-events-none whitespace-pre-wrap break-words overflow-hidden select-none"
         >
-          {renderWithMentions(prompt, knownLabels)}
+          {renderWithMentions(localText, knownLabels)}
           {"\u200b"}
         </div>
 
         {/* Placeholder */}
-        {!prompt && (
+        {!localText && (
           <div
             aria-hidden
             className="absolute inset-0 px-3 py-2.5 text-[12px] text-[#444444] leading-[1.6] pointer-events-none select-none"
@@ -199,14 +218,15 @@ export default function PromptNode({ id, data }: NodeProps<PromptNodeType>) {
           </div>
         )}
 
-        {/* Editable textarea — invisible text, white caret */}
+        {/* Editable textarea — UNCONTROLLED (no value= prop).
+            React never writes .value, so cursor position is never reset. */}
         <textarea
           ref={textareaRef}
-          className="relative w-full h-full px-3 py-2.5 bg-transparent text-[12px] leading-[1.6] resize-none outline-none overflow-auto z-10"
-          style={{ minHeight: 80, color: "transparent", caretColor: "white" }}
-          value={prompt}
+          className="relative w-full h-full px-3 py-2.5 bg-transparent text-[12px] leading-[1.6] resize-none outline-none overflow-y-auto z-10"
+          style={{ color: "transparent", caretColor: "white" }}
+          defaultValue={storePrompt}
           onChange={handleChange}
-          onFocus={autoResize}
+          onScroll={syncScroll}
           onKeyDown={(e) => {
             const ta = textareaRef.current;
 
@@ -214,25 +234,26 @@ export default function PromptNode({ id, data }: NodeProps<PromptNodeType>) {
             if (
               (e.key === "Backspace" || e.key === "Delete") &&
               ta &&
-              ta.selectionStart === ta.selectionEnd // no selection range
+              ta.selectionStart === ta.selectionEnd
             ) {
               const cursor = ta.selectionStart ?? 0;
+              const text   = ta.value; // source of truth
               for (const label of knownLabels) {
                 const mention = `@${label}`;
                 let pos = 0;
-                while (pos < prompt.length) {
-                  const idx = prompt.indexOf(mention, pos);
+                while (pos < text.length) {
+                  const idx = text.indexOf(mention, pos);
                   if (idx === -1) break;
                   const end = idx + mention.length;
-                  // Backspace: cursor is inside or at the END of the mention
-                  // Delete:    cursor is inside or at the START of the mention
                   const hit =
                     e.key === "Backspace"
                       ? cursor > idx && cursor <= end
                       : cursor >= idx && cursor < end;
                   if (hit) {
                     e.preventDefault();
-                    const newText = prompt.slice(0, idx) + prompt.slice(end);
+                    const newText = text.slice(0, idx) + text.slice(end);
+                    ta.value = newText;
+                    setLocalText(newText);
                     pendingCursorRef.current = idx;
                     updateNodeData(id, { prompt: newText });
                     return;
@@ -271,7 +292,7 @@ export default function PromptNode({ id, data }: NodeProps<PromptNodeType>) {
         <div
           className="absolute left-0 right-0 bg-[#0F1214] border border-[#2A2A2A] rounded-lg overflow-hidden shadow-xl"
           style={{ top: "calc(100% + 6px)", zIndex: 50 }}
-          onMouseDown={(e) => e.preventDefault()} // keep textarea focus
+          onMouseDown={(e) => e.preventDefault()}
         >
           <div className="px-2.5 py-1.5 border-b border-[#1E1E1E]">
             <p className="text-[9px] text-[#4A4A45] uppercase tracking-widest">
@@ -294,7 +315,6 @@ export default function PromptNode({ id, data }: NodeProps<PromptNodeType>) {
                   active ? "bg-[#1A2010]" : "hover:bg-[#161A1E]"
                 }`}
               >
-                {/* Thumbnail */}
                 <div className="w-6 h-6 rounded bg-[#1A1A1A] overflow-hidden shrink-0 flex items-center justify-center">
                   {imageUrl ? (
                     // eslint-disable-next-line @next/next/no-img-element
@@ -305,12 +325,9 @@ export default function PromptNode({ id, data }: NodeProps<PromptNodeType>) {
                     <EmptyThumb />
                   )}
                 </div>
-
-                {/* Label */}
                 <span className={`text-[11px] font-medium truncate ${active ? "text-[#77E544]" : "text-[#CCCCCC]"}`}>
                   @{label}
                 </span>
-
                 {active && (
                   <span className="ml-auto text-[9px] text-[#4A4A45] shrink-0">↵</span>
                 )}

@@ -4,6 +4,7 @@ import { Handle, Position, NodeProps, Node } from "@xyflow/react";
 import CornerResizer from "./CornerResizer";
 import { useWorkflowStore, NodeData } from "@/lib/store";
 import { createClient } from "@/lib/supabase/client";
+import { sha256Hex } from "@/lib/assetHash";
 
 type ImageInputNodeType = Node<NodeData, "imageInputNode">;
 
@@ -47,12 +48,62 @@ export default function ImageInputNode({ id, data }: NodeProps<ImageInputNodeTyp
   );
 
   const loadFile = useCallback(
-    (file: File) => {
-      const reader = new FileReader();
-      reader.onload = (e) => setImage(e.target?.result as string, file.type);
-      reader.readAsDataURL(file);
+    async (file: File) => {
+      // Read as ArrayBuffer — needed for hashing and direct binary upload
+      const bytes = await file.arrayBuffer();
+      const hash  = await sha256Hex(bytes);
+
+      const { data: { session } } = await createClient().auth.getSession();
+      const authToken = session?.access_token;
+      const authHeaders = authToken ? { Authorization: `Bearer ${authToken}` } : {};
+
+      // ── Cache lookup: skip upload if already in R2 ───────────────────────
+      try {
+        const lookupRes = await fetch(`/api/lookup-asset?hash=${hash}`, { headers: authHeaders });
+        const { cdnUrl } = await lookupRes.json() as { cdnUrl: string | null };
+        if (cdnUrl) {
+          // Already uploaded — use existing URL directly
+          const img = new Image();
+          img.onload = () => updateNodeData(id, {
+            inputImage:        cdnUrl,
+            imageNaturalRatio: `${img.naturalWidth} / ${img.naturalHeight}`,
+            r2Url:             cdnUrl,
+          });
+          img.src = cdnUrl;
+          return;
+        }
+      } catch {
+        // Lookup failed — fall through to normal upload
+      }
+
+      // ── Show local preview immediately ────────────────────────────────────
+      const blobUrl = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = () => {
+        updateNodeData(id, {
+          inputImage:        blobUrl,
+          imageNaturalRatio: `${img.naturalWidth} / ${img.naturalHeight}`,
+        });
+      };
+      img.src = blobUrl;
+
+      // ── Upload raw bytes to R2 (hash stored server-side) ──────────────────
+      try {
+        const uploadHeaders: Record<string, string> = {
+          "Content-Type": file.type || "image/jpeg",
+          ...authHeaders,
+        };
+        const res     = await fetch("/api/upload-asset", { method: "POST", headers: uploadHeaders, body: bytes });
+        const { cdnUrl } = await res.json() as { cdnUrl?: string };
+        if (cdnUrl) {
+          URL.revokeObjectURL(blobUrl);
+          updateNodeData(id, { r2Url: cdnUrl, inputImage: cdnUrl });
+        }
+      } catch {
+        // R2 unavailable — blob URL stays as fallback until page reload
+      }
     },
-    [setImage]
+    [id, updateNodeData]
   );
 
   const onDrop = useCallback(
@@ -75,12 +126,13 @@ export default function ImageInputNode({ id, data }: NodeProps<ImageInputNodeTyp
       // Outer: node-card for border/hover/selected styling + overflow:visible for corner handles.
       // aspect-ratio drives height so ReactFlow ResizeObserver auto-sizes the node.
       <div
-        className="node-card group"
+        className={`node-card group${(data.hasError as boolean) ? " node-error-blink" : ""}`}
         style={{
           width: "100%",
           aspectRatio: ratio,
           background: "transparent",
         }}
+        onAnimationEnd={(e) => { if (e.animationName === "node-error-blink") updateNodeData(id, { hasError: false }); }}
       >
         <CornerResizer minWidth={60} minHeight={60} keepAspectRatio />
         <span className="node-above-label">{data.label as string}</span>
@@ -135,7 +187,11 @@ export default function ImageInputNode({ id, data }: NodeProps<ImageInputNodeTyp
 
   // Empty state — upload card
   return (
-    <div className="node-card w-full" style={{ minWidth: 200 }}>
+    <div
+      className={`node-card w-full${(data.hasError as boolean) ? " node-error-blink" : ""}`}
+      style={{ minWidth: 200 }}
+      onAnimationEnd={(e) => { if (e.animationName === "node-error-blink") updateNodeData(id, { hasError: false }); }}
+    >
       <CornerResizer minWidth={160} minHeight={100} />
       <span className="node-above-label">{data.label as string}</span>
       <Handle type="source" position={Position.Right} className="node-handle node-handle-source" />

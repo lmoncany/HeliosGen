@@ -14,6 +14,9 @@ import { IMAGE_MODELS } from "@/lib/modelConfig";
 function cfImg(url: string, width: number): string {
   try {
     const u = new URL(url);
+    // Cloudflare Image Resizing only works on CF-proxied custom domains.
+    // pub-*.r2.dev is a direct R2 URL — return as-is.
+    if (u.hostname.endsWith(".r2.dev")) return url;
     return `${u.origin}/cdn-cgi/image/width=${width},quality=75,format=webp${u.pathname}`;
   } catch {
     return url;
@@ -54,6 +57,95 @@ const STATUS_DOT: Record<string, string> = {
   done:    "bg-[#77E544]",
   error:   "bg-red-500",
 };
+
+/**
+ * Replace @mentions with <<<image N>>> placeholders AND reorder imageUrls so
+ * that imageUrls[N-1] always corresponds to <<<image N>>> in the prompt.
+ *
+ * Numbers are assigned by left-to-right appearance in the prompt, not by the
+ * order images were connected. This ensures "<<<image 1>>>" always refers to
+ * the first @tag the user typed, regardless of edge creation order.
+ *
+ * Algorithm:
+ *  1. Find every @mention position using known labels (longest-first) then
+ *     the "@Word #N" / "@word" fallback pattern.
+ *  2. Sort all matches by position → assign <<<image 1>>>, <<<image 2>>>, …
+ *  3. Build orderedUrls so orderedUrls[i] is the URL for <<<image i+1>>>.
+ */
+function resolveMentions(
+  prompt: string,
+  labels: string[],
+  imageUrls: string[],
+): { resolvedPrompt: string; orderedUrls: string[] } {
+  if (!labels.length) return { resolvedPrompt: prompt, orderedUrls: imageUrls };
+
+  type Span = { start: number; end: number; labelIdx: number | null };
+  const spans: Span[] = [];
+  const claimed = new Set<number>();
+
+  // Pass 1 — find known-label matches (longest label first, case-insensitive)
+  const sortedLabels = labels
+    .map((label, i) => ({ label, i }))
+    .filter(({ label }) => !!label)
+    .sort((a, b) => b.label.length - a.label.length);
+
+  for (const { label, i } of sortedLabels) {
+    const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const re = new RegExp(`@${escaped}`, "gi");
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(prompt)) !== null) {
+      if (!claimed.has(m.index)) {
+        spans.push({ start: m.index, end: m.index + m[0].length, labelIdx: i });
+        claimed.add(m.index);
+      }
+    }
+  }
+
+  // Pass 2 — fallback: any remaining @Word #N or @word
+  const fallback = /@\S+(?:\s+#\d+)?/g;
+  let fm: RegExpExecArray | null;
+  while ((fm = fallback.exec(prompt)) !== null) {
+    if (!claimed.has(fm.index)) {
+      spans.push({ start: fm.index, end: fm.index + fm[0].length, labelIdx: null });
+      claimed.add(fm.index);
+    }
+  }
+
+  // Sort spans by position in the prompt (left → right)
+  spans.sort((a, b) => a.start - b.start);
+
+  // Assign orderedUrls in prompt appearance order
+  const orderedUrls: string[] = [];
+  const usedIdxs = new Set<number>();
+
+  for (const span of spans) {
+    if (span.labelIdx !== null && !usedIdxs.has(span.labelIdx) && imageUrls[span.labelIdx]) {
+      orderedUrls.push(imageUrls[span.labelIdx]);
+      usedIdxs.add(span.labelIdx);
+    } else {
+      // Fallback or already-used label — next unused URL, else repeat first
+      const next = imageUrls.findIndex((_, j) => !usedIdxs.has(j));
+      if (next !== -1) {
+        orderedUrls.push(imageUrls[next]);
+        usedIdxs.add(next);
+      } else if (imageUrls.length > 0) {
+        orderedUrls.push(imageUrls[0]);
+      }
+    }
+  }
+
+  // Build resolved prompt by substituting spans with <<<image N>>>
+  let resolvedPrompt = "";
+  let lastEnd = 0;
+  for (let i = 0; i < spans.length; i++) {
+    resolvedPrompt += prompt.slice(lastEnd, spans[i].start);
+    resolvedPrompt += `<<<image ${i + 1}>>>`;
+    lastEnd = spans[i].end;
+  }
+  resolvedPrompt += prompt.slice(lastEnd);
+
+  return { resolvedPrompt, orderedUrls };
+}
 
 // ── Component ────────────────────────────────────────────────────────────────
 
@@ -142,7 +234,6 @@ export default function GenerateNode({ id, data }: NodeProps<GenerateNodeType>) 
   }, [data.taskId, status, id, updateNodeData]);
 
   // ── Submit generation job ────────────────────────────────────────────────────
-  // Returns the source node id of the connected prompt handle, or undefined
   const connectedPromptNodeId = edges.find(
     (e) => e.target === id && e.targetHandle === "prompt"
   )?.source;
@@ -152,11 +243,14 @@ export default function GenerateNode({ id, data }: NodeProps<GenerateNodeType>) 
     if (!data.session) { setAuthModalOpen(true); return; }
 
     const upstream  = resolveInputs(id, nodes as Node<NodeData>[], edges);
-    const prompt    = upstream.prompt;
-    const imageUrls = upstream.imageUrls;
-    const payload   = { model, prompt, imageUrls, aspectRatio, quality };
+    const { resolvedPrompt, orderedUrls } = resolveMentions(
+      upstream.prompt ?? "",
+      upstream.imageNodeLabels,
+      upstream.imageUrls,
+    );
+    const payload = { model, prompt: resolvedPrompt, imageUrls: orderedUrls, aspectRatio, quality };
 
-    if (!prompt?.trim()) {
+    if (!resolvedPrompt.trim()) {
       if (connectedPromptNodeId) {
         updateNodeData(connectedPromptNodeId, { hasError: true });
         const promptEdge = edges.find((e) => e.target === id && e.targetHandle === "prompt");
@@ -190,15 +284,16 @@ export default function GenerateNode({ id, data }: NodeProps<GenerateNodeType>) 
     } finally {
       setLoading(false);
     }
-  }, [id, nodes, edges, model, aspectRatio, quality, debugMode, connectedPromptNodeId, updateNodeData]);
+  }, [id, nodes, edges, model, aspectRatio, quality, debugMode, connectedPromptNodeId, updateNodeData, flashEdgeError]);
 
   // node-card has position:relative — handles and label position relative to it
   return (
     <div
       ref={cardRef}
-      className="node-card w-full flex flex-col"
+      className={`node-card w-full flex flex-col${(data.hasError as boolean) ? " node-error-blink" : ""}`}
       style={{ minWidth: 280, ...(busy ? { animation: "node-pulse-glow 2.4s ease-in-out infinite" } : {}) }}
       onMouseLeave={closeDropdowns}
+      onAnimationEnd={() => updateNodeData(id, { hasError: false })}
     >
       <CornerResizer minWidth={220} minHeight={80} keepAspectRatio={!!data.imageUrl} />
       <span className="node-above-label">{data.label as string}</span>
@@ -243,10 +338,7 @@ export default function GenerateNode({ id, data }: NodeProps<GenerateNodeType>) 
               color: "#CCCCCC",
             }}
           >
-            <span
-              style={{ color: hoveredHandle === "prompt" ? "#77E544" : "#fb923c" }}
-              className="mr-1.5"
-            >●</span>
+            <span style={{ color: hoveredHandle === "prompt" ? "#77E544" : "#fb923c" }} className="mr-1.5">●</span>
             {hoveredHandle === "prompt"
               ? "Text prompt"
               : caps.maxImages > 0
@@ -276,8 +368,6 @@ export default function GenerateNode({ id, data }: NodeProps<GenerateNodeType>) 
                 const img = e.currentTarget;
                 const nw = img.naturalWidth, nh = img.naturalHeight;
                 updateNodeData(id, { imageNaturalRatio: `${nw} / ${nh}` });
-                // Sync node stored size to the rendered card dimensions so
-                // ReactFlow and keepAspectRatio work from the correct base.
                 requestAnimationFrame(() => {
                   if (!cardRef.current) return;
                   const w = cardRef.current.offsetWidth;
@@ -295,7 +385,6 @@ export default function GenerateNode({ id, data }: NodeProps<GenerateNodeType>) 
               )}
             </div>
           )}
-
         </div>
 
         {/* ── Control bar ─────────────────────────────────────────────────
@@ -508,9 +597,3 @@ function ChevronIcon({ open }: { open: boolean }) {
   );
 }
 
-function Spinner({ size = "md" }: { size?: "sm" | "md" }) {
-  const cls = size === "sm" ? "w-2.5 h-2.5" : "w-5 h-5";
-  return (
-    <span className={`${cls} border border-[#2A1A14] border-t-[#77E544] rounded-full animate-spin inline-block`} />
-  );
-}

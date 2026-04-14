@@ -150,7 +150,7 @@ export const IMAGE_MODELS: ImageModel[] = [
 
 // ── Video models ──────────────────────────────────────────────────────────────
 
-export type VideoHandle = "prompt" | "startFrame" | "endFrame" | "resource";
+export type VideoHandle = "prompt" | "startFrame" | "endFrame" | "resource" | "videoRef";
 
 export interface VideoModelMode {
   value: string;
@@ -170,6 +170,8 @@ export interface VideoModel {
   handles: VideoHandle[];
   /** Show sound toggle in controls */
   sound: boolean;
+  /** When true, prompt is not required to generate */
+  promptOptional?: boolean;
   /**
    * Optional mode selector (Kling: resolution, Grok: style).
    * If omitted, no mode picker is shown.
@@ -180,8 +182,8 @@ export interface VideoModel {
   resolutions?: string[];
   defaultResolution?: string;
   apiInput: {
-    aspectRatioKey: string;
-    durationKey: string;
+    aspectRatioKey?: string;
+    durationKey?: string;
     /** Send duration as a string instead of a number (required by Kling) */
     durationAsString?: boolean;
     durationMin: number;
@@ -204,6 +206,12 @@ export interface VideoModel {
      * an image_urls array (Kling-specific).
      */
     useImageUrls?: boolean;
+    /**
+     * When true, uses motion-control payload:
+     *   input_urls (reference image) + video_urls (reference video)
+     * modeKey → character_orientation, resolutionKey → mode (720p/1080p)
+     */
+    useMotionControl?: boolean;
     /** Any other static fields to include in the input object */
     extra?: Record<string, unknown>;
   };
@@ -268,6 +276,29 @@ export const VIDEO_MODELS: VideoModel[] = [
       modeKey: "mode",
       resolutionKey: "resolution",
       referenceImagesKey: "reference_images",
+    },
+  },
+  // ── Kling motion control ─────────────────────────────────────────────────────
+  {
+    id: "kling-2.6-motion-control",
+    apiId: "kling-2.6/motion-control",
+    name: "Motion Control 2.6",
+    provider: "Kling",
+    ratios: [],    // no aspect-ratio selector — output inherits from inputs
+    durations: [], // no duration selector
+    defaultDuration: 0,
+    defaultRatio: "",
+    handles: ["prompt", "startFrame", "videoRef"],
+    sound: false,
+    promptOptional: true,
+    // No modes selector — character_orientation is always "image" per API docs
+    resolutions: ["720p", "1080p"],
+    defaultResolution: "720p",
+    apiInput: {
+      durationMin: 0,
+      durationMax: 0,                // no duration field sent to the API
+      resolutionKey: "mode",         // resolution selector → mode (720p / 1080p)
+      useMotionControl: true,
     },
   },
 ];

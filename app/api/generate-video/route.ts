@@ -35,6 +35,7 @@ export async function POST(req: NextRequest) {
     prompt,
     startFrameUrl:  rawStartFrame,
     endFrameUrl:    rawEndFrame,
+    videoRefUrl:    rawVideoRef,
     resources       = [] as Resource[],
     referenceImageUrls: rawRefImages = [] as string[],
     sound           = false,
@@ -56,12 +57,32 @@ export async function POST(req: NextRequest) {
 
   const { apiInput } = cfg;
 
-  // Clamp duration to model limits
-  const clampedDuration = Math.max(apiInput.durationMin, Math.min(apiInput.durationMax, Number(duration)));
+  // Clamp duration to model limits (motion-control has no duration field)
+  const clampedDuration = apiInput.durationMax > 0
+    ? Math.max(apiInput.durationMin, Math.min(apiInput.durationMax, Number(duration)))
+    : 0;
 
   let input: Record<string, unknown>;
 
-  if (apiInput.referenceImagesKey) {
+  if (apiInput.useMotionControl) {
+    // ── Kling 2.6 motion control ──────────────────────────────────────────────
+    // API format: { prompt, input_urls, video_urls, mode, character_orientation }
+    // character_orientation is always "image" (use the image reference to drive
+    // the character pose; the video_urls supply the motion template).
+    const [inputImageUrl, inputVideoUrl] = await Promise.all([
+      rawStartFrame ? ensureR2(rawStartFrame, "references").catch(() => rawStartFrame) : Promise.resolve(undefined),
+      rawVideoRef   ? ensureR2(rawVideoRef,   "references").catch(() => rawVideoRef)   : Promise.resolve(undefined),
+    ]);
+
+    input = {
+      prompt:               prompt ?? "",
+      input_urls:           inputImageUrl ? [inputImageUrl] : [],
+      video_urls:           inputVideoUrl ? [inputVideoUrl] : [],
+      mode:                 resolution,   // "720p" or "1080p"
+      character_orientation: "image",     // fixed per API docs
+    };
+
+  } else if (apiInput.referenceImagesKey) {
     // ── Reference-image-based models (Grok Imagine) ───────────────────────────
     const refImageUrls = (
       await Promise.all(
@@ -146,7 +167,12 @@ export async function POST(req: NextRequest) {
   const userId = await getUserId(req);
 
   // Collect reference URLs for DB record from whichever input fields were used
-  const referenceUrls: string[] = apiInput.referenceImagesKey
+  const referenceUrls: string[] = apiInput.useMotionControl
+    ? [
+        ...((input.input_urls as string[] | undefined) ?? []),
+        ...((input.video_urls as string[] | undefined) ?? []),
+      ]
+    : apiInput.referenceImagesKey
     ? (input[apiInput.referenceImagesKey] as string[] | undefined) ?? []
     : [
         ...((input.image_urls as string[] | undefined) ?? []),

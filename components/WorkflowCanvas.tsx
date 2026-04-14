@@ -23,6 +23,7 @@ import { createClient } from "@/lib/supabase/client";
 
 import PromptNode          from "./nodes/PromptNode";
 import ImageInputNode      from "./nodes/ImageInputNode";
+import VideoInputNode      from "./nodes/VideoInputNode";
 import GenerateNode        from "./nodes/GenerateNode";
 import VideoGeneratorNode  from "./nodes/VideoGeneratorNode";
 import NodePickerMenu, { DropState } from "./NodePickerMenu";
@@ -47,6 +48,7 @@ function authHeaders(token: string | undefined): HeadersInit {
 const nodeTypes = {
   promptNode:          PromptNode,
   imageInputNode:      ImageInputNode,
+  videoInputNode:      VideoInputNode,
   generateNode:        GenerateNode,
   videoGeneratorNode:  VideoGeneratorNode,
 };
@@ -56,6 +58,19 @@ const edgeTypes = {
 };
 
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+
+/** Human-readable label with auto-incrementing counter per type */
+function nodeLabel(type: string, existingNodes: Node<NodeData>[]): string {
+  const count = existingNodes.filter((n) => n.type === type).length + 1;
+  const names: Record<string, string> = {
+    videoInputNode:     "VIDEO",
+    imageInputNode:     "IMAGE",
+    promptNode:         "TEXT",
+    generateNode:       "IMAGE GEN",
+    videoGeneratorNode: "VIDEO GEN",
+  };
+  return `${names[type] ?? type} #${count}`;
+}
 
 export default function WorkflowCanvas() {
   const {
@@ -132,18 +147,19 @@ export default function WorkflowCanvas() {
       const genId    = `gen-${uid()}`;
       const promptId = `prompt-${uid()}`;
 
+      const freshNodes = useWorkflowStore.getState().nodes;
       addNode({
         id: promptId, type: "promptNode",
         position: { x: position.x - 320, y: position.y + 20 },
         deletable: false,
         style: { width: NODE_SIZE.promptNode.w, height: NODE_SIZE.promptNode.h },
-        data: { label: "promptNode" },
+        data: { label: nodeLabel("promptNode", freshNodes) },
       });
       addNode({
         id: genId, type: "generateNode",
         position,
         style: { width: NODE_SIZE.generateNode.w, height: NODE_SIZE.generateNode.h },
-        data: { label: "generateNode", status: "idle", model: "nano-banana-2", aspectRatio: "1:1" },
+        data: { label: nodeLabel("generateNode", freshNodes), status: "idle", model: "nano-banana-2", aspectRatio: "1:1" },
       });
       insertEdge({
         id: `edge-${promptId}-${genId}`,
@@ -155,12 +171,15 @@ export default function WorkflowCanvas() {
     }
 
     const size = NODE_SIZE[type] ?? FALLBACK_SIZE;
+    // Read nodes fresh from the store (not from stale closure)
+    const currentNodes = useWorkflowStore.getState().nodes;
+    const label = nodeLabel(type, currentNodes);
     addNode({
       id: `${type}-${uid()}`,
       type,
       position,
-      style: type === "imageInputNode" ? { width: size.w } : { width: size.w, height: size.h },
-      data: { label: type, status: "idle" },
+      style: type === "imageInputNode" || type === "videoInputNode" ? { width: size.w } : { width: size.w, height: size.h },
+      data: { label, status: "idle" },
     });
   }, [addNode, insertEdge]);
 
@@ -267,13 +286,21 @@ export default function WorkflowCanvas() {
       // Prompt handles only accept text (prompt) nodes
       if (connection.targetHandle === "prompt" && source?.type !== "promptNode") return false;
 
+      // videoRef handle only accepts video nodes (videoInputNode or videoGeneratorNode), 1 connection max
+      if (connection.targetHandle === "videoRef") {
+        if (source?.type !== "videoInputNode" && source?.type !== "videoGeneratorNode") return false;
+        const taken = edges.some((e) => e.target === connection.target && e.targetHandle === "videoRef");
+        if (taken) return false;
+      }
+
       // Image/resource handles do not accept text (prompt) nodes
       if (
         source?.type === "promptNode" &&
         (connection.targetHandle === "image" ||
          connection.targetHandle === "resource" ||
          connection.targetHandle === "startFrame" ||
-         connection.targetHandle === "endFrame")
+         connection.targetHandle === "endFrame" ||
+         connection.targetHandle === "videoRef")
       ) return false;
 
       if (target?.type === "generateNode") {

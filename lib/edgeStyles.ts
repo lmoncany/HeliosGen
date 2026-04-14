@@ -7,6 +7,7 @@ export const EDGE_COLORS: Record<string, string> = {
   startFrame: "#818cf8", // indigo — matches node-handle-icon-image
   endFrame:   "#818cf8", // indigo — matches node-handle-icon-image
   resource:   "#fb923c", // orange — matches node-handle-icon-resource
+  videoRef:   "#22d3ee", // cyan   — matches node-handle-icon-videoref
   default:    "#3a3a3a", // neutral
 };
 
