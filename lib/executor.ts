@@ -76,6 +76,13 @@ export function resolveInputs(
           result.imageNodeLabels.push((src.data.label as string | undefined) ?? "");
         }
       }
+      if (src.type === "videoInputNode") {
+        const imgSrc = src.data.capturedFrameUrl as string | undefined;
+        if (imgSrc) {
+          result.imageUrls.push(imgSrc);
+          result.imageNodeLabels.push((src.data.label as string | undefined) ?? "");
+        }
+      }
       if (src.type === "generateNode") {
         if (src.data.imageUrl) {
           result.imageUrls.push(src.data.imageUrl as string);
@@ -87,19 +94,19 @@ export function resolveInputs(
 
     // "startFrame" handle — Kling first frame
     if (edge.targetHandle === "startFrame") {
-      const url = (src.data.r2Url ?? src.data.inputImage ?? src.data.imageUrl) as string | undefined;
+      const url = (src.data.capturedFrameUrl ?? src.data.r2Url ?? src.data.inputImage ?? src.data.imageUrl) as string | undefined;
       if (url) result.startFrameUrl = url;
     }
 
     // "endFrame" handle — Kling last frame
     if (edge.targetHandle === "endFrame") {
-      const url = (src.data.r2Url ?? src.data.inputImage ?? src.data.imageUrl) as string | undefined;
+      const url = (src.data.capturedFrameUrl ?? src.data.r2Url ?? src.data.inputImage ?? src.data.imageUrl) as string | undefined;
       if (url) result.endFrameUrl = url;
     }
 
     // "resource" handle — Kling element references (max 3)
     if (edge.targetHandle === "resource") {
-      const url = (src.data.r2Url ?? src.data.inputImage ?? src.data.imageUrl) as string | undefined;
+      const url = (src.data.capturedFrameUrl ?? src.data.r2Url ?? src.data.inputImage ?? src.data.imageUrl) as string | undefined;
       const label = src.data.label as string | undefined;
       if (url && result.resources.length < 3) {
         result.resources.push({ url, label: label ?? "element" });

@@ -1,5 +1,7 @@
 "use client";
-import { useRef, useCallback } from "react";
+import { useRef, useCallback, useEffect, useState } from "react";
+import { createPortal } from "react-dom";
+import Image from "next/image";
 import { Handle, Position, NodeProps, Node } from "@xyflow/react";
 import CornerResizer from "./CornerResizer";
 import { useWorkflowStore, NodeData } from "@/lib/store";
@@ -11,6 +13,26 @@ type ImageInputNodeType = Node<NodeData, "imageInputNode">;
 export default function ImageInputNode({ id, data }: NodeProps<ImageInputNodeType>) {
   const updateNodeData = useWorkflowStore((s) => s.updateNodeData);
   const fileRef        = useRef<HTMLInputElement>(null);
+  const [lightboxOpen, setLightboxOpen]       = useState(false);
+  const [lightboxVisible, setLightboxVisible] = useState(false);
+
+  const openLightbox = useCallback(() => {
+    setLightboxOpen(true);
+    requestAnimationFrame(() => setLightboxVisible(true));
+  }, []);
+
+  const closeLightbox = useCallback(() => {
+    setLightboxVisible(false);
+    setTimeout(() => setLightboxOpen(false), 220);
+  }, []);
+
+  // Close lightbox on Escape
+  useEffect(() => {
+    if (!lightboxOpen) return;
+    const handler = (e: KeyboardEvent) => { if (e.key === "Escape") closeLightbox(); };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [lightboxOpen, closeLightbox]);
 
   const setImage = useCallback(
     (src: string, mimeType?: string) => {
@@ -138,13 +160,29 @@ export default function ImageInputNode({ id, data }: NodeProps<ImageInputNodeTyp
         <span className="node-above-label">{data.label as string}</span>
 
         {/* Inner: clips image to border-radius */}
-        <div className="relative w-full h-full" style={{ borderRadius: 7, overflow: "hidden" }}>
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src={imageSrc}
-            alt="Input"
-            style={{ width: "100%", height: "100%", display: "block", objectFit: "fill" }}
-          />
+        <div
+          className="relative w-full h-full"
+          style={{ borderRadius: 7, overflow: "hidden" }}
+          onDoubleClick={openLightbox}
+        >
+          {imageSrc.startsWith("https://") ? (
+            <Image
+              src={imageSrc}
+              alt="Input"
+              fill
+              quality={30}
+              sizes="400px"
+              style={{ objectFit: "fill" }}
+            />
+          ) : (
+            // blob: or data: URLs — next/image doesn't handle these, use plain img
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={imageSrc}
+              alt="Input"
+              style={{ width: "100%", height: "100%", display: "block", objectFit: "fill" }}
+            />
+          )}
 
           {/* Hover overlay */}
           <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
@@ -181,6 +219,32 @@ export default function ImageInputNode({ id, data }: NodeProps<ImageInputNodeTyp
             if (f) loadFile(f);
           }}
         />
+
+        {/* Lightbox — full-quality view on double-click */}
+        {lightboxOpen && typeof document !== "undefined" && createPortal(
+          <div
+            className="fixed inset-0 z-[9999] flex items-center justify-center transition-opacity duration-200 ease-in-out"
+            style={{ backgroundColor: `rgba(0,0,0,${lightboxVisible ? 0.9 : 0})`, opacity: lightboxVisible ? 1 : 0 }}
+            onClick={closeLightbox}
+          >
+            <div
+              className="transition-all duration-200 ease-in-out rounded-2xl overflow-hidden"
+              style={{
+                transform: lightboxVisible ? "scale(1)" : "scale(0.95)",
+                boxShadow: "0 0 0 8px #3a3a3a",
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={imageSrc}
+                alt="Full quality"
+                className="block max-w-[90vw] max-h-[90vh] object-contain"
+              />
+            </div>
+          </div>,
+          document.body
+        )}
       </div>
     );
   }

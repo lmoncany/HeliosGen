@@ -1,5 +1,7 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import Image from "next/image";
 import { Handle, Position, NodeProps, Node, useUpdateNodeInternals } from "@xyflow/react";
 import CornerResizer from "./CornerResizer";
 import { useWorkflowStore, NodeData } from "@/lib/store";
@@ -9,19 +11,6 @@ import { resolveInputs } from "@/lib/executor";
 type GenerateNodeType = Node<NodeData, "generateNode">;
 
 import { IMAGE_MODELS } from "@/lib/modelConfig";
-
-/** Return a Cloudflare-resized URL for display. Falls back to original if not a CF URL. */
-function cfImg(url: string, width: number): string {
-  try {
-    const u = new URL(url);
-    // Cloudflare Image Resizing only works on CF-proxied custom domains.
-    // pub-*.r2.dev is a direct R2 URL — return as-is.
-    if (u.hostname.endsWith(".r2.dev")) return url;
-    return `${u.origin}/cdn-cgi/image/width=${width},quality=75,format=webp${u.pathname}`;
-  } catch {
-    return url;
-  }
-}
 
 // Derived from config — no hardcoding needed
 const MODELS     = IMAGE_MODELS.map((m) => ({ id: m.id, name: m.name, meta: m.provider }));
@@ -114,6 +103,9 @@ function resolveMentions(
   // Sort spans by position in the prompt (left → right)
   spans.sort((a, b) => a.start - b.start);
 
+  // No @mentions in prompt — pass all images through as-is
+  if (spans.length === 0) return { resolvedPrompt: prompt, orderedUrls: imageUrls };
+
   // Assign orderedUrls in prompt appearance order
   const orderedUrls: string[] = [];
   const usedIdxs = new Set<number>();
@@ -167,6 +159,26 @@ export default function GenerateNode({ id, data }: NodeProps<GenerateNodeType>) 
   const [qualityOpen, setQualityOpen] = useState(false);
   const [loading, setLoading]         = useState(false);
   const [hoveredHandle, setHoveredHandle] = useState<"prompt" | "image" | null>(null);
+  const [lightboxOpen, setLightboxOpen]       = useState(false);
+  const [lightboxVisible, setLightboxVisible] = useState(false);
+
+  const openLightbox = useCallback(() => {
+    setLightboxOpen(true);
+    requestAnimationFrame(() => setLightboxVisible(true));
+  }, []);
+
+  const closeLightbox = useCallback(() => {
+    setLightboxVisible(false);
+    setTimeout(() => setLightboxOpen(false), 220);
+  }, []);
+
+  // Close lightbox on Escape
+  useEffect(() => {
+    if (!lightboxOpen) return;
+    const handler = (e: KeyboardEvent) => { if (e.key === "Escape") closeLightbox(); };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [lightboxOpen, closeLightbox]);
 
   const model       = (data.model as string) ?? "nano-banana-2";
   const caps        = MODEL_CAPS[model] ?? DEFAULT_CAPS;
@@ -182,17 +194,33 @@ export default function GenerateNode({ id, data }: NodeProps<GenerateNodeType>) 
   const cssRatio = `${rw} / ${rh}`;
   const busy     = loading || status === "running";
 
-  // Re-sync edge anchor positions whenever the node resizes
+  // ── Generation history ────────────────────────────────────────────────────
+  const rawGens    = data.generations;
+  const generations = Array.isArray(rawGens) ? (rawGens as string[]) : (data.imageUrl ? [data.imageUrl as string] : []);
+  const currentGenIdx = Math.min(
+    (data.currentGenIdx as number | undefined) ?? Math.max(0, generations.length - 1),
+    Math.max(0, generations.length - 1)
+  );
+
+  const goToGen = useCallback((idx: number) => {
+    const gens = Array.isArray(useWorkflowStore.getState().nodes.find(n => n.id === id)?.data?.generations)
+      ? useWorkflowStore.getState().nodes.find(n => n.id === id)!.data.generations as string[]
+      : generations;
+    const clamped = Math.max(0, Math.min((gens as string[]).length - 1, idx));
+    updateNodeData(id, { currentGenIdx: clamped, imageUrl: (gens as string[])[clamped], status: "done", errorMsg: undefined });
+  }, [id, updateNodeData, generations]);
+
+  // Re-sync edge anchor positions on every resize — including during CSS transitions
   useEffect(() => {
-    const raf = requestAnimationFrame(() => {
-      if (cardRef.current) {
-        const { offsetWidth, offsetHeight } = cardRef.current;
-        updateNodeSize(id, offsetWidth, offsetHeight);
-      }
+    const el = cardRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => {
+      updateNodeSize(id, el.offsetWidth, el.offsetHeight);
       updateNodeInternals(id);
     });
-    return () => cancelAnimationFrame(raf);
-  }, [id, aspectRatio, data.imageNaturalRatio, updateNodeSize, updateNodeInternals]);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [id, updateNodeSize, updateNodeInternals]);
 
   const closeDropdowns = () => {
     setModelOpen(false);
@@ -214,7 +242,9 @@ export default function GenerateNode({ id, data }: NodeProps<GenerateNodeType>) 
         if (cancelled) return;
 
         if (json.status === "done") {
-          updateNodeData(id, { status: "done", imageUrl: json.imageUrl, taskId: undefined });
+          const prevGens = (useWorkflowStore.getState().nodes.find(n => n.id === id)?.data?.generations as string[] | undefined) ?? [];
+          const newGens = [...prevGens, json.imageUrl as string];
+          updateNodeData(id, { status: "done", imageUrl: json.imageUrl, taskId: undefined, generations: newGens, currentGenIdx: newGens.length - 1 });
           clearInterval(interval);
         } else if (json.status === "error") {
           updateNodeData(id, { status: "error", errorMsg: json.error, taskId: undefined });
@@ -352,20 +382,24 @@ export default function GenerateNode({ id, data }: NodeProps<GenerateNodeType>) 
 
         {/* ── Image area — top corners clip to card border-radius ───────── */}
         <div
-          className="relative bg-[#090B0D] overflow-hidden rounded-t-[7px]"
+          className="relative bg-[#090B0D] overflow-hidden rounded-t-[7px] group/gen"
           style={{
             aspectRatio: (data.imageNaturalRatio as string | undefined) ?? cssRatio,
             width: "100%",
+            transition: "aspect-ratio 0.35s cubic-bezier(0.4, 0, 0.2, 1)",
           }}
+          onDoubleClick={() => { if (data.imageUrl) openLightbox(); }}
         >
           {data.imageUrl ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={cfImg(data.imageUrl as string, 800)}
+            <Image
+              src={data.imageUrl as string}
               alt="Generated"
-              className="w-full h-full object-fill block"
+              fill
+              quality={30}
+              sizes="400px"
+              style={{ objectFit: "fill" }}
               onLoad={(e) => {
-                const img = e.currentTarget;
+                const img = e.currentTarget as HTMLImageElement;
                 const nw = img.naturalWidth, nh = img.naturalHeight;
                 updateNodeData(id, { imageNaturalRatio: `${nw} / ${nh}` });
                 requestAnimationFrame(() => {
@@ -376,14 +410,66 @@ export default function GenerateNode({ id, data }: NodeProps<GenerateNodeType>) 
                 });
               }}
             />
-          ) : (
-            <div className="w-full h-full flex items-center justify-center">
-              {status === "error" && (
-                <p className="text-red-800 text-[10px] px-4 text-center leading-5">
-                  {(data.errorMsg as string) ?? "Generation failed"}
-                </p>
-              )}
+          ) : status === "error" ? (
+            <div className="absolute inset-0 flex flex-col justify-center px-5 gap-2.5">
+              {/* Error icon */}
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" className="shrink-0 mb-0.5">
+                <circle cx="12" cy="12" r="10" fill="#1a0a0a" stroke="#5a1a1a" strokeWidth="1.5" />
+                <path d="M12 7v5" stroke="#c04040" strokeWidth="2" strokeLinecap="round" />
+                <circle cx="12" cy="16" r="1" fill="#c04040" />
+              </svg>
+              <p className="text-white text-[12px] font-semibold leading-snug">
+                Oops! Something went wrong.
+              </p>
+              <p className="text-[#555] text-[10px] leading-[1.5] break-words">
+                {(data.errorMsg as string) ?? "Generation failed"}
+              </p>
             </div>
+          ) : (
+            <div className="w-full h-full" />
+          )}
+
+          {/* ── Carousel ──────────────────────────────────────────────── */}
+          {(generations.length > 1 || (status === "error" && generations.length > 0)) && (
+            <>
+              {/* Left arrow */}
+              <button
+                onMouseDown={(e) => e.stopPropagation()}
+                onClick={(e) => { e.stopPropagation(); goToGen(currentGenIdx - 1); }}
+                disabled={currentGenIdx === 0}
+                className="absolute left-2 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-black/40 backdrop-blur-sm flex items-center justify-center opacity-0 group-hover/gen:opacity-100 transition-opacity disabled:opacity-0 z-10 pointer-events-auto"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="15 18 9 12 15 6" />
+                </svg>
+              </button>
+              {/* Right arrow */}
+              <button
+                onMouseDown={(e) => e.stopPropagation()}
+                onClick={(e) => { e.stopPropagation(); goToGen(currentGenIdx + 1); }}
+                disabled={currentGenIdx === generations.length - 1}
+                className="absolute right-2 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-black/40 backdrop-blur-sm flex items-center justify-center opacity-0 group-hover/gen:opacity-100 transition-opacity disabled:opacity-0 z-10 pointer-events-auto"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="9 18 15 12 9 6" />
+                </svg>
+              </button>
+              {/* Dots / counter */}
+              <div className="absolute bottom-2 left-1/2 -translate-x-1/2 flex items-center gap-1 z-10" onMouseDown={(e) => e.stopPropagation()}>
+                {generations.length <= 8 ? generations.map((_, i) => (
+                  <button
+                    key={i}
+                    onMouseDown={(e) => e.stopPropagation()}
+                    onClick={(e) => { e.stopPropagation(); goToGen(i); }}
+                    className={`w-1.5 h-1.5 rounded-full transition-colors pointer-events-auto ${i === currentGenIdx ? "bg-white" : "bg-white/30 hover:bg-white/60"}`}
+                  />
+                )) : (
+                  <span className="text-[10px] text-white/60 font-mono tabular-nums bg-black/30 px-1.5 py-0.5 rounded-full">
+                    {currentGenIdx + 1} / {generations.length}
+                  </span>
+                )}
+              </div>
+            </>
           )}
         </div>
 
@@ -546,6 +632,32 @@ export default function GenerateNode({ id, data }: NodeProps<GenerateNodeType>) 
         </div>
 
       {busy && <SpinnerOverlay />}
+
+      {/* ── Lightbox — full-quality view on double-click ───────────────── */}
+      {lightboxOpen && typeof document !== "undefined" && createPortal(
+        <div
+          className="fixed inset-0 z-[9999] flex items-center justify-center transition-opacity duration-200 ease-in-out"
+          style={{ backgroundColor: `rgba(0,0,0,${lightboxVisible ? 0.9 : 0})`, opacity: lightboxVisible ? 1 : 0 }}
+          onClick={closeLightbox}
+        >
+          <div
+            className="transition-all duration-200 ease-in-out rounded-2xl overflow-hidden"
+            style={{
+              transform: lightboxVisible ? "scale(1)" : "scale(0.95)",
+              boxShadow: "0 0 0 8px #3a3a3a",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={data.imageUrl as string}
+              alt="Full quality"
+              className="block max-w-[90vw] max-h-[90vh] object-contain"
+            />
+          </div>
+        </div>,
+        document.body
+      )}
     </div>
   );
 }

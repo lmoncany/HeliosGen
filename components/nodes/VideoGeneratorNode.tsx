@@ -81,6 +81,18 @@ export default function VideoGeneratorNode({ id, data }: NodeProps<VideoGenerato
   const busy = loading || status === "running";
   const videoUrl = data.videoUrl as string | undefined;
 
+  // ── Generation history ────────────────────────────────────────────────────
+  const generations    = (data.generations as string[] | undefined) ?? (videoUrl ? [videoUrl] : []);
+  const currentGenIdx  = Math.min((data.currentGenIdx as number | undefined) ?? Math.max(0, generations.length - 1), Math.max(0, generations.length - 1));
+  const generationsRef = useRef(generations);
+  generationsRef.current = generations;
+
+  const goToGen = useCallback((idx: number) => {
+    const gens = generationsRef.current;
+    const clamped = Math.max(0, Math.min(gens.length - 1, idx));
+    updateNodeData(id, { currentGenIdx: clamped, videoUrl: gens[clamped], status: "done", errorMsg: undefined });
+  }, [id, updateNodeData]);
+
   const handleVideoMeta = (e: React.SyntheticEvent<HTMLVideoElement>) => {
     const v = e.currentTarget;
     if (!v.videoWidth || !v.videoHeight) return;
@@ -208,7 +220,8 @@ export default function VideoGeneratorNode({ id, data }: NodeProps<VideoGenerato
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error);
-      updateNodeData(id, { status: "done", videoUrl: json.videoUrl });
+      const newGens = [...generationsRef.current, json.videoUrl as string];
+      updateNodeData(id, { status: "done", videoUrl: json.videoUrl, generations: newGens, currentGenIdx: newGens.length - 1 });
     } catch (e: unknown) {
       updateNodeData(id, {
         status: "error",
@@ -284,7 +297,7 @@ export default function VideoGeneratorNode({ id, data }: NodeProps<VideoGenerato
       {/* ── Main content ─────────────────────────────────────────────── */}
       {videoUrl ? (
         <div
-          className="relative bg-[#090B0D] rounded-t-[7px] overflow-hidden group/player"
+          className="relative bg-[#090B0D] rounded-t-[7px] overflow-hidden group/player group/gen"
           style={{ aspectRatio: (data.imageNaturalRatio as string | undefined) ?? "16 / 9", width: "100%" }}
         >
           {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
@@ -351,19 +364,107 @@ export default function VideoGeneratorNode({ id, data }: NodeProps<VideoGenerato
               style={{ width: `${progress * 100}%` }}
             />
           </div>
+
+          {/* ── Carousel ───────────────────────────────────────────────── */}
+          {generations.length > 1 && (
+            <>
+              <button
+                onMouseDown={(e) => e.stopPropagation()}
+                onClick={(e) => { e.stopPropagation(); goToGen(currentGenIdx - 1); }}
+                disabled={currentGenIdx === 0}
+                className="absolute left-2 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-black/40 backdrop-blur-sm flex items-center justify-center opacity-0 group-hover/gen:opacity-100 transition-opacity disabled:opacity-0 z-10 pointer-events-auto"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="15 18 9 12 15 6" />
+                </svg>
+              </button>
+              <button
+                onMouseDown={(e) => e.stopPropagation()}
+                onClick={(e) => { e.stopPropagation(); goToGen(currentGenIdx + 1); }}
+                disabled={currentGenIdx === generations.length - 1}
+                className="absolute right-2 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-black/40 backdrop-blur-sm flex items-center justify-center opacity-0 group-hover/gen:opacity-100 transition-opacity disabled:opacity-0 z-10 pointer-events-auto"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="9 18 15 12 9 6" />
+                </svg>
+              </button>
+              <div className="absolute bottom-5 left-1/2 -translate-x-1/2 flex items-center gap-1 z-10" onMouseDown={(e) => e.stopPropagation()}>
+                {generations.length <= 8 ? generations.map((_, i) => (
+                  <button
+                    key={i}
+                    onMouseDown={(e) => e.stopPropagation()}
+                    onClick={(e) => { e.stopPropagation(); goToGen(i); }}
+                    className={`w-1.5 h-1.5 rounded-full transition-colors pointer-events-auto ${i === currentGenIdx ? "bg-white" : "bg-white/30 hover:bg-white/60"}`}
+                  />
+                )) : (
+                  <span className="text-[10px] text-white/60 font-mono tabular-nums bg-black/30 px-1.5 py-0.5 rounded-full">
+                    {currentGenIdx + 1} / {generations.length}
+                  </span>
+                )}
+              </div>
+            </>
+          )}
         </div>
       ) : (
-        <div className="relative flex-1 bg-[#090B0D] rounded-t-[7px] overflow-hidden" style={{ minHeight: 160 }}>
+        <div className="relative flex-1 bg-[#090B0D] rounded-t-[7px] overflow-hidden group/gen" style={{ minHeight: 160 }}>
           {status === "error" && (
-            <p className="absolute top-3 left-0 right-0 text-center text-[10px] text-red-600 px-4 leading-5">
-              {(data.errorMsg as string) ?? "Generation failed"}
-            </p>
+            <div className="absolute inset-0 flex flex-col justify-center px-5 gap-2.5">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" className="shrink-0 mb-0.5">
+                <circle cx="12" cy="12" r="10" fill="#1a0a0a" stroke="#5a1a1a" strokeWidth="1.5" />
+                <path d="M12 7v5" stroke="#c04040" strokeWidth="2" strokeLinecap="round" />
+                <circle cx="12" cy="16" r="1" fill="#c04040" />
+              </svg>
+              <p className="text-white text-[12px] font-semibold leading-snug">Oops! Something went wrong.</p>
+              <p className="text-[#555] text-[10px] leading-[1.5] break-words">
+                {(data.errorMsg as string) ?? "Generation failed"}
+              </p>
+            </div>
           )}
-          {textNode && (
+          {textNode && !status.includes("error") && (
             <div className="absolute bottom-3 left-4 flex items-center gap-1.5">
               <span className="w-1.5 h-1.5 rounded-full bg-[#77E544] shrink-0" />
               <span className="text-[11px] text-[#555]">{textNode.data.label as string}</span>
             </div>
+          )}
+
+          {/* Carousel — shown even on error so user can browse previous generations */}
+          {generations.length > 0 && (
+            <>
+              <button
+                onMouseDown={(e) => e.stopPropagation()}
+                onClick={(e) => { e.stopPropagation(); goToGen(currentGenIdx - 1); }}
+                disabled={currentGenIdx === 0}
+                className="absolute left-2 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-black/40 backdrop-blur-sm flex items-center justify-center opacity-0 group-hover/gen:opacity-100 transition-opacity disabled:opacity-0 z-10 pointer-events-auto"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="15 18 9 12 15 6" />
+                </svg>
+              </button>
+              <button
+                onMouseDown={(e) => e.stopPropagation()}
+                onClick={(e) => { e.stopPropagation(); goToGen(currentGenIdx + 1); }}
+                disabled={currentGenIdx === generations.length - 1}
+                className="absolute right-2 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-black/40 backdrop-blur-sm flex items-center justify-center opacity-0 group-hover/gen:opacity-100 transition-opacity disabled:opacity-0 z-10 pointer-events-auto"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="9 18 15 12 9 6" />
+                </svg>
+              </button>
+              <div className="absolute bottom-2 left-1/2 -translate-x-1/2 flex items-center gap-1 z-10" onMouseDown={(e) => e.stopPropagation()}>
+                {generations.length <= 8 ? generations.map((_, i) => (
+                  <button
+                    key={i}
+                    onMouseDown={(e) => e.stopPropagation()}
+                    onClick={(e) => { e.stopPropagation(); goToGen(i); }}
+                    className={`w-1.5 h-1.5 rounded-full transition-colors pointer-events-auto ${i === currentGenIdx ? "bg-white" : "bg-white/30 hover:bg-white/60"}`}
+                  />
+                )) : (
+                  <span className="text-[10px] text-white/60 font-mono tabular-nums bg-black/30 px-1.5 py-0.5 rounded-full">
+                    {currentGenIdx + 1} / {generations.length}
+                  </span>
+                )}
+              </div>
+            </>
           )}
         </div>
       )}
