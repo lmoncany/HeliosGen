@@ -32,22 +32,26 @@ async function syncFromKie(taskId: string, token: string): Promise<void> {
     if (state === "success") {
       const kieUrl = extractUrl(d.data?.resultJson);
       if (kieUrl) {
-        // Mirror to R2 so the node never shows a tempfile URL
-        let imageUrl = kieUrl;
+        const existing = jobStore.get(taskId);
+        const isVideo = existing?.status === "pending" && (existing as { type?: string }).type === "video";
+        const folder  = isVideo ? "videos" : "images";
+
+        let r2Url = kieUrl;
         try {
-          imageUrl = await mirrorToR2(kieUrl, "images");
+          r2Url = await mirrorToR2(kieUrl, folder);
         } catch (err) {
           console.error("[job-status] R2 mirror failed, using kie.ai URL:", err);
         }
-        jobStore.set(taskId, { status: "done", imageUrl });
-        // Update Supabase (fire-and-forget)
-        supabaseAdmin
-          .from("generations")
-          .update({ status: "done", image_url: imageUrl })
-          .eq("task_id", taskId)
-          .then(({ error }) => {
-            if (error) console.error("[job-status] supabase update error:", error.message);
-          });
+
+        if (isVideo) {
+          jobStore.set(taskId, { status: "done", videoUrl: r2Url });
+          supabaseAdmin.from("generations").update({ status: "done", video_url: r2Url }).eq("task_id", taskId)
+            .then(({ error }) => { if (error) console.error("[job-status] supabase update error:", error.message); });
+        } else {
+          jobStore.set(taskId, { status: "done", imageUrl: r2Url });
+          supabaseAdmin.from("generations").update({ status: "done", image_url: r2Url }).eq("task_id", taskId)
+            .then(({ error }) => { if (error) console.error("[job-status] supabase update error:", error.message); });
+        }
       }
     } else if (state === "fail") {
       jobStore.set(taskId, { status: "error", error: d.data?.failMsg || "Generation failed" });

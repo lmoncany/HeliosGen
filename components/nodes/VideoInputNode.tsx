@@ -1,5 +1,6 @@
 "use client";
 import { useRef, useCallback, useState, useEffect } from "react";
+import NextImage from "next/image";
 import { Handle, Position, NodeProps, Node, useReactFlow } from "@xyflow/react";
 import CornerResizer from "./CornerResizer";
 import { useWorkflowStore, NodeData } from "@/lib/store";
@@ -22,12 +23,36 @@ export default function VideoInputNode({ id, data }: NodeProps<VideoInputNodeTyp
   const [uploading, setUploading]   = useState(false);
   const [uploadErr, setUploadErr]   = useState<string | null>(null);
   const [muted, setMuted]           = useState(true);
+  const [hovering, setHovering]     = useState(false);
   const [progress, setProgress]     = useState(0);
   const [currentSec, setCurrentSec] = useState(0);
-  const [pickerOpen, setPickerOpen]   = useState(false);
-  const [capturing, setCapturing]     = useState(false);
-  const [captureErr, setCaptureErr]   = useState<string | null>(null);
-  const [scrubPos, setScrubPos]       = useState(0);
+  const [pickerOpen, setPickerOpen]             = useState(false);
+  const [capturing, setCapturing]               = useState(false);
+  const [captureErr, setCaptureErr]             = useState<string | null>(null);
+  const [scrubPos, setScrubPos]                 = useState(0);
+  const [showFramePreview, setShowFramePreview]       = useState(false);
+  const [framePreviewVisible, setFramePreviewVisible] = useState(false);
+  const [frameBlurVisible, setFrameBlurVisible]       = useState(true);
+  const [trimOpen, setTrimOpen]                 = useState(false);
+  const [isPlaying, setIsPlaying]               = useState(false);
+  const [videoDuration, setVideoDuration]       = useState(0);
+  const [localTrimStart, setLocalTrimStart]     = useState(0);
+  const [localTrimEnd, setLocalTrimEnd]         = useState(0);
+
+  const videoDurationRef  = useRef(0);
+  const localTrimStartRef = useRef(0);
+  const localTrimEndRef   = useRef(0);
+  const trimBarRef        = useRef<HTMLDivElement>(null);
+
+  const trimOpenRef          = useRef(false);
+  const committedTrimStartRef = useRef<number | undefined>(undefined);
+  const committedTrimEndRef   = useRef<number | undefined>(undefined);
+  trimOpenRef.current             = trimOpen;
+  committedTrimStartRef.current   = data.trimStart as number | undefined;
+  committedTrimEndRef.current     = data.trimEnd   as number | undefined;
+  videoDurationRef.current        = videoDuration;
+  localTrimStartRef.current       = localTrimStart;
+  localTrimEndRef.current         = localTrimEnd;
 
   const fmtTime = (s: number) =>
     `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
@@ -69,6 +94,7 @@ export default function VideoInputNode({ id, data }: NodeProps<VideoInputNodeTyp
         ? srcUrl
         : `/api/video-proxy?url=${encodeURIComponent(srcUrl)}`;
 
+      let blurDataUrl = "";
       const blob: Blob = await new Promise((resolve, reject) => {
         const tmp = document.createElement("video");
         tmp.crossOrigin = "anonymous";
@@ -86,6 +112,14 @@ export default function VideoInputNode({ id, data }: NodeProps<VideoInputNodeTyp
             canvas.width  = w;
             canvas.height = h;
             canvas.getContext("2d")!.drawImage(tmp, 0, 0, w, h);
+
+            // Generate tiny blur placeholder (16px wide)
+            const tw = 16, th = Math.max(1, Math.round(16 * h / w));
+            const tiny = document.createElement("canvas");
+            tiny.width = tw; tiny.height = th;
+            tiny.getContext("2d")!.drawImage(tmp, 0, 0, tw, th);
+            blurDataUrl = tiny.toDataURL("image/jpeg", 0.5);
+
             canvas.toBlob((b) => {
               cleanup();
               if (b) resolve(b);
@@ -111,8 +145,10 @@ export default function VideoInputNode({ id, data }: NodeProps<VideoInputNodeTyp
       const json = await res.json();
       if (!res.ok) throw new Error(json.error ?? "Upload failed");
 
-      updateNodeData(id, { capturedFrameUrl: json.cdnUrl });
+      updateNodeData(id, { capturedFrameUrl: json.cdnUrl, capturedFrameBlurUrl: blurDataUrl });
       setPickerOpen(false);
+      setShowFramePreview(false);
+      videoRef.current?.play().catch(() => {});
     } catch (err) {
       setCaptureErr(err instanceof Error ? err.message : "Capture failed");
     } finally {
@@ -123,7 +159,11 @@ export default function VideoInputNode({ id, data }: NodeProps<VideoInputNodeTyp
   // Auto-open picker when connected; close picker + unlock when edge is cut
   const imageEdgeId = imageEdge?.id ?? null;
   useEffect(() => {
-    if (imageEdgeId && !capturedFrameRef.current) setPickerOpen(true);
+    if (imageEdgeId && !capturedFrameRef.current) {
+      const v = videoRef.current;
+      if (v) { v.pause(); setScrubPos(v.currentTime / (v.duration || 1)); }
+      setPickerOpen(true);
+    }
     if (!imageEdgeId) {
       setPickerOpen(false);
       if (capturedFrameRef.current) updateNodeData(id, { capturedFrameUrl: undefined });
@@ -184,18 +224,123 @@ export default function VideoInputNode({ id, data }: NodeProps<VideoInputNodeTyp
     if (file?.type.startsWith("video/")) loadFile(file);
   }, [loadFile]);
 
-  const onHoverPlay  = useCallback(() => {
-    if (!pickerOpen && !capturedFrameRef.current) videoRef.current?.play().catch(() => {});
-  }, [pickerOpen]);
-  const onHoverPause = useCallback(() => {
-    if (!pickerOpen && !capturedFrameRef.current) videoRef.current?.pause();
-  }, [pickerOpen]);
+  const onHoverPlay  = useCallback(() => setHovering(true), []);
+  const onHoverPause = useCallback(() => setHovering(false), []);
+
+  // ── Trim ─────────────────────────────────────────────────────────────────────
+
+  const openFramePreview = useCallback(() => {
+    videoRef.current?.pause();
+    setFrameBlurVisible(true);
+    setShowFramePreview(true);
+    // rAF so the element is painted before the transition starts
+    requestAnimationFrame(() => setFramePreviewVisible(true));
+  }, []);
+
+  const closeFramePreview = useCallback(() => {
+    setFramePreviewVisible(false);
+    setTimeout(() => {
+      setShowFramePreview(false);
+      videoRef.current?.play().catch(() => {});
+    }, 240);
+  }, []);
+
+  const openTrim = useCallback(() => {
+    // Always read duration straight from the DOM — state may not be set yet
+    const dur = videoRef.current?.duration || videoDurationRef.current || 0;
+    setVideoDuration(dur);
+    videoDurationRef.current = dur;
+
+    const start = (data.trimStart as number | undefined) ?? 0;
+    const end   = (data.trimEnd   as number | undefined) ?? dur;
+    setLocalTrimStart(start);
+    setLocalTrimEnd(end || dur);
+    setPickerOpen(false);
+    setShowFramePreview(false);
+    videoRef.current?.pause();
+    if (videoRef.current) videoRef.current.currentTime = start;
+    setTrimOpen(true);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data.trimStart, data.trimEnd]);
+
+  const applyTrim = useCallback(() => {
+    updateNodeData(id, { trimStart: localTrimStartRef.current, trimEnd: localTrimEndRef.current });
+    setTrimOpen(false);
+    if (videoRef.current) {
+      videoRef.current.currentTime = localTrimStartRef.current;
+      videoRef.current.play().catch(() => {});
+    }
+  }, [id, updateNodeData]);
+
+  const resetTrim = useCallback(() => {
+    updateNodeData(id, { trimStart: undefined, trimEnd: undefined });
+    setTrimOpen(false);
+  }, [id, updateNodeData]);
+
+  const startHandleDrag = useCallback((e: React.PointerEvent, which: "start" | "end") => {
+    e.preventDefault();
+    e.stopPropagation();
+    const bar = trimBarRef.current;
+    if (!bar) return;
+
+    const MIN_DURATION = 3;
+    const onMove = (ev: PointerEvent) => {
+      const rect = bar.getBoundingClientRect();
+      const pct  = Math.max(0, Math.min(1, (ev.clientX - rect.left) / rect.width));
+      const time = pct * videoDurationRef.current;
+      if (which === "start") {
+        const clamped = Math.max(0, Math.min(time, localTrimEndRef.current - MIN_DURATION));
+        setLocalTrimStart(clamped);
+        if (videoRef.current) videoRef.current.currentTime = clamped;
+      } else {
+        const clamped = Math.min(videoDurationRef.current, Math.max(time, localTrimStartRef.current + MIN_DURATION));
+        setLocalTrimEnd(clamped);
+        if (videoRef.current) videoRef.current.currentTime = clamped;
+      }
+    };
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  }, []);
+
+  const startSelectionDrag = useCallback((e: React.PointerEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const bar = trimBarRef.current;
+    if (!bar) return;
+
+    const startX   = e.clientX;
+    const barWidth = bar.getBoundingClientRect().width;
+    const initStart = localTrimStartRef.current;
+    const initEnd   = localTrimEndRef.current;
+    const duration  = initEnd - initStart;
+
+    const onMove = (ev: PointerEvent) => {
+      const dx      = ev.clientX - startX;
+      const dtSec   = (dx / barWidth) * videoDurationRef.current;
+      const newStart = Math.max(0, Math.min(initStart + dtSec, videoDurationRef.current - duration));
+      const newEnd   = newStart + duration;
+      setLocalTrimStart(newStart);
+      setLocalTrimEnd(newEnd);
+      if (videoRef.current) videoRef.current.currentTime = newStart;
+    };
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  }, []);
 
   useEffect(() => {
     const lbl = data.label as string | undefined;
     if (!lbl || lbl === "videoInputNode") updateNodeData(id, { label: "VIDEO #1" });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
 
   const videoUrl    = data.videoUrl as string | undefined;
   const hasError    = data.hasError as boolean | undefined;
@@ -211,7 +356,7 @@ export default function VideoInputNode({ id, data }: NodeProps<VideoInputNodeTyp
     return (
       <div
         className={`node-card group${hasError ? " node-error-blink" : ""}`}
-        style={{ width: "100%", aspectRatio, background: "transparent", border: "none", boxShadow: "none" }}
+        style={{ width: "100%", aspectRatio }}
         onAnimationEnd={handleAnimEnd}
       >
         <CornerResizer minWidth={160} minHeight={80} keepAspectRatio />
@@ -230,14 +375,20 @@ export default function VideoInputNode({ id, data }: NodeProps<VideoInputNodeTyp
             src={videoUrl}
             className="w-full h-full block"
             style={{ objectFit: "fill" }}
-            muted={muted}
+            autoPlay
+            muted={trimOpen ? false : (muted || !hovering)}
             playsInline
             preload="metadata"
             loop
+            onPlay={() => setIsPlaying(true)}
+            onPause={() => setIsPlaying(false)}
             onLoadedMetadata={(e) => {
               const v = e.currentTarget;
-              if (!v.videoWidth || !v.videoHeight) return;
-              updateNodeData(id, { videoAspectRatio: `${v.videoWidth} / ${v.videoHeight}` });
+              if (v.videoWidth && v.videoHeight) {
+                updateNodeData(id, { videoAspectRatio: `${v.videoWidth} / ${v.videoHeight}` });
+              }
+              setVideoDuration(v.duration || 0);
+              videoDurationRef.current = v.duration || 0;
             }}
             onTimeUpdate={(e) => {
               const v = e.currentTarget;
@@ -246,12 +397,18 @@ export default function VideoInputNode({ id, data }: NodeProps<VideoInputNodeTyp
                 const pct = v.currentTime / v.duration;
                 setProgress(pct);
                 if (pickerOpen) setScrubPos(pct);
+                // Loop within trim range (live refs in trim mode, committed refs otherwise)
+                const tEnd   = trimOpenRef.current ? localTrimEndRef.current   : committedTrimEndRef.current;
+                const tStart = trimOpenRef.current ? localTrimStartRef.current : committedTrimStartRef.current;
+                if (tEnd !== undefined && v.currentTime >= tEnd) {
+                  v.currentTime = tStart ?? 0;
+                }
               }
             }}
           />
 
           {/* ── Normal player controls (hidden while picker is open) ── */}
-          {!pickerOpen && (
+          {!pickerOpen && !trimOpen && (
             <>
               {/* Timer badge */}
               <div className="absolute top-2 left-2 h-7 px-2 rounded-full bg-black/40 backdrop-blur-sm flex items-center justify-center opacity-0 group-hover/player:opacity-100 transition-opacity z-10 pointer-events-none">
@@ -293,24 +450,45 @@ export default function VideoInputNode({ id, data }: NodeProps<VideoInputNodeTyp
                 <div className="h-full bg-white/70 transition-none" style={{ width: `${progress * 100}%` }} />
               </div>
 
-              {/* Hover controls row — only when not locked */}
-              {!capturedFrameUrl && (
-                <div className="absolute bottom-2 left-0 right-0 flex justify-between px-2.5 opacity-0 group-hover/player:opacity-100 transition-opacity">
+              {/* Hover controls row */}
+              <div className="absolute bottom-2 left-0 right-0 flex justify-between items-center px-2.5 opacity-0 group-hover/player:opacity-100 transition-opacity z-10">
+                {!capturedFrameUrl ? (
                   <button
                     onMouseDown={(e) => e.stopPropagation()}
                     onClick={() => fileRef.current?.click()}
-                    className="text-[10px] text-[#8D8E89] hover:text-white transition-colors relative z-10 pointer-events-auto"
+                    className="text-[10px] text-[#8D8E89] hover:text-white transition-colors pointer-events-auto"
                   >replace</button>
+                ) : <div />}
+                {!capturedFrameUrl && (
                   <button
                     onMouseDown={(e) => e.stopPropagation()}
-                    onClick={() => {
+                    onClick={(e) => {
+                      e.stopPropagation();
                       if (localUrlRef.current) { URL.revokeObjectURL(localUrlRef.current); localUrlRef.current = null; }
-                      updateNodeData(id, { videoUrl: undefined, videoAspectRatio: undefined, capturedFrameUrl: undefined });
+                      updateNodeData(id, { videoUrl: undefined, videoAspectRatio: undefined, capturedFrameUrl: undefined, trimStart: undefined, trimEnd: undefined });
                       setUploadErr(null);
                     }}
-                    className="text-[10px] text-[#8D8E89] hover:text-white transition-colors relative z-10 pointer-events-auto"
+                    className="text-[10px] text-[#8D8E89] hover:text-white transition-colors pointer-events-auto"
                   >remove</button>
-                </div>
+                )}
+              </div>
+
+              {/* Trim button — bottom-right icon pill, above frame preview if present */}
+              {!videoUrl?.startsWith("blob:") && !uploading && (
+                <button
+                  onMouseDown={(e) => e.stopPropagation()}
+                  onClick={(e) => { e.stopPropagation(); openTrim(); }}
+                  className={`absolute right-2 w-7 h-7 rounded-full backdrop-blur-sm flex items-center justify-center opacity-0 group-hover/player:opacity-100 transition-opacity pointer-events-auto z-10 ${data.trimStart !== undefined ? "bg-amber-400/80 hover:bg-amber-400" : "bg-black/40 hover:bg-black/60"}`}
+                  style={{ bottom: capturedFrameUrl ? "calc(0.5rem + 1.75rem + 0.375rem)" : "0.5rem" }}
+                  title="Trim video"
+                >
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={data.trimStart !== undefined ? "black" : "white"} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="6" cy="6" r="3" /><circle cx="6" cy="18" r="3" />
+                    <line x1="20" y1="4" x2="8.12" y2="15.88" />
+                    <line x1="14.47" y1="14.48" x2="20" y2="20" />
+                    <line x1="8.12" y1="8.12" x2="12" y2="12" />
+                  </svg>
+                </button>
               )}
 
               {/* "Pick a frame" CTA — shown on hover when connected but not locked */}
@@ -329,18 +507,199 @@ export default function VideoInputNode({ id, data }: NodeProps<VideoInputNodeTyp
                 </button>
               )}
 
-              {/* Lock icon — shown in center when frame is captured */}
+              {/* Captured frame preview icon — bottom-right, shown on hover */}
               {capturedFrameUrl && (
-                <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                  <div className="w-10 h-10 rounded-full bg-black/40 backdrop-blur-sm flex items-center justify-center">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="white" stroke="none">
-                      <rect x="3" y="11" width="18" height="11" rx="2" />
-                      <path d="M7 11V7a5 5 0 0 1 10 0v4" stroke="white" strokeWidth="2.5" fill="none" strokeLinecap="round" />
-                    </svg>
-                  </div>
-                </div>
+                <button
+                  onMouseDown={(e) => e.stopPropagation()}
+                  onClick={(e) => { e.stopPropagation(); openFramePreview(); }}
+                  className="absolute bottom-2 right-2 w-7 h-7 rounded-full bg-black/40 backdrop-blur-sm flex items-center justify-center opacity-0 group-hover/player:opacity-100 transition-opacity pointer-events-auto z-10"
+                  title="View captured frame"
+                >
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="3" y="3" width="18" height="18" rx="2" /><circle cx="8.5" cy="8.5" r="1.5" /><polyline points="21 15 16 10 5 21" />
+                  </svg>
+                </button>
               )}
             </>
+          )}
+
+          {/* ── Trim overlay — bottom strip ───────────────────────────── */}
+          {trimOpen && (
+            <div
+              className="nodrag absolute bottom-0 left-0 right-0 z-20 px-2.5 pb-2.5 pt-1.5 flex flex-col gap-1.5"
+              style={{ background: "linear-gradient(transparent, rgba(0,0,0,0.75) 30%)" }}
+              onMouseDown={(e) => e.stopPropagation()}
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* Row: play button + trim bar */}
+              <div className="flex items-center gap-2">
+                <button
+                  onMouseDown={(e) => e.stopPropagation()}
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const v = videoRef.current;
+                    if (!v) return;
+                    if (v.paused) v.play().catch(() => {}); else v.pause();
+                  }}
+                  className="nodrag w-6 h-6 flex items-center justify-center shrink-0 text-white/80 hover:text-white"
+                >
+                  {isPlaying ? (
+                    <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor">
+                      <rect x="6" y="4" width="4" height="16" /><rect x="14" y="4" width="4" height="16" />
+                    </svg>
+                  ) : (
+                    <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor">
+                      <polygon points="5 3 19 12 5 21 5 3" />
+                    </svg>
+                  )}
+                </button>
+
+                <div
+                  ref={trimBarRef}
+                  className="relative flex-1 h-5 rounded-sm overflow-visible"
+                  style={{ background: "rgba(255,255,255,0.12)" }}
+                >
+                  {videoDuration > 0 && (
+                    <>
+                      {/* Amber border — draggable middle */}
+                      <div
+                        className="absolute inset-y-0 rounded-sm cursor-grab active:cursor-grabbing touch-none select-none"
+                        style={{
+                          left:   `${(localTrimStart / videoDuration) * 100}%`,
+                          right:  `${100 - (localTrimEnd / videoDuration) * 100}%`,
+                          border: "1.5px solid #FBBF24",
+                        }}
+                        onPointerDown={startSelectionDrag}
+                      />
+
+                      {/* Left handle (invisible hit area) */}
+                      <div
+                        className="absolute top-0 bottom-0 cursor-ew-resize touch-none select-none z-10"
+                        style={{ left: `${(localTrimStart / videoDuration) * 100}%`, transform: "translateX(-50%)", width: 14 }}
+                        onPointerDown={(e) => startHandleDrag(e, "start")}
+                      />
+
+                      {/* Right handle (invisible hit area) */}
+                      <div
+                        className="absolute top-0 bottom-0 cursor-ew-resize touch-none select-none z-10"
+                        style={{ left: `${(localTrimEnd / videoDuration) * 100}%`, transform: "translateX(-50%)", width: 14 }}
+                        onPointerDown={(e) => startHandleDrag(e, "end")}
+                      />
+
+                      {/* Playhead */}
+                      <div
+                        className="absolute top-0 bottom-0 w-[1.5px] bg-white pointer-events-none"
+                        style={{ left: `${(currentSec / videoDuration) * 100}%` }}
+                      />
+                    </>
+                  )}
+                </div>
+              </div>
+
+              {/* Row: times + action buttons */}
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] text-amber-400 font-mono">{fmtTime(localTrimStart)} – {fmtTime(localTrimEnd)}</span>
+                <div className="flex gap-1.5">
+                  {data.trimStart !== undefined && (
+                    <button
+                      onMouseDown={(e) => e.stopPropagation()}
+                      onPointerDown={(e) => e.stopPropagation()}
+                      onClick={(e) => { e.stopPropagation(); resetTrim(); }}
+                      className="nodrag h-5 px-2 rounded-full bg-white/10 text-white text-[10px] flex items-center cursor-pointer"
+                    >Reset</button>
+                  )}
+                  <button
+                    onMouseDown={(e) => e.stopPropagation()}
+                    onPointerDown={(e) => e.stopPropagation()}
+                    onClick={(e) => { e.stopPropagation(); setTrimOpen(false); videoRef.current?.play().catch(() => {}); }}
+                    className="nodrag h-5 px-2 rounded-full bg-white/10 text-white text-[10px] flex items-center cursor-pointer"
+                  >Cancel</button>
+                  <button
+                    onMouseDown={(e) => e.stopPropagation()}
+                    onPointerDown={(e) => e.stopPropagation()}
+                    onClick={(e) => { e.stopPropagation(); applyTrim(); }}
+                    className="nodrag h-5 px-2 rounded-full text-black text-[10px] font-semibold flex items-center cursor-pointer"
+                    style={{ background: "#FBBF24" }}
+                  >Apply</button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ── Captured frame preview ───────────────────────────────── */}
+          {capturedFrameUrl && showFramePreview && (
+            <div
+              className="absolute inset-0 z-20 bg-black"
+              style={{
+                opacity:    framePreviewVisible ? 1 : 0,
+                transform:  framePreviewVisible ? "scale(1)" : "scale(1.03)",
+                transition: "opacity 220ms ease, transform 220ms ease",
+              }}
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* Layer 1: optimized image (loads in background) */}
+              {capturedFrameUrl.startsWith("https://") ? (
+                <NextImage
+                  src={capturedFrameUrl}
+                  alt="Captured frame"
+                  fill
+                  quality={30}
+                  sizes="400px"
+                  onLoad={() => setFrameBlurVisible(false)}
+                  style={{ objectFit: "fill" }}
+                />
+              ) : (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={capturedFrameUrl} alt="Captured frame" className="w-full h-full" style={{ objectFit: "fill" }} />
+              )}
+
+              {/* Layer 2: blur overlay — fades out once optimized image loads */}
+              {(data.capturedFrameBlurUrl as string | undefined) && (
+                <div
+                  className="absolute inset-0 pointer-events-none"
+                  style={{
+                    backgroundImage:    `url(${data.capturedFrameBlurUrl})`,
+                    backgroundSize:     "100% 100%",
+                    filter:             "blur(20px)",
+                    opacity:            frameBlurVisible ? 1 : 0,
+                    transition:         "opacity 300ms ease",
+                  }}
+                />
+              )}
+
+              {/* Close — top right */}
+              <button
+                onMouseDown={(e) => e.stopPropagation()}
+                onClick={(e) => { e.stopPropagation(); closeFramePreview(); }}
+                className="absolute top-2 right-2 w-7 h-7 rounded-full bg-black/40 backdrop-blur-sm flex items-center justify-center pointer-events-auto z-10"
+                title="Back to video"
+              >
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round">
+                  <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+                </svg>
+              </button>
+
+              {/* Retake — bottom center */}
+              <button
+                onMouseDown={(e) => e.stopPropagation()}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setShowFramePreview(false);
+                  const v = videoRef.current;
+                  if (v) { v.pause(); setScrubPos(v.currentTime / (v.duration || 1)); }
+                  setPickerOpen(true);
+                }}
+                className="absolute bottom-3 left-1/2 -translate-x-1/2 h-7 px-4 rounded-full bg-white/90 text-black text-[11px] font-semibold flex items-center gap-1.5 pointer-events-auto z-10"
+              >
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="12" cy="12" r="3" /><path d="M20 7h-3.2L15 5H9L7.2 7H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2z" />
+                </svg>
+                Retake
+              </button>
+            </div>
           )}
 
           {/* ── Frame picker overlay ─────────────────────────────────── */}

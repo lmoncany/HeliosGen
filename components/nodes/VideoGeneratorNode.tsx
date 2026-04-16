@@ -60,7 +60,8 @@ export default function VideoGeneratorNode({ id, data }: NodeProps<VideoGenerato
   const [durOpen, setDurOpen] = useState(false);
   const [modeOpen, setModeOpen] = useState(false);
   const [grokResOpen, setGrokResOpen] = useState(false);
-  const [muted, setMuted] = useState(true);
+  const [muted, setMuted]       = useState(true);
+  const [hovering, setHovering] = useState(false);
   const [progress, setProgress] = useState(0);
   const [currentSec, setCurrentSec] = useState(0);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -113,6 +114,40 @@ export default function VideoGeneratorNode({ id, data }: NodeProps<VideoGenerato
     });
     return () => cancelAnimationFrame(raf);
   }, [id, aspectRatio, data.imageNaturalRatio, updateNodeSize, updateNodeInternals]);
+
+  // ── Poll job-status while a taskId is pending ────────────────────────────
+  useEffect(() => {
+    const taskId = data.taskId as string | undefined;
+    if (!taskId || status !== "running") return;
+
+    let cancelled = false;
+
+    const interval = setInterval(async () => {
+      try {
+        const res  = await fetch(`/api/job-status?taskId=${taskId}`);
+        const json = await res.json();
+        if (cancelled) return;
+
+        if (json.status === "done" && json.videoUrl) {
+          const prevGens = (useWorkflowStore.getState().nodes.find((n) => n.id === id)?.data?.generations as string[] | undefined) ?? [];
+          const newGens  = [...prevGens, json.videoUrl as string];
+          updateNodeData(id, { status: "done", videoUrl: json.videoUrl, taskId: undefined, generations: newGens, currentGenIdx: newGens.length - 1 });
+          clearInterval(interval);
+        } else if (json.status === "error") {
+          updateNodeData(id, { status: "error", errorMsg: json.error, taskId: undefined });
+          clearInterval(interval);
+        } else if (json.status === "not_found") {
+          updateNodeData(id, { status: "error", errorMsg: "Job lost (server restarted)", taskId: undefined });
+          clearInterval(interval);
+        }
+        // "pending" → keep polling
+      } catch {
+        // network hiccup — keep polling
+      }
+    }, 5000);
+
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [data.taskId, status, id, updateNodeData]);
 
   // All 4 handle slots always render at fixed positions so anchors never jump.
   // Handles not in cfg.handles are hidden.
@@ -183,6 +218,37 @@ export default function VideoGeneratorNode({ id, data }: NodeProps<VideoGenerato
       if (hasError) return;
     }
 
+    // Trim videoRef if the source node has trim points applied
+    let finalVideoRefUrl = upstream.videoRefUrl;
+    if (finalVideoRefUrl) {
+      const videoRefEdge = edges.find((e) => e.target === id && e.targetHandle === "videoRef");
+      if (videoRefEdge) {
+        const videoSrcNode = nodes.find((n) => n.id === videoRefEdge.source);
+        const tStart = videoSrcNode?.data.trimStart as number | undefined;
+        const tEnd   = videoSrcNode?.data.trimEnd   as number | undefined;
+        if (tStart !== undefined && tEnd !== undefined) {
+          try {
+            const { data: authData } = await createClient().auth.getSession();
+            const token = authData.session?.access_token;
+            const trimRes = await fetch("/api/trim-video", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                ...(token ? { Authorization: `Bearer ${token}` } : {}),
+              },
+              body: JSON.stringify({ videoUrl: finalVideoRefUrl, startTime: tStart, endTime: tEnd }),
+            });
+            if (trimRes.ok) {
+              const trimJson = await trimRes.json();
+              if (trimJson.cdnUrl) finalVideoRefUrl = trimJson.cdnUrl;
+            }
+          } catch {
+            // trim failed — proceed with original URL
+          }
+        }
+      }
+    }
+
     // Build full payload first so debug log matches what gets sent
     const payload: Record<string, unknown> = {
       videoModel: videoModelId,
@@ -194,7 +260,7 @@ export default function VideoGeneratorNode({ id, data }: NodeProps<VideoGenerato
       sound,
       startFrameUrl:      upstream.startFrameUrl,
       endFrameUrl:        upstream.endFrameUrl,
-      videoRefUrl:        upstream.videoRefUrl,
+      videoRefUrl:        finalVideoRefUrl,
       resources:          upstream.resources,
       referenceImageUrls: upstream.resources.length > 0
         ? upstream.resources.map((r) => r.url)
@@ -202,15 +268,25 @@ export default function VideoGeneratorNode({ id, data }: NodeProps<VideoGenerato
     };
 
     if (debugMode) {
-      console.log(`[DEBUG] videoNode=${id}`, payload);
       setLoading(true);
-      await new Promise((r) => setTimeout(r, 3000));
-      setLoading(false);
+      try {
+        const res  = await fetch("/api/generate-video", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ...payload, debugOnly: true }),
+        });
+        const json = await res.json();
+        console.log(`[DEBUG] videoNode=${id} — kie.ai payload:`, json.debugPayload ?? json);
+      } catch (e) {
+        console.log(`[DEBUG] videoNode=${id} — app payload (API unreachable):`, payload);
+      } finally {
+        setLoading(false);
+      }
       return;
     }
 
     setLoading(true);
-    updateNodeData(id, { status: "running", videoUrl: undefined, imageNaturalRatio: undefined, errorMsg: undefined });
+    updateNodeData(id, { status: "running", videoUrl: undefined, imageNaturalRatio: undefined, errorMsg: undefined, taskId: undefined });
 
     try {
       const res = await fetch("/api/generate-video", {
@@ -220,8 +296,8 @@ export default function VideoGeneratorNode({ id, data }: NodeProps<VideoGenerato
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error);
-      const newGens = [...generationsRef.current, json.videoUrl as string];
-      updateNodeData(id, { status: "done", videoUrl: json.videoUrl, generations: newGens, currentGenIdx: newGens.length - 1 });
+      // Store taskId — the polling useEffect above will wait for completion
+      updateNodeData(id, { taskId: json.taskId });
     } catch (e: unknown) {
       updateNodeData(id, {
         status: "error",
@@ -299,6 +375,8 @@ export default function VideoGeneratorNode({ id, data }: NodeProps<VideoGenerato
         <div
           className="relative bg-[#090B0D] rounded-t-[7px] overflow-hidden group/player group/gen"
           style={{ aspectRatio: (data.imageNaturalRatio as string | undefined) ?? "16 / 9", width: "100%" }}
+          onMouseEnter={() => setHovering(true)}
+          onMouseLeave={() => setHovering(false)}
         >
           {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
           <video
@@ -310,7 +388,7 @@ export default function VideoGeneratorNode({ id, data }: NodeProps<VideoGenerato
             autoPlay
             loop
             playsInline
-            muted={muted}
+            muted={muted || !hovering}
             onLoadedMetadata={handleVideoMeta}
             onTimeUpdate={(e) => {
               const v = e.currentTarget;
@@ -469,89 +547,46 @@ export default function VideoGeneratorNode({ id, data }: NodeProps<VideoGenerato
         </div>
       )}
 
-      {/* ── Row 1: model · ratio · duration ──────────────────────────── */}
-      <div className="flex items-center gap-1.5 px-3 py-2 border-t border-[#111]">
-        {/* Model selector */}
-        <div className="relative">
-          <Pill onClick={() => { setModelOpen((o) => !o); setRatioOpen(false); setDurOpen(false); setModeOpen(false); setGrokResOpen(false); }}>
-            <span className="text-[11px] text-[#AAAAAA]">{cfg.name}</span>
-            <ChevronIcon open={modelOpen} />
-          </Pill>
-          {modelOpen && (
-            <FloatMenu>
-              {VIDEO_MODEL_CFG.map((m) => (
-                <button
-                  key={m.id}
-                  onMouseDown={(e) => e.stopPropagation()}
-                  onClick={() => {
-                    const validRatio = m.ratios.includes(aspectRatio) ? aspectRatio : m.defaultRatio;
-                    const validDur = m.durations.includes(duration) ? duration : m.defaultDuration;
-                    updateNodeData(id, { videoModel: m.id, aspectRatio: validRatio, duration: validDur });
-                    // Kill edges on handles the new model doesn't support
-                    const removedHandles = (cfg.handles as string[]).filter(
-                      (h) => !(m.handles as string[]).includes(h)
-                    );
-                    if (removedHandles.length) killEdgesForHandles(id, removedHandles);
-                    setModelOpen(false);
-                  }}
-                  className={`w-full flex items-center justify-between px-3 py-2 text-[11px] hover:bg-[#161A1E] transition-colors ${videoModelId === m.id ? "text-white font-medium" : "text-[#8D8E89]"
-                    }`}
-                >
-                  <span>{m.name}</span>
-                  <span className="text-[#4A4A45]">{m.provider}</span>
-                </button>
-              ))}
-            </FloatMenu>
-          )}
-        </div>
+      {(() => {
+        // When a model has no ratio/duration options (e.g. motion control), collapse
+        // both rows into one and show mode+resolution inline with the model selector.
+        const hasRatioOrDur = ratios.length > 0 || durations.length > 0;
 
-        {/* Aspect ratio */}
-        <div className="relative">
-          <Pill onClick={() => { setRatioOpen((o) => !o); setModelOpen(false); setDurOpen(false); setModeOpen(false); setGrokResOpen(false); }}>
-            <AspectIcon ratio={aspectRatio} />
-            <span className="text-[11px] text-[#AAAAAA]">{aspectRatio}</span>
-            <ChevronIcon open={ratioOpen} />
-          </Pill>
-          {ratioOpen && (
-            <FloatMenu>
-              {(ratios as readonly string[]).map((r) => (
-                <FloatItem key={r} active={aspectRatio === r} onClick={() => { updateNodeData(id, { aspectRatio: r }); setRatioOpen(false); }}>
-                  {r}
-                </FloatItem>
-              ))}
-            </FloatMenu>
-          )}
-        </div>
+        // Reusable mode picker — composite pill with optional i tooltip inside
+        const modePicker = cfg.modes ? (
+          <div className="relative shrink-0">
+            <div className="flex items-center rounded-full" style={{ background: "#111317" }}>
+              {/* Dropdown trigger */}
+              <button
+                onMouseDown={(e) => e.stopPropagation()}
+                onClick={() => { setModeOpen((o) => !o); setModelOpen(false); setRatioOpen(false); setDurOpen(false); setGrokResOpen(false); }}
+                className="flex items-center gap-1.5 pl-2.5 pr-1.5 py-1.5 hover:brightness-125 transition-all whitespace-nowrap"
+              >
+                <span className="text-[11px] text-[#AAAAAA]">
+                  {cfg.modes.find((m) => m.value === mode)?.label ?? mode}
+                </span>
+                <ChevronIcon open={modeOpen} />
+              </button>
 
-        {/* Duration */}
-        <div className="relative flex-1">
-          <Pill fullWidth onClick={() => { setDurOpen((o) => !o); setModelOpen(false); setRatioOpen(false); setModeOpen(false); setGrokResOpen(false); }}>
-            <span className="text-[11px] text-[#AAAAAA] tabular-nums">{duration}s</span>
-            <ChevronIcon open={durOpen} />
-          </Pill>
-          {durOpen && (
-            <FloatMenu fullWidth>
-              {(durations as readonly number[]).map((d) => (
-                <FloatItem key={d} active={duration === d} onClick={() => { updateNodeData(id, { duration: d }); setDurOpen(false); }}>
-                  {d}s
-                </FloatItem>
-              ))}
-            </FloatMenu>
-          )}
-        </div>
-      </div>
+              {/* i info icon — only for motion-control character_orientation */}
+              {cfg.apiInput.useMotionControl && (
+                <>
+                  <span className="w-px h-3 bg-[#252525] shrink-0" />
+                  <div className="relative group/orient-info flex items-center px-2 py-1.5">
+                    <div className="w-3.5 h-3.5 rounded-full border border-[#383838] flex items-center justify-center text-[#555] hover:text-[#AAA] hover:border-[#555] transition-colors cursor-default select-none">
+                      <span className="text-[8px] font-semibold leading-none">i</span>
+                    </div>
+                    <div
+                      className="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-56 px-3 py-2 rounded-lg text-[10px] leading-[1.6] text-[#AAAAAA] opacity-0 group-hover/orient-info:opacity-100 transition-opacity z-50"
+                      style={{ background: "#111317", border: "1px solid #2A2A2A" }}
+                    >
+                      When Character Orientation matches the video, complex motions perform better; when it matches the image, camera movements are better supported.
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
 
-      {/* ── Row 2: model-specific controls ───────────────────────────── */}
-      <div className="flex items-center gap-1.5 px-3 py-2 border-t border-[#111]">
-        {/* Mode picker — shown for any model with cfg.modes (Kling: 720p/1080p, Grok: fun/normal/spicy) */}
-        {cfg.modes && (
-          <div className="relative">
-            <Pill onClick={() => { setModeOpen((o) => !o); setModelOpen(false); setRatioOpen(false); setDurOpen(false); setGrokResOpen(false); }}>
-              <span className="text-[11px] text-[#AAAAAA]">
-                {cfg.modes.find((m) => m.value === mode)?.label ?? mode}
-              </span>
-              <ChevronIcon open={modeOpen} />
-            </Pill>
             {modeOpen && (
               <FloatMenu>
                 {cfg.modes.map((m) => (
@@ -562,11 +597,11 @@ export default function VideoGeneratorNode({ id, data }: NodeProps<VideoGenerato
               </FloatMenu>
             )}
           </div>
-        )}
+        ) : null;
 
-        {/* Resolution picker — shown for models with cfg.resolutions (Grok) */}
-        {cfg.resolutions && (
-          <div className="relative">
+        // Reusable resolution picker
+        const resPicker = cfg.resolutions ? (
+          <div className="relative shrink-0">
             <Pill onClick={() => { setGrokResOpen((o) => !o); setModelOpen(false); setRatioOpen(false); setDurOpen(false); setModeOpen(false); }}>
               <span className="text-[11px] text-[#AAAAAA]">{resolution}</span>
               <ChevronIcon open={grokResOpen} />
@@ -581,52 +616,147 @@ export default function VideoGeneratorNode({ id, data }: NodeProps<VideoGenerato
               </FloatMenu>
             )}
           </div>
-        )}
+        ) : null;
 
-        {/* Sound toggle — shown for models with cfg.sound (Kling) */}
-        {cfg.sound && (
+        // Status dot + generate button (always shown)
+        const actionControls = (
           <>
+            <span className={`w-1.5 h-1.5 rounded-full shrink-0 ml-auto ${STATUS_DOT[status]}`} />
             <button
               onMouseDown={(e) => e.stopPropagation()}
-              onClick={() => updateNodeData(id, { sound: !sound })}
-              className="flex items-center gap-2 rounded-full px-2.5 py-1.5 transition-colors"
-              style={{ background: "#111317" }}
+              onClick={generate}
+              disabled={busy}
+              className="w-8 h-8 flex items-center justify-center rounded-full bg-white hover:bg-[#E8E8E8] transition-colors disabled:opacity-30 disabled:cursor-not-allowed shrink-0"
             >
-              <ToggleSwitch on={sound} />
-              <span className="text-[11px] text-[#AAAAAA]">Sound</span>
-            </button>
-
-            <button
-              onMouseDown={(e) => e.stopPropagation()}
-              className="w-6 h-6 flex items-center justify-center rounded-full text-[#444] hover:text-[#888] transition-colors"
-              style={{ background: "#111317" }}
-            >
-              <GearIcon />
+              <svg width="9" height="10" viewBox="0 0 9 10" fill="#0A0C0E">
+                <path d="M8.5 4.634a.5.5 0 0 1 0 .732l-7.5 4.5A.5.5 0 0 1 .25 9.5v-9A.5.5 0 0 1 1 .17l7.5 4.464Z" />
+              </svg>
             </button>
           </>
-        )}
+        );
 
-        {/* Reference image indicator — shown when resource handle is active and connected */}
-        {activeHandles.has("resource") && hasResource && (
-          <div className="flex items-center gap-1.5 px-2 py-1 rounded-full" style={{ background: "#111317" }}>
-            <span className="w-1.5 h-1.5 rounded-full bg-[#fb923c] shrink-0" />
-            <span className="text-[10px] text-[#AAAAAA]">Img ref</span>
-          </div>
-        )}
+        return (
+          <>
+            {/* ── Row 1: model · ratio · duration (+ mode/res when no ratio/dur) ── */}
+            <div className="flex items-center flex-wrap gap-1.5 px-3 py-2 border-t border-[#111]">
+              {/* Model selector */}
+              <div className="relative">
+                <Pill onClick={() => { setModelOpen((o) => !o); setRatioOpen(false); setDurOpen(false); setModeOpen(false); setGrokResOpen(false); }}>
+                  <span className="text-[11px] text-[#AAAAAA]">{cfg.name}</span>
+                  <ChevronIcon open={modelOpen} />
+                </Pill>
+                {modelOpen && (
+                  <FloatMenu>
+                    {VIDEO_MODEL_CFG.map((m) => (
+                      <button
+                        key={m.id}
+                        onMouseDown={(e) => e.stopPropagation()}
+                        onClick={() => {
+                          const validRatio = m.ratios.includes(aspectRatio) ? aspectRatio : m.defaultRatio;
+                          const validDur = m.durations.includes(duration) ? duration : m.defaultDuration;
+                          updateNodeData(id, { videoModel: m.id, aspectRatio: validRatio, duration: validDur });
+                          const removedHandles = (cfg.handles as string[]).filter((h) => !(m.handles as string[]).includes(h));
+                          if (removedHandles.length) killEdgesForHandles(id, removedHandles);
+                          setModelOpen(false);
+                        }}
+                        className={`w-full flex items-center justify-between px-3 py-2 text-[11px] hover:bg-[#161A1E] transition-colors ${videoModelId === m.id ? "text-white font-medium" : "text-[#8D8E89]"}`}
+                      >
+                        <span>{m.name}</span>
+                        <span className="text-[#4A4A45]">{m.provider}</span>
+                      </button>
+                    ))}
+                  </FloatMenu>
+                )}
+              </div>
 
-        <span className={`w-1.5 h-1.5 rounded-full shrink-0 ml-auto ${STATUS_DOT[status]}`} />
+              {/* Ratio */}
+              {ratios.length > 0 && (
+                <div className="relative">
+                  <Pill onClick={() => { setRatioOpen((o) => !o); setModelOpen(false); setDurOpen(false); setModeOpen(false); setGrokResOpen(false); }}>
+                    <AspectIcon ratio={aspectRatio} />
+                    <span className="text-[11px] text-[#AAAAAA]">{aspectRatio}</span>
+                    <ChevronIcon open={ratioOpen} />
+                  </Pill>
+                  {ratioOpen && (
+                    <FloatMenu>
+                      {(ratios as readonly string[]).map((r) => (
+                        <FloatItem key={r} active={aspectRatio === r} onClick={() => { updateNodeData(id, { aspectRatio: r }); setRatioOpen(false); }}>
+                          {r}
+                        </FloatItem>
+                      ))}
+                    </FloatMenu>
+                  )}
+                </div>
+              )}
 
-        <button
-          onMouseDown={(e) => e.stopPropagation()}
-          onClick={generate}
-          disabled={busy}
-          className="w-8 h-8 flex items-center justify-center rounded-full bg-white hover:bg-[#E8E8E8] transition-colors disabled:opacity-30 disabled:cursor-not-allowed shrink-0"
-        >
-          <svg width="9" height="10" viewBox="0 0 9 10" fill="#0A0C0E">
-            <path d="M8.5 4.634a.5.5 0 0 1 0 .732l-7.5 4.5A.5.5 0 0 1 .25 9.5v-9A.5.5 0 0 1 1 .17l7.5 4.464Z" />
-          </svg>
-        </button>
-      </div>
+              {/* Duration */}
+              {durations.length > 0 && (
+                <div className="relative flex-1">
+                  <Pill fullWidth onClick={() => { setDurOpen((o) => !o); setModelOpen(false); setRatioOpen(false); setModeOpen(false); setGrokResOpen(false); }}>
+                    <span className="text-[11px] text-[#AAAAAA] tabular-nums">{duration}s</span>
+                    <ChevronIcon open={durOpen} />
+                  </Pill>
+                  {durOpen && (
+                    <FloatMenu fullWidth>
+                      {(durations as readonly number[]).map((d) => (
+                        <FloatItem key={d} active={duration === d} onClick={() => { updateNodeData(id, { duration: d }); setDurOpen(false); }}>
+                          {d}s
+                        </FloatItem>
+                      ))}
+                    </FloatMenu>
+                  )}
+                </div>
+              )}
+
+              {/* When no ratio/duration: show mode + resolution inline here */}
+              {!hasRatioOrDur && modePicker}
+              {!hasRatioOrDur && resPicker}
+              {!hasRatioOrDur && actionControls}
+            </div>
+
+            {/* ── Row 2: model-specific controls + status + generate ────────── */}
+            {/* Only rendered when Row 1 already has ratio/duration controls */}
+            {hasRatioOrDur && (
+              <div className="flex items-center flex-wrap gap-1.5 px-3 py-2 border-t border-[#111]">
+                {modePicker}
+                {resPicker}
+
+                {/* Sound toggle */}
+                {cfg.sound && (
+                  <>
+                    <button
+                      onMouseDown={(e) => e.stopPropagation()}
+                      onClick={() => updateNodeData(id, { sound: !sound })}
+                      className="flex items-center gap-2 rounded-full px-2.5 py-1.5 transition-colors"
+                      style={{ background: "#111317" }}
+                    >
+                      <ToggleSwitch on={sound} />
+                      <span className="text-[11px] text-[#AAAAAA]">Sound</span>
+                    </button>
+                    <button
+                      onMouseDown={(e) => e.stopPropagation()}
+                      className="w-6 h-6 flex items-center justify-center rounded-full text-[#444] hover:text-[#888] transition-colors"
+                      style={{ background: "#111317" }}
+                    >
+                      <GearIcon />
+                    </button>
+                  </>
+                )}
+
+                {/* Reference image indicator */}
+                {activeHandles.has("resource") && hasResource && (
+                  <div className="flex items-center gap-1.5 px-2 py-1 rounded-full" style={{ background: "#111317" }}>
+                    <span className="w-1.5 h-1.5 rounded-full bg-[#fb923c] shrink-0" />
+                    <span className="text-[10px] text-[#AAAAAA]">Img ref</span>
+                  </div>
+                )}
+
+                {actionControls}
+              </div>
+            )}
+          </>
+        );
+      })()}
 
       {busy && <SpinnerOverlay color="#3A6FFF" />}
     </div>
@@ -661,7 +791,7 @@ function Pill({
     <Tag
       onMouseDown={onClick ? (e: React.MouseEvent) => e.stopPropagation() : undefined}
       onClick={onClick}
-      className={`flex items-center gap-1.5 rounded-full px-2.5 py-1.5 ${fullWidth ? "w-full justify-between" : ""} ${interactive && onClick ? "hover:brightness-125 transition-all cursor-pointer" : ""
+      className={`flex items-center gap-1.5 rounded-full px-2.5 py-1.5 whitespace-nowrap shrink-0 ${fullWidth ? "w-full justify-between" : ""} ${interactive && onClick ? "hover:brightness-125 transition-all cursor-pointer" : ""
         }`}
       style={{ background: "#111317" }}
     >

@@ -13,10 +13,16 @@ type ImageInputNodeType = Node<NodeData, "imageInputNode">;
 export default function ImageInputNode({ id, data }: NodeProps<ImageInputNodeType>) {
   const updateNodeData = useWorkflowStore((s) => s.updateNodeData);
   const fileRef        = useRef<HTMLInputElement>(null);
-  const [lightboxOpen, setLightboxOpen]       = useState(false);
-  const [lightboxVisible, setLightboxVisible] = useState(false);
+  const nodeImgRef     = useRef<HTMLImageElement>(null);
+  const [lightboxOpen, setLightboxOpen]           = useState(false);
+  const [lightboxVisible, setLightboxVisible]     = useState(false);
+  const [lightboxImgLoaded, setLightboxImgLoaded] = useState(false);
+  const [blurSrc, setBlurSrc]                     = useState<string | null>(null);
 
   const openLightbox = useCallback(() => {
+    // Grab the currentSrc of the already-rendered node image (cached low-quality URL)
+    setBlurSrc(nodeImgRef.current?.currentSrc ?? null);
+    setLightboxImgLoaded(false);
     setLightboxOpen(true);
     requestAnimationFrame(() => setLightboxVisible(true));
   }, []);
@@ -36,7 +42,7 @@ export default function ImageInputNode({ id, data }: NodeProps<ImageInputNodeTyp
 
   const setImage = useCallback(
     (src: string, mimeType?: string) => {
-      const img = new Image();
+      const img = new window.Image();
       img.onload = () => {
         updateNodeData(id, {
           inputImage: src,
@@ -85,7 +91,7 @@ export default function ImageInputNode({ id, data }: NodeProps<ImageInputNodeTyp
         const { cdnUrl } = await lookupRes.json() as { cdnUrl: string | null };
         if (cdnUrl) {
           // Already uploaded — use existing URL directly
-          const img = new Image();
+          const img = new window.Image();
           img.onload = () => updateNodeData(id, {
             inputImage:        cdnUrl,
             imageNaturalRatio: `${img.naturalWidth} / ${img.naturalHeight}`,
@@ -100,7 +106,7 @@ export default function ImageInputNode({ id, data }: NodeProps<ImageInputNodeTyp
 
       // ── Show local preview immediately ────────────────────────────────────
       const blobUrl = URL.createObjectURL(file);
-      const img = new Image();
+      const img = new window.Image();
       img.onload = () => {
         updateNodeData(id, {
           inputImage:        blobUrl,
@@ -167,6 +173,7 @@ export default function ImageInputNode({ id, data }: NodeProps<ImageInputNodeTyp
         >
           {imageSrc.startsWith("https://") ? (
             <Image
+              ref={nodeImgRef}
               src={imageSrc}
               alt="Input"
               fill
@@ -178,6 +185,7 @@ export default function ImageInputNode({ id, data }: NodeProps<ImageInputNodeTyp
             // blob: or data: URLs — next/image doesn't handle these, use plain img
             // eslint-disable-next-line @next/next/no-img-element
             <img
+              ref={nodeImgRef}
               src={imageSrc}
               alt="Input"
               style={{ width: "100%", height: "100%", display: "block", objectFit: "fill" }}
@@ -228,19 +236,39 @@ export default function ImageInputNode({ id, data }: NodeProps<ImageInputNodeTyp
             onClick={closeLightbox}
           >
             <div
-              className="transition-all duration-200 ease-in-out rounded-2xl overflow-hidden"
+              className="relative transition-all duration-200 ease-in-out rounded-2xl overflow-hidden"
               style={{
                 transform: lightboxVisible ? "scale(1)" : "scale(0.95)",
                 boxShadow: "0 0 0 8px #3a3a3a",
               }}
               onClick={(e) => e.stopPropagation()}
             >
+              {/* Layer 1: full-res image */}
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
                 src={imageSrc}
                 alt="Full quality"
                 className="block max-w-[90vw] max-h-[90vh] object-contain"
+                onLoad={() => setLightboxImgLoaded(true)}
               />
+
+              {/* Layer 2: blur overlay — uses the already-cached node image, fades out once full-res loads */}
+              {blurSrc && (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={blurSrc}
+                  alt=""
+                  aria-hidden="true"
+                  className="absolute inset-0 w-full h-full pointer-events-none"
+                  style={{
+                    objectFit:  "cover",
+                    filter:     "blur(24px)",
+                    transform:  "scale(1.1)",
+                    opacity:    lightboxImgLoaded ? 0 : 1,
+                    transition: "opacity 300ms ease",
+                  }}
+                />
+              )}
             </div>
           </div>,
           document.body

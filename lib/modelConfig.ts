@@ -291,13 +291,20 @@ export const VIDEO_MODELS: VideoModel[] = [
     handles: ["prompt", "startFrame", "videoRef"],
     sound: false,
     promptOptional: true,
-    // No modes selector — character_orientation is always "image" per API docs
+    // character_orientation: "image" keeps subject pose from reference image (max 10s)
+    // character_orientation: "video" follows subject pose from motion video (max 30s)
+    modes: [
+      { value: "image", label: "Image orient." },
+      { value: "video", label: "Video orient." },
+    ],
+    defaultMode: "image",
     resolutions: ["720p", "1080p"],
     defaultResolution: "720p",
     apiInput: {
       durationMin: 0,
-      durationMax: 0,                // no duration field sent to the API
-      resolutionKey: "mode",         // resolution selector → mode (720p / 1080p)
+      durationMax: 0,                    // no duration field sent to the API
+      modeKey: "character_orientation",  // mode selector → character_orientation
+      resolutionKey: "mode",             // resolution selector → mode (720p / 1080p)
       useMotionControl: true,
     },
   },

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { ensureR2, mirrorToR2 } from "@/lib/r2";
+import { jobStore } from "@/lib/jobStore";
+import { ensureR2 } from "@/lib/r2";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { VIDEO_MODELS } from "@/lib/modelConfig";
 
@@ -8,17 +9,6 @@ const KIE_BASE = "https://api.kie.ai";
 interface Resource {
   url: string;
   label: string;
-}
-
-function extractVideoUrl(resultJson?: string): string | undefined {
-  if (!resultJson) return undefined;
-  try {
-    const parsed = JSON.parse(resultJson);
-    const urls = parsed.resultUrls ?? parsed.resultUrl ?? parsed.videoUrl;
-    return Array.isArray(urls) ? urls[0] : urls;
-  } catch {
-    return undefined;
-  }
 }
 
 async function getUserId(req: NextRequest): Promise<string | null> {
@@ -43,17 +33,19 @@ export async function POST(req: NextRequest) {
     aspectRatio     = "16:9",
     mode            = "pro",
     resolution      = "480p",
+    debugOnly       = false,
   } = await req.json();
 
   const apiKey = process.env.KIE_API_TOKEN;
-  if (!apiKey) {
-    return NextResponse.json({ error: "KIE_API_TOKEN not set" }, { status: 500 });
-  }
+  if (!apiKey) return NextResponse.json({ error: "KIE_API_TOKEN not set" }, { status: 500 });
+
+  const callbackBase = process.env.CALLBACK_BASE_URL;
+  if (!callbackBase) return NextResponse.json({ error: "CALLBACK_BASE_URL not set" }, { status: 500 });
+
+  const callBackUrl = `${callbackBase.replace(/\/$/, "")}/api/callback`;
 
   const cfg = VIDEO_MODELS.find((m) => m.id === videoModel);
-  if (!cfg) {
-    return NextResponse.json({ error: `Unknown video model: ${videoModel}` }, { status: 400 });
-  }
+  if (!cfg) return NextResponse.json({ error: `Unknown video model: ${videoModel}` }, { status: 400 });
 
   const { apiInput } = cfg;
 
@@ -66,20 +58,18 @@ export async function POST(req: NextRequest) {
 
   if (apiInput.useMotionControl) {
     // ── Kling 2.6 motion control ──────────────────────────────────────────────
-    // API format: { prompt, input_urls, video_urls, mode, character_orientation }
-    // character_orientation is always "image" (use the image reference to drive
-    // the character pose; the video_urls supply the motion template).
+    // { prompt, input_urls, video_urls, mode, character_orientation }
     const [inputImageUrl, inputVideoUrl] = await Promise.all([
       rawStartFrame ? ensureR2(rawStartFrame, "references").catch(() => rawStartFrame) : Promise.resolve(undefined),
       rawVideoRef   ? ensureR2(rawVideoRef,   "references").catch(() => rawVideoRef)   : Promise.resolve(undefined),
     ]);
 
     input = {
-      prompt:               prompt ?? "",
-      input_urls:           inputImageUrl ? [inputImageUrl] : [],
-      video_urls:           inputVideoUrl ? [inputVideoUrl] : [],
-      mode:                 resolution,   // "720p" or "1080p"
-      character_orientation: "image",     // fixed per API docs
+      prompt:                prompt ?? "",
+      input_urls:            inputImageUrl ? [inputImageUrl] : [],
+      video_urls:            inputVideoUrl ? [inputVideoUrl] : [],
+      mode:                  resolution,   // "720p" or "1080p"
+      character_orientation: mode,         // "image" or "video"
     };
 
   } else if (apiInput.referenceImagesKey) {
@@ -91,16 +81,14 @@ export async function POST(req: NextRequest) {
     ).filter((u): u is string => u !== null);
 
     input = {
-      prompt:                          prompt ?? "",
-      [apiInput.aspectRatioKey]:       aspectRatio,
-      [apiInput.durationKey]:          clampedDuration,
+      prompt:                    prompt ?? "",
+      [apiInput.aspectRatioKey!]: aspectRatio,
+      [apiInput.durationKey!]:    clampedDuration,
     };
 
     if (apiInput.modeKey)       input[apiInput.modeKey]       = mode;
     if (apiInput.resolutionKey) input[apiInput.resolutionKey] = resolution;
     if (apiInput.extra)         Object.assign(input, apiInput.extra);
-
-    // Include reference images when connected (switches to image-guided mode)
     if (refImageUrls.length > 0) input[apiInput.referenceImagesKey] = refImageUrls;
 
   } else {
@@ -117,9 +105,9 @@ export async function POST(req: NextRequest) {
     ]);
 
     input = {
-      prompt:                    prompt ?? "",
-      [apiInput.aspectRatioKey]: aspectRatio,
-      [apiInput.durationKey]:    apiInput.durationAsString ? String(clampedDuration) : clampedDuration,
+      prompt:                     prompt ?? "",
+      [apiInput.aspectRatioKey!]: aspectRatio,
+      [apiInput.durationKey!]:    apiInput.durationAsString ? String(clampedDuration) : clampedDuration,
     };
 
     if (apiInput.modeKey)  input[apiInput.modeKey]  = mode;
@@ -142,11 +130,16 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // Submit task
+  // Debug mode — return the exact kie.ai payload without submitting
+  if (debugOnly) {
+    return NextResponse.json({ debugPayload: { model: cfg.apiId, callBackUrl, input } });
+  }
+
+  // Submit task to kie.ai
   const createRes = await fetch(`${KIE_BASE}/api/v1/jobs/createTask`, {
     method:  "POST",
     headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-    body:    JSON.stringify({ model: cfg.apiId, input }),
+    body:    JSON.stringify({ model: cfg.apiId, callBackUrl, input }),
   });
 
   if (!createRes.ok) {
@@ -159,14 +152,14 @@ export async function POST(req: NextRequest) {
   }
 
   const taskId = created.data?.taskId;
-  if (!taskId) {
-    return NextResponse.json({ error: "No taskId returned" }, { status: 500 });
-  }
+  if (!taskId) return NextResponse.json({ error: "No taskId returned" }, { status: 500 });
 
-  // Save pending record to Supabase
+  // Register as pending so the frontend can poll job-status
+  jobStore.set(taskId, { status: "pending", type: "video" });
+
+  // Save to Supabase (fire-and-forget)
   const userId = await getUserId(req);
 
-  // Collect reference URLs for DB record from whichever input fields were used
   const referenceUrls: string[] = apiInput.useMotionControl
     ? [
         ...((input.input_urls as string[] | undefined) ?? []),
@@ -196,58 +189,5 @@ export async function POST(req: NextRequest) {
     if (error) console.error("[generate-video] supabase insert error:", error.message);
   });
 
-  // Poll recordInfo — up to 5 min (60 × 5 s)
-  for (let i = 0; i < 60; i++) {
-    await new Promise((r) => setTimeout(r, 5000));
-
-    const poll = await fetch(
-      `${KIE_BASE}/api/v1/jobs/recordInfo?taskId=${taskId}`,
-      { headers: { Authorization: `Bearer ${apiKey}` } },
-    );
-
-    if (!poll.ok) continue;
-
-    const data = await poll.json();
-    if (data.code !== 200) continue;
-
-    const state = String(data.data?.state ?? "").toLowerCase();
-
-    if (state === "success") {
-      const kieVideoUrl = extractVideoUrl(data.data?.resultJson);
-      if (!kieVideoUrl) {
-        return NextResponse.json({ error: "Generation succeeded but no video URL found" }, { status: 500 });
-      }
-
-      // Upload video to R2
-      let videoUrl = kieVideoUrl;
-      try {
-        videoUrl = await mirrorToR2(kieVideoUrl, "videos");
-      } catch (err) {
-        console.error("[generate-video] R2 upload failed, using kie.ai URL:", err);
-      }
-
-      // Update Supabase record
-      supabaseAdmin
-        .from("generations")
-        .update({ status: "done", video_url: videoUrl })
-        .eq("task_id", taskId)
-        .then(({ error }) => {
-          if (error) console.error("[generate-video] supabase update error:", error.message);
-        });
-
-      return NextResponse.json({ videoUrl });
-    }
-
-    if (state === "fail") {
-      const errMsg = data.data?.failMsg ?? "Generation failed";
-      supabaseAdmin
-        .from("generations")
-        .update({ status: "error", error_msg: errMsg })
-        .eq("task_id", taskId)
-        .then(() => {});
-      return NextResponse.json({ error: errMsg }, { status: 500 });
-    }
-  }
-
-  return NextResponse.json({ error: "Timed out after 5 minutes" }, { status: 504 });
+  return NextResponse.json({ taskId });
 }
