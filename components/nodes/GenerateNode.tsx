@@ -161,8 +161,28 @@ export default function GenerateNode({ id, data }: NodeProps<GenerateNodeType>) 
   const [hoveredHandle, setHoveredHandle] = useState<"prompt" | "image" | null>(null);
   const [lightboxOpen, setLightboxOpen]       = useState(false);
   const [lightboxVisible, setLightboxVisible] = useState(false);
+  const [lightboxImgLoaded, setLightboxImgLoaded] = useState(false);
+  const [blurSrc, setBlurSrc] = useState<string | null>(null);
+  const nodeImgRef = useRef<HTMLImageElement>(null);
 
   const openLightbox = useCallback(() => {
+    setLightboxImgLoaded(false);
+    // Snapshot the already-painted pixels — instant, no network/decode delay
+    const imgEl = nodeImgRef.current;
+    if (imgEl && imgEl.naturalWidth > 0) {
+      try {
+        const canvas = document.createElement("canvas");
+        canvas.width  = imgEl.naturalWidth;
+        canvas.height = imgEl.naturalHeight;
+        canvas.getContext("2d")?.drawImage(imgEl, 0, 0);
+        setBlurSrc(canvas.toDataURL());
+      } catch {
+        // Cross-origin fallback (shouldn't happen with /_next/image)
+        setBlurSrc(imgEl.currentSrc ?? null);
+      }
+    } else {
+      setBlurSrc(null);
+    }
     setLightboxOpen(true);
     requestAnimationFrame(() => setLightboxVisible(true));
   }, []);
@@ -392,6 +412,7 @@ export default function GenerateNode({ id, data }: NodeProps<GenerateNodeType>) 
         >
           {data.imageUrl ? (
             <Image
+              ref={nodeImgRef}
               src={data.imageUrl as string}
               alt="Generated"
               fill
@@ -633,7 +654,7 @@ export default function GenerateNode({ id, data }: NodeProps<GenerateNodeType>) 
 
       {busy && <SpinnerOverlay />}
 
-      {/* ── Lightbox — full-quality view on double-click ───────────────── */}
+      {/* ── Lightbox — blur-up full-quality view on double-click ─────── */}
       {lightboxOpen && typeof document !== "undefined" && createPortal(
         <div
           className="fixed inset-0 z-[9999] flex items-center justify-center transition-opacity duration-200 ease-in-out"
@@ -641,19 +662,37 @@ export default function GenerateNode({ id, data }: NodeProps<GenerateNodeType>) 
           onClick={closeLightbox}
         >
           <div
-            className="transition-all duration-200 ease-in-out rounded-2xl overflow-hidden"
+            className="relative transition-all duration-200 ease-in-out rounded-2xl overflow-hidden"
             style={{
               transform: lightboxVisible ? "scale(1)" : "scale(0.95)",
               boxShadow: "0 0 0 8px #3a3a3a",
             }}
             onClick={(e) => e.stopPropagation()}
           >
+            {/* Full-res image */}
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src={data.imageUrl as string}
               alt="Full quality"
               className="block max-w-[90vw] max-h-[90vh] object-contain"
+              onLoad={() => setLightboxImgLoaded(true)}
             />
+            {/* Blur placeholder — pulses while loading, fades out once full-res is ready */}
+            {blurSrc && (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={blurSrc}
+                alt=""
+                aria-hidden
+                className={`absolute inset-0 w-full h-full object-contain${lightboxImgLoaded ? "" : " lightbox-blur-pulse"}`}
+                style={{
+                  transform: "scale(1.05)",
+                  opacity: lightboxImgLoaded ? 0 : undefined,
+                  transition: lightboxImgLoaded ? "opacity 380ms ease" : undefined,
+                  pointerEvents: "none",
+                }}
+              />
+            )}
           </div>
         </div>,
         document.body

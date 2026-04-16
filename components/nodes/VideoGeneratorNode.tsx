@@ -639,9 +639,12 @@ export default function VideoGeneratorNode({ id, data }: NodeProps<VideoGenerato
           <>
             {/* ── Row 1: model · ratio · duration (+ mode/res when no ratio/dur) ── */}
             <div className="flex items-center flex-wrap gap-1.5 px-3 py-2 border-t border-[#111]">
-              {/* Model selector */}
+              {/* Model selector — locked once a video has been generated */}
               <div className="relative">
-                <Pill onClick={() => { setModelOpen((o) => !o); setRatioOpen(false); setDurOpen(false); setModeOpen(false); setGrokResOpen(false); }}>
+                <Pill
+                  disabled={generations.length > 0}
+                  onClick={() => { setModelOpen((o) => !o); setRatioOpen(false); setDurOpen(false); setModeOpen(false); setGrokResOpen(false); }}
+                >
                   <span className="text-[11px] text-[#AAAAAA]">{cfg.name}</span>
                   <ChevronIcon open={modelOpen} />
                 </Pill>
@@ -781,17 +784,18 @@ function SpinnerOverlay({ color = "#77E544" }: { color?: string }) {
 }
 
 function Pill({
-  children, onClick, interactive = true, fullWidth = false,
+  children, onClick, interactive = true, fullWidth = false, disabled = false,
 }: {
   children: React.ReactNode; onClick?: () => void;
-  interactive?: boolean; fullWidth?: boolean;
+  interactive?: boolean; fullWidth?: boolean; disabled?: boolean;
 }) {
   const Tag = onClick ? "button" : "div";
   return (
     <Tag
       onMouseDown={onClick ? (e: React.MouseEvent) => e.stopPropagation() : undefined}
-      onClick={onClick}
-      className={`flex items-center gap-1.5 rounded-full px-2.5 py-1.5 whitespace-nowrap shrink-0 ${fullWidth ? "w-full justify-between" : ""} ${interactive && onClick ? "hover:brightness-125 transition-all cursor-pointer" : ""
+      onClick={disabled ? undefined : onClick}
+      disabled={disabled && Tag === "button" ? true : undefined}
+      className={`flex items-center gap-1.5 rounded-full px-2.5 py-1.5 whitespace-nowrap shrink-0 ${fullWidth ? "w-full justify-between" : ""} ${disabled ? "opacity-40 cursor-not-allowed" : interactive && onClick ? "hover:brightness-125 transition-all cursor-pointer" : ""
         }`}
       style={{ background: "#111317" }}
     >
