@@ -369,6 +369,9 @@ export default function WorkflowCanvas() {
 
   // ── Copy / Paste ─────────────────────────────────────────────────────────────
   const clipboardRef = useRef<{ nodes: Node<NodeData>[]; edges: Edge[] } | null>(null);
+  // Written to the OS clipboard when nodes are copied, so Ctrl+V can tell the
+  // difference between "paste my nodes" and "paste real external text".
+  const nodeSentinelRef = useRef<string | null>(null);
   const mousePosRef  = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
 
   const handleCopy = useCallback(() => {
@@ -392,6 +395,11 @@ export default function WorkflowCanvas() {
       (e) => selectedIds.has(e.source) && selectedIds.has(e.target)
     );
     clipboardRef.current = { nodes: allNodes, edges: selectedEdges };
+    // Write a sentinel to the OS clipboard so Ctrl+V knows this was a node copy,
+    // not real external text the user wants to paste as a prompt node.
+    const sentinel = `__rf_nodes_${Date.now()}__`;
+    nodeSentinelRef.current = sentinel;
+    navigator.clipboard.writeText(sentinel).catch(() => {});
   }, [nodes, edges]);
 
   const handlePaste = useCallback(() => {
@@ -447,11 +455,41 @@ export default function WorkflowCanvas() {
 
       const mod = e.ctrlKey || e.metaKey;
       if (mod && e.key === "c") { e.preventDefault(); handleCopy(); }
-      if (mod && e.key === "v") { e.preventDefault(); handlePaste(); }
+      if (mod && e.key === "v") {
+        e.preventDefault();
+        // OS clipboard text takes priority — if it has content, create a prompt node.
+        // Fall back to internal node clipboard only when the OS clipboard is empty.
+        navigator.clipboard.readText?.().then((raw) => {
+          const text = raw.trim();
+          // If the OS clipboard contains our node-copy sentinel, paste nodes.
+          // Otherwise treat non-empty text as external content → prompt node.
+          if (text && text !== nodeSentinelRef.current) {
+            const rect = wrapperRef.current?.getBoundingClientRect();
+            if (!rect) return;
+            const { x: panX, y: panY, zoom } = viewportRef.current;
+            const cx = (mousePosRef.current.x - rect.left - panX) / zoom;
+            const cy = (mousePosRef.current.y - rect.top  - panY) / zoom;
+            const size = NODE_SIZE["promptNode"] ?? FALLBACK_SIZE;
+            const currentNodes = useWorkflowStore.getState().nodes;
+            addNode({
+              id: `promptNode-${uid()}`,
+              type: "promptNode",
+              position: { x: cx - size.w / 2, y: cy - size.h / 2 },
+              style: { width: size.w, height: size.h },
+              data: { label: nodeLabel("promptNode", currentNodes), prompt: text },
+            });
+          } else if (clipboardRef.current) {
+            handlePaste();
+          }
+        }).catch(() => {
+          // Clipboard read denied (e.g. no permission) — fall back to node paste
+          if (clipboardRef.current) handlePaste();
+        });
+      }
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [handleCopy, handlePaste]);
+  }, [handleCopy, handlePaste, addNode]);
 
   // ── Auto-trim: check video duration vs model max on new connections ──────────
   const handleConnect = useCallback((connection: Connection) => {
