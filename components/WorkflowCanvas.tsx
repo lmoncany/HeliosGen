@@ -80,19 +80,24 @@ export default function WorkflowCanvas() {
     updateNodeData, isRunning, setIsRunning, debugMode, toggleDebug,
   } = useWorkflowStore();
 
-  const [dyingEdgeIds, setDyingEdgeIds]   = useState<Set<string>>(new Set());
-  const [ancestorIds, setAncestorIds]     = useState<Set<string>>(new Set());
+  const [dyingEdgeIds, setDyingEdgeIds]       = useState<Set<string>>(new Set());
+  const [ancestorIds, setAncestorIds]         = useState<Set<string>>(new Set());
   const [ancestorEdgeIds, setAncestorEdgeIds] = useState<Set<string>>(new Set());
+  // Ref so the nodes map always reads the latest selected IDs in the same render
+  const selectedIdsRef = useRef<Set<string>>(new Set());
 
   // Walk edges upstream from selected nodes, collecting all ancestor node + edge IDs
   const onSelectionChange = useCallback(
     ({ nodes: selected }: { nodes: Node[] }) => {
+      // Update ref synchronously — visible to the render triggered by setAncestorIds below
+      selectedIdsRef.current = new Set(selected.map((n) => n.id));
+
       if (selected.length === 0) {
         setAncestorIds(new Set());
         setAncestorEdgeIds(new Set());
         return;
       }
-      const selectedIds = new Set(selected.map((n) => n.id));
+      const selectedIds = selectedIdsRef.current;
       const visitedNodes = new Set<string>();
       const visitedEdges = new Set<string>();
       const queue = [...selectedIds];
@@ -587,16 +592,37 @@ export default function WorkflowCanvas() {
       onMouseMove={(e) => { mousePosRef.current = { x: e.clientX, y: e.clientY }; }}
     >
       <ReactFlow
-        nodes={nodes.map((n) =>
-          ancestorIds.has(n.id)
-            ? { ...n, className: [n.className, "node-ancestor"].filter(Boolean).join(" ") }
-            : n
-        )}
-        edges={edges.map((e) => ({
-          ...e,
-          className: ancestorEdgeIds.has(e.id) ? [e.className, "edge-ancestor"].filter(Boolean).join(" ") : e.className,
-          data: { ...e.data, dying: dyingEdgeIds.has(e.id) || e.data?.dying === true },
-        }))}
+        nodes={(() => {
+          const selIds = selectedIdsRef.current;
+          const anySelected = selIds.size > 0;
+          return nodes.map((n) => {
+            const isHighlighted = selIds.has(n.id) || ancestorIds.has(n.id);
+            const isDimmed = anySelected && !isHighlighted;
+            const ancestorClass = ancestorIds.has(n.id) ? "node-ancestor" : null;
+            return {
+              ...n,
+              className: [n.className, ancestorClass].filter(Boolean).join(" ") || undefined,
+              style: {
+                ...n.style,
+                opacity:    isDimmed ? 0.25 : undefined,
+                transition: anySelected ? "opacity 150ms" : undefined,
+              },
+            };
+          });
+        })()}
+        edges={(() => {
+          const selIds = selectedIdsRef.current;
+          const anySelected = selIds.size > 0;
+          return edges.map((e) => {
+            const isAncestorEdge = ancestorEdgeIds.has(e.id);
+            const isDimmed = anySelected && !isAncestorEdge;
+            return {
+              ...e,
+              className: isAncestorEdge ? [e.className, "edge-ancestor"].filter(Boolean).join(" ") : e.className,
+              data: { ...e.data, dying: dyingEdgeIds.has(e.id) || e.data?.dying === true, dimmed: isDimmed },
+            };
+          });
+        })()}
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         onEdgeClick={handleEdgeClick}

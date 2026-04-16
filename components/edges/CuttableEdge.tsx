@@ -17,8 +17,9 @@ export default function CuttableEdge({
   markerEnd,
   data,
 }: EdgeProps) {
-  const dying = (data as Record<string, unknown> | undefined)?.dying === true;
-  const error = (data as Record<string, unknown> | undefined)?.error === true;
+  const dying  = (data as Record<string, unknown> | undefined)?.dying  === true;
+  const error  = (data as Record<string, unknown> | undefined)?.error  === true;
+  const dimmed = (data as Record<string, unknown> | undefined)?.dimmed === true;
 
   const [visible, setVisible] = useState(false);
   const [pos, setPos] = useState({ x: 0, y: 0 });
@@ -98,7 +99,11 @@ export default function CuttableEdge({
           stroke: color,
           ["--edge-color" as string]: color,
           pointerEvents: "none",
-          transition: dying ? "stroke-dashoffset 0.42s ease-in" : undefined,
+          opacity: dimmed ? 0.15 : 1,
+          transition: [
+            dying  ? "stroke-dashoffset 0.42s ease-in" : null,
+            "opacity 150ms",
+          ].filter(Boolean).join(", "),
           animation: error ? "edge-error-blink 1.4s ease 1 forwards" : undefined,
         }}
       />
