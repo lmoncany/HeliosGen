@@ -208,6 +208,21 @@ body {
 .react-flow__edge.selected .react-flow__edge-path {
   filter: brightness(1.4);
 }
+
+/* ── Ancestor highlight (upstream nodes of selected node) ── */
+.react-flow__node.node-ancestor .node-card {
+  border-color: #77E544 !important;
+  box-shadow: 0 0 0 1px rgba(119, 229, 68, 0.12), 0 2px 16px rgba(0,0,0,0.5);
+  transition: border-color 150ms, box-shadow 150ms;
+}
+.react-flow__node.node-ancestor .node-above-label {
+  color: rgba(119, 229, 68, 0.6);
+  transition: color 150ms;
+}
+.react-flow__edge.edge-ancestor .react-flow__edge-path {
+  filter: brightness(1.25);
+  opacity: 0.85;
+}
 .react-flow__attribution { display: none; }
 .react-flow__controls {
   box-shadow: none !important;
@@ -332,8 +347,12 @@ body {
   box-shadow: 0 0 0 1px rgba(90, 143, 255, 0.22), 0 0 22px rgba(90, 143, 255, 0.10);
 }
 .react-flow__node.selected .video-node-card.node-card {
-  border-color: #6A9FFF !important;
-  box-shadow: 0 0 0 1px rgba(106, 159, 255, 0.35), 0 0 28px rgba(106, 159, 255, 0.15);
+  border-color: #77E544 !important;
+  box-shadow: 0 0 0 1px rgba(119, 229, 68, 0.2), 0 2px 16px rgba(42,26,20,0.5);
+}
+.react-flow__node.node-ancestor .video-node-card.node-card {
+  border-color: #77E544 !important;
+  box-shadow: 0 0 0 1px rgba(119, 229, 68, 0.12), 0 0 18px rgba(0,0,0,0.5);
 }
 
 /* ── Spinner ─────────────────────────────────────────────────────────────── */

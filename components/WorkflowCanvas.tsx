@@ -80,7 +80,38 @@ export default function WorkflowCanvas() {
     updateNodeData, isRunning, setIsRunning, debugMode, toggleDebug,
   } = useWorkflowStore();
 
-  const [dyingEdgeIds, setDyingEdgeIds] = useState<Set<string>>(new Set());
+  const [dyingEdgeIds, setDyingEdgeIds]   = useState<Set<string>>(new Set());
+  const [ancestorIds, setAncestorIds]     = useState<Set<string>>(new Set());
+  const [ancestorEdgeIds, setAncestorEdgeIds] = useState<Set<string>>(new Set());
+
+  // Walk edges upstream from selected nodes, collecting all ancestor node + edge IDs
+  const onSelectionChange = useCallback(
+    ({ nodes: selected }: { nodes: Node[] }) => {
+      if (selected.length === 0) {
+        setAncestorIds(new Set());
+        setAncestorEdgeIds(new Set());
+        return;
+      }
+      const selectedIds = new Set(selected.map((n) => n.id));
+      const visitedNodes = new Set<string>();
+      const visitedEdges = new Set<string>();
+      const queue = [...selectedIds];
+      while (queue.length > 0) {
+        const id = queue.shift()!;
+        for (const edge of edges) {
+          if (edge.target !== id) continue;
+          visitedEdges.add(edge.id);
+          if (!selectedIds.has(edge.source) && !visitedNodes.has(edge.source)) {
+            visitedNodes.add(edge.source);
+            queue.push(edge.source);
+          }
+        }
+      }
+      setAncestorIds(visitedNodes);
+      setAncestorEdgeIds(visitedEdges);
+    },
+    [edges],
+  );
 
   const handleEdgeClick = useCallback((_: React.MouseEvent, edge: Edge) => {
     setDyingEdgeIds((prev) => new Set([...prev, edge.id]));
@@ -556,11 +587,20 @@ export default function WorkflowCanvas() {
       onMouseMove={(e) => { mousePosRef.current = { x: e.clientX, y: e.clientY }; }}
     >
       <ReactFlow
-        nodes={nodes}
-        edges={edges.map((e) => ({ ...e, data: { ...e.data, dying: dyingEdgeIds.has(e.id) || e.data?.dying === true } }))}
+        nodes={nodes.map((n) =>
+          ancestorIds.has(n.id)
+            ? { ...n, className: [n.className, "node-ancestor"].filter(Boolean).join(" ") }
+            : n
+        )}
+        edges={edges.map((e) => ({
+          ...e,
+          className: ancestorEdgeIds.has(e.id) ? [e.className, "edge-ancestor"].filter(Boolean).join(" ") : e.className,
+          data: { ...e.data, dying: dyingEdgeIds.has(e.id) || e.data?.dying === true },
+        }))}
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         onEdgeClick={handleEdgeClick}
+        onSelectionChange={onSelectionChange}
         onConnect={onConnect}
         onConnectEnd={onConnectEnd}
         isValidConnection={isValidConnection}
