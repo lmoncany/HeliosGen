@@ -71,6 +71,7 @@ export interface Space {
   edges: Edge[];
   nodeCounters: Record<string, number>;
   createdAt: number;
+  viewport?: { x: number; y: number; zoom: number };
 }
 
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
@@ -138,6 +139,7 @@ interface WorkflowStore {
   setAuthModalOpen:        (v: boolean) => void;
   resetPasswordModalOpen:  boolean;
   setResetPasswordModalOpen: (v: boolean) => void;
+  saveViewport: (viewport: { x: number; y: number; zoom: number }) => void;
   loadSpacesFromDB: (spaces: Space[]) => void;
 }
 
@@ -341,6 +343,13 @@ export const useWorkflowStore = create<WorkflowStore>()(
         setIsRunning:     (v) => set({ isRunning: v }),
         toggleDebug:      () => set((s) => ({ debugMode: !s.debugMode })),
 
+        saveViewport: (viewport) =>
+          set((s) => ({
+            spaces: s.spaces.map((sp) =>
+              sp.id === s.activeSpaceId ? { ...sp, viewport } : sp
+            ),
+          })),
+
         loadSpacesFromDB: (dbSpaces) =>
           set((s) => {
             if (!dbSpaces.length) return {};
@@ -368,6 +377,7 @@ export const useWorkflowStore = create<WorkflowStore>()(
       partialize: (s) => ({
         spaces: s.spaces.map((sp) => ({
           ...sp,
+          viewport: sp.viewport,
           // Strip base64 inputImage — only the durable r2Url survives reload
           nodes: sp.nodes.map((n) => ({
             ...n,

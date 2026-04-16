@@ -11,6 +11,7 @@ import {
   Connection,
   Edge,
   Viewport,
+  useReactFlow,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 
@@ -21,6 +22,7 @@ import { topoSort, resolveInputs } from "@/lib/executor";
 import { NODE_SIZE, FALLBACK_SIZE } from "@/lib/nodeTypes";
 import { edgeStyle } from "@/lib/edgeStyles";
 import { createClient } from "@/lib/supabase/client";
+import { sha256Hex } from "@/lib/assetHash";
 
 import PromptNode          from "./nodes/PromptNode";
 import ImageInputNode      from "./nodes/ImageInputNode";
@@ -60,6 +62,27 @@ const edgeTypes = {
 
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 
+// Runs inside the ReactFlow provider so it can call useReactFlow()
+function ViewportSyncer() {
+  const { setViewport } = useReactFlow();
+  const activeSpaceId   = useWorkflowStore((s) => s.activeSpaceId);
+  const spaces          = useWorkflowStore((s) => s.spaces);
+
+  useEffect(() => {
+    const space = spaces.find((sp) => sp.id === activeSpaceId);
+    if (space?.viewport) {
+      setViewport(space.viewport, { duration: 0 });
+    } else {
+      // No saved viewport — let ReactFlow keep its current state (fitView handled elsewhere)
+      setViewport({ x: 0, y: 0, zoom: 1 }, { duration: 0 });
+    }
+    // Only run when the active space changes, not on every spaces update
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSpaceId]);
+
+  return null;
+}
+
 /** Human-readable label with auto-incrementing counter per type */
 function nodeLabel(type: string, existingNodes: Node<NodeData>[]): string {
   const count = existingNodes.filter((n) => n.type === type).length + 1;
@@ -79,7 +102,10 @@ export default function WorkflowCanvas() {
     onNodesChange: _onNodesChange, onEdgesChange, onConnect,
     addNode, insertEdge,
     updateNodeData, isRunning, setIsRunning, debugMode, toggleDebug,
+    saveViewport,
   } = useWorkflowStore();
+  const updateNodeDataRef = useRef(updateNodeData);
+  updateNodeDataRef.current = updateNodeData;
 
   const [dyingEdgeIds, setDyingEdgeIds]       = useState<Set<string>>(new Set());
   const [ancestorIds, setAncestorIds]         = useState<Set<string>>(new Set());
@@ -163,18 +189,139 @@ export default function WorkflowCanvas() {
 
   const onDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
-    e.dataTransfer.dropEffect = "copy";
+    const hasFiles = e.dataTransfer.types.includes("Files");
+    e.dataTransfer.dropEffect = hasFiles ? "copy" : "copy";
   }, []);
 
   const onDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
-    const type = e.dataTransfer.getData("application/reactflow-node");
-    if (!type) return;
 
     const rect = wrapperRef.current?.getBoundingClientRect();
     if (!rect) return;
-
     const { x: panX, y: panY, zoom } = viewportRef.current;
+
+    // ── File drop (image or video dragged from the OS/browser) ──────────────
+    const file = e.dataTransfer.files[0];
+    if (file) {
+      const dropPos = {
+        x: (e.clientX - rect.left - panX) / zoom,
+        y: (e.clientY - rect.top  - panY) / zoom,
+      };
+
+      const isImage = file.type.startsWith("image/");
+      const isVideo = file.type.startsWith("video/");
+
+      if (isImage) {
+        const type    = "imageInputNode";
+        const size    = NODE_SIZE[type] ?? FALLBACK_SIZE;
+        const nodeId  = `${type}-${uid()}`;
+        const current = useWorkflowStore.getState().nodes;
+        const blobUrl = URL.createObjectURL(file);
+
+        // 1. Add node instantly with the blob URL already in data
+        addNode({
+          id: nodeId, type,
+          position: { x: dropPos.x - size.w / 2, y: dropPos.y - size.h / 2 },
+          style: { width: size.w },
+          data: { label: nodeLabel(type, current), status: "idle", inputImage: blobUrl },
+        });
+
+        // 2. Measure natural dimensions and update ratio (fast — blob is local)
+        const img = new window.Image();
+        img.onload = () =>
+          updateNodeDataRef.current(nodeId, {
+            imageNaturalRatio: `${img.naturalWidth} / ${img.naturalHeight}`,
+          });
+        img.src = blobUrl;
+
+        // 3. Hash + lookup + upload in background; swap to durable CDN URL when ready
+        (async () => {
+          try {
+            const bytes = await file.arrayBuffer();
+            const hash  = await sha256Hex(bytes);
+            const { data: authData } = await (await import("@/lib/supabase/client")).createClient().auth.getSession();
+            const token = authData.session?.access_token;
+            const authHdr = token ? { Authorization: `Bearer ${token}` } : {};
+
+            // Cache lookup
+            try {
+              const lk = await fetch(`/api/lookup-asset?hash=${hash}`, { headers: authHdr });
+              const { cdnUrl } = await lk.json() as { cdnUrl: string | null };
+              if (cdnUrl) {
+                updateNodeDataRef.current(nodeId, { inputImage: cdnUrl, r2Url: cdnUrl });
+                return;
+              }
+            } catch { /* fall through */ }
+
+            // Upload
+            const res = await fetch("/api/upload-asset", {
+              method: "POST",
+              headers: { "Content-Type": file.type || "image/jpeg", ...authHdr },
+              body: bytes,
+            });
+            const { cdnUrl } = await res.json() as { cdnUrl?: string };
+            if (cdnUrl) {
+              updateNodeDataRef.current(nodeId, { inputImage: cdnUrl, r2Url: cdnUrl });
+            }
+          } catch { /* blob URL stays as fallback */ }
+        })();
+        return;
+      }
+
+      if (isVideo) {
+        const type    = "videoInputNode";
+        const size    = NODE_SIZE[type] ?? FALLBACK_SIZE;
+        const nodeId  = `${type}-${uid()}`;
+        const current = useWorkflowStore.getState().nodes;
+        const blobUrl = URL.createObjectURL(file);
+
+        // 1. Add node instantly with blob URL
+        addNode({
+          id: nodeId, type,
+          position: { x: dropPos.x - size.w / 2, y: dropPos.y - size.h / 2 },
+          style: { width: size.w },
+          data: { label: nodeLabel(type, current), status: "idle", videoUrl: blobUrl },
+        });
+
+        // 2. Hash + lookup + upload in background
+        (async () => {
+          try {
+            const bytes = await file.arrayBuffer();
+            const hash  = await sha256Hex(bytes);
+            const { data: authData } = await (await import("@/lib/supabase/client")).createClient().auth.getSession();
+            const token = authData.session?.access_token;
+            const authHdr = token ? { Authorization: `Bearer ${token}` } : {};
+
+            // Cache lookup
+            try {
+              const lk = await fetch(`/api/lookup-asset?hash=${hash}`, { headers: authHdr });
+              const { cdnUrl } = await lk.json() as { cdnUrl: string | null };
+              if (cdnUrl) {
+                updateNodeDataRef.current(nodeId, { videoUrl: cdnUrl });
+                return;
+              }
+            } catch { /* fall through */ }
+
+            // Upload
+            const res = await fetch("/api/upload-asset", {
+              method: "POST",
+              headers: { "Content-Type": file.type || "video/mp4", ...authHdr },
+              body: bytes,
+            });
+            const json = await res.json() as { cdnUrl?: string; error?: string };
+            if (json.cdnUrl) {
+              updateNodeDataRef.current(nodeId, { videoUrl: json.cdnUrl });
+            }
+          } catch { /* blob URL stays as fallback */ }
+        })();
+        return;
+      }
+    }
+
+    // ── Sidebar node-type drop ───────────────────────────────────────────────
+    const type = e.dataTransfer.getData("application/reactflow-node");
+    if (!type) return;
+
     const position = {
       x: (e.clientX - rect.left - panX) / zoom,
       y: (e.clientY - rect.top  - panY) / zoom,
@@ -628,6 +775,53 @@ export default function WorkflowCanvas() {
     setIsRunning(false);
   }, [nodes, edges, updateNodeData, setIsRunning, debugMode, push]);
 
+  // ── Place a node at the viewport center (used by the empty-state picker) ────
+  const addNodeAtCenter = useCallback((type: string) => {
+    const rect = wrapperRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const { x: panX, y: panY, zoom } = viewportRef.current;
+    const cx = (rect.width  / 2 - panX) / zoom;
+    const cy = (rect.height / 2 - panY) / zoom;
+    const size = NODE_SIZE[type] ?? FALLBACK_SIZE;
+
+    if (type === "generateNode") {
+      const genId    = `gen-${uid()}`;
+      const promptId = `prompt-${uid()}`;
+      const freshNodes = useWorkflowStore.getState().nodes;
+      addNode({
+        id: promptId, type: "promptNode",
+        position: { x: cx - size.w / 2 - 320, y: cy - size.h / 2 + 20 },
+        deletable: false,
+        style: { width: NODE_SIZE.promptNode.w, height: NODE_SIZE.promptNode.h },
+        data: { label: nodeLabel("promptNode", freshNodes) },
+      });
+      addNode({
+        id: genId, type: "generateNode",
+        position: { x: cx - size.w / 2, y: cy - size.h / 2 },
+        style: { width: size.w, height: size.h },
+        data: { label: nodeLabel("generateNode", freshNodes), status: "idle", model: "nano-banana-2", aspectRatio: "1:1" },
+      });
+      insertEdge({
+        id: `edge-${promptId}-${genId}`,
+        source: promptId, target: genId, targetHandle: "prompt",
+        deletable: false, reconnectable: false, animated: false,
+        style: edgeStyle("prompt"),
+      });
+      return;
+    }
+
+    const currentNodes = useWorkflowStore.getState().nodes;
+    addNode({
+      id: `${type}-${uid()}`,
+      type,
+      position: { x: cx - size.w / 2, y: cy - size.h / 2 },
+      style: type === "imageInputNode" || type === "videoInputNode"
+        ? { width: size.w }
+        : { width: size.w, height: size.h },
+      data: { label: nodeLabel(type, currentNodes), status: "idle" },
+    });
+  }, [addNode, insertEdge]);
+
   const clear = useCallback(() => {
     const { activeSpaceId, spaces } = useWorkflowStore.getState();
     useWorkflowStore.setState({
@@ -643,7 +837,7 @@ export default function WorkflowCanvas() {
   return (
     <div
       ref={wrapperRef}
-      className="flex-1 flex flex-col min-w-0 h-full"
+      className="relative flex-1 flex flex-col min-w-0 h-full"
       onMouseMove={(e) => { mousePosRef.current = { x: e.clientX, y: e.clientY }; }}
     >
       <ReactFlow
@@ -685,7 +879,7 @@ export default function WorkflowCanvas() {
         onConnect={handleConnect}
         onConnectEnd={onConnectEnd}
         isValidConnection={isValidConnection}
-        onMove={(_, vp) => { viewportRef.current = vp; }}
+        onMove={(_, vp) => { viewportRef.current = vp; saveViewport(vp); }}
         onDrop={onDrop}
         onDragOver={onDragOver}
         nodeTypes={nodeTypes}
@@ -709,6 +903,7 @@ export default function WorkflowCanvas() {
         }}
       >
         <Background variant={BackgroundVariant.Dots} gap={28} size={1.5} color="#333333" />
+        <ViewportSyncer />
 
         {dropState && (
           <NodePickerMenu
@@ -755,6 +950,87 @@ export default function WorkflowCanvas() {
           </button>
         </Panel>
       </ReactFlow>
+
+      {/* ── Empty state picker ──────────────────────────────────────────────── */}
+      {nodes.length === 0 && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-10 pointer-events-none z-10">
+          <div className="flex flex-col items-center gap-2 pointer-events-none">
+            <h2 className="text-white text-2xl font-semibold tracking-tight">Your space is ready</h2>
+            <p className="text-[#555] text-base">Choose your first node and start creating</p>
+          </div>
+          <div className="flex items-stretch gap-4 pointer-events-auto">
+            {[
+              {
+                type: "imageInputNode",
+                label: "Image",
+                icon: (
+                  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="3" y="3" width="18" height="18" rx="3" />
+                    <circle cx="8.5" cy="8.5" r="1.5" fill="currentColor" stroke="none" />
+                    <path d="m3 15 5-5 4 4 3-3 6 5" />
+                  </svg>
+                ),
+                accent: "#fb923c",
+              },
+              {
+                type: "videoInputNode",
+                label: "Video",
+                icon: (
+                  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="2" y="5" width="15" height="14" rx="2" />
+                    <path d="m17 8 5-3v14l-5-3V8Z" />
+                  </svg>
+                ),
+                accent: "#60a5fa",
+              },
+              {
+                type: "generateNode",
+                label: "Image Generator",
+                icon: (
+                  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="3" y="3" width="18" height="18" rx="3" />
+                    <path d="M8 12h8M12 8v8" />
+                    <circle cx="8.5" cy="8.5" r="1" fill="currentColor" stroke="none" />
+                  </svg>
+                ),
+                accent: "#77E544",
+              },
+              {
+                type: "videoGeneratorNode",
+                label: "Video Generator",
+                icon: (
+                  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="2" y="5" width="15" height="14" rx="2" />
+                    <path d="m17 8 5-3v14l-5-3V8Z" />
+                    <path d="M7 12h6M10 9v6" />
+                  </svg>
+                ),
+                accent: "#a78bfa",
+              },
+            ].map(({ type, label, icon, accent }) => (
+              <button
+                key={type}
+                onClick={() => addNodeAtCenter(type)}
+                className="group flex flex-col items-center justify-center gap-5 w-44 py-10 rounded-2xl border border-[#1E1E1E] bg-[#0D0F11] hover:bg-[#131618] hover:border-[#2a2a2a] transition-all duration-150"
+              >
+                <span
+                  className="flex items-center justify-center w-14 h-14 rounded-2xl transition-colors duration-150"
+                  style={{
+                    background: `${accent}18`,
+                    color: accent,
+                    border: `1px solid ${accent}30`,
+                  }}
+                >
+                  {icon}
+                </span>
+                <span className="text-[#8D8E89] group-hover:text-white text-sm font-medium transition-colors duration-150">
+                  {label}
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {log.length > 0 && (
         <div className="h-24 bg-[#080A0C] border-t border-[#1A100C] overflow-y-auto px-4 py-2 shrink-0">

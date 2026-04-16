@@ -20,6 +20,7 @@ export default function VideoInputNode({ id, data }: NodeProps<VideoInputNodeTyp
   const { deleteElements } = useReactFlow();
   const fileRef        = useRef<HTMLInputElement>(null);
   const videoRef       = useRef<HTMLVideoElement>(null);
+  const topVideoRef    = useRef<HTMLVideoElement>(null);
   const localUrlRef    = useRef<string | null>(null);
 
   const [uploading, setUploading]   = useState(false);
@@ -56,6 +57,28 @@ export default function VideoInputNode({ id, data }: NodeProps<VideoInputNodeTyp
   videoDurationRef.current        = videoDuration;
   localTrimStartRef.current       = localTrimStart;
   localTrimEndRef.current         = localTrimEnd;
+
+  // ── Two-layer crossfade: base video keeps playing while new URL loads on top ─
+  const videoUrl = data.videoUrl as string | undefined;
+  const [baseVideoUrl, setBaseVideoUrl] = useState(videoUrl);
+  const [topVideoUrl,  setTopVideoUrl]  = useState<string | undefined>(undefined);
+  const [topVideoReady, setTopVideoReady] = useState(false);
+  const baseVideoUrlRef = useRef(baseVideoUrl);
+
+  useEffect(() => {
+    if (!videoUrl || videoUrl === baseVideoUrlRef.current) return;
+    if (!baseVideoUrlRef.current) {
+      setBaseVideoUrl(videoUrl);
+      baseVideoUrlRef.current = videoUrl;
+      return;
+    }
+    setTopVideoUrl(videoUrl);
+    setTopVideoReady(false);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [videoUrl]);
+
+  // Uploading: internal loadFile sets `uploading`; canvas drop detected via blob URL
+  const isUploading = uploading || !!baseVideoUrl?.startsWith("blob:");
 
   const fmtTime = (s: number) =>
     `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
@@ -423,7 +446,6 @@ export default function VideoInputNode({ id, data }: NodeProps<VideoInputNodeTyp
   }, [data.triggerTrimMaxDuration]);
 
 
-  const videoUrl    = data.videoUrl as string | undefined;
   const hasError    = data.hasError as boolean | undefined;
   const aspectRatio = (data.videoAspectRatio as string | undefined) ?? "16 / 9";
 
@@ -433,7 +455,7 @@ export default function VideoInputNode({ id, data }: NodeProps<VideoInputNodeTyp
 
 
   /* ── Loaded state — video player ────────────────────────────────────────────── */
-  if (videoUrl) {
+  if (baseVideoUrl) {
     return (
       <div
         className={`node-card group${hasError ? " node-error-blink" : ""}`}
@@ -452,10 +474,12 @@ export default function VideoInputNode({ id, data }: NodeProps<VideoInputNodeTyp
           {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
           <video
             ref={videoRef}
-            key={videoUrl}
-            src={videoUrl}
+            src={baseVideoUrl}
             className="w-full h-full block"
-            style={{ objectFit: "fill" }}
+            style={{
+              objectFit: "fill",
+              animation: isUploading ? "upload-pulse 1.6s ease-in-out infinite" : undefined,
+            }}
             autoPlay
             muted={trimOpen ? false : (muted || !hovering)}
             playsInline
@@ -495,6 +519,42 @@ export default function VideoInputNode({ id, data }: NodeProps<VideoInputNodeTyp
               }
             }}
           />
+
+          {/* Top video layer — new URL loads here at opacity 0, fades in, then promotes to base */}
+          {topVideoUrl && (
+            // eslint-disable-next-line jsx-a11y/media-has-caption
+            <video
+              ref={topVideoRef}
+              src={topVideoUrl}
+              autoPlay
+              muted
+              playsInline
+              loop
+              onCanPlay={() => {
+                // Sync playback position, then trigger fade-in
+                const base = videoRef.current;
+                const top  = topVideoRef.current;
+                if (base && top && base.duration) top.currentTime = base.currentTime;
+                requestAnimationFrame(() => requestAnimationFrame(() => setTopVideoReady(true)));
+              }}
+              onTransitionEnd={() => {
+                const oldBase = baseVideoUrlRef.current;
+                setBaseVideoUrl(topVideoUrl);
+                baseVideoUrlRef.current = topVideoUrl;
+                setTopVideoUrl(undefined);
+                setTopVideoReady(false);
+                if (oldBase?.startsWith("blob:")) URL.revokeObjectURL(oldBase);
+              }}
+              style={{
+                position: "absolute", inset: 0, zIndex: 2,
+                width: "100%", height: "100%",
+                objectFit: "fill", display: "block",
+                opacity: topVideoReady ? 1 : 0,
+                transition: "opacity 450ms ease",
+                pointerEvents: "none",
+              }}
+            />
+          )}
 
           {/* ── Normal player controls (hidden while picker is open) ── */}
           {!pickerOpen && !trimOpen && (
@@ -584,7 +644,7 @@ export default function VideoInputNode({ id, data }: NodeProps<VideoInputNodeTyp
               </div>
 
               {/* Trim button — bottom-right icon pill, above frame preview if present */}
-              {!videoUrl?.startsWith("blob:") && !uploading && (
+              {!isUploading && (
                 <button
                   onMouseDown={(e) => e.stopPropagation()}
                   onClick={(e) => { e.stopPropagation(); openTrim(); }}

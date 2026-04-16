@@ -1,7 +1,6 @@
 "use client";
 import { useRef, useCallback, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import Image from "next/image";
 import { Handle, Position, NodeProps, Node } from "@xyflow/react";
 import CornerResizer from "./CornerResizer";
 import { useWorkflowStore, NodeData } from "@/lib/store";
@@ -124,7 +123,6 @@ export default function ImageInputNode({ id, data }: NodeProps<ImageInputNodeTyp
         const res     = await fetch("/api/upload-asset", { method: "POST", headers: uploadHeaders, body: bytes });
         const { cdnUrl } = await res.json() as { cdnUrl?: string };
         if (cdnUrl) {
-          URL.revokeObjectURL(blobUrl);
           updateNodeData(id, { r2Url: cdnUrl, inputImage: cdnUrl });
         }
       } catch {
@@ -143,9 +141,41 @@ export default function ImageInputNode({ id, data }: NodeProps<ImageInputNodeTyp
     [loadFile]
   );
 
-  // Prefer the durable R2 CDN URL; fall back to base64 in the current session
-  const imageSrc = (data.r2Url ?? data.inputImage) as string | undefined;
-  const hasImage = !!imageSrc;
+  // ── Two-layer crossfade: old image stays visible until new one fades in ─────
+  const canonicalSrc = (data.r2Url ?? data.inputImage) as string | undefined;
+
+  // Local uploading state: true from mount (if no r2Url yet) until CDN URL arrives.
+  // Using local state avoids any timing gap between store update and derived value.
+  const [isUploading, setIsUploading] = useState(!data.r2Url && !!data.inputImage);
+  useEffect(() => {
+    if (data.r2Url) setIsUploading(false);
+  }, [data.r2Url]);
+
+  // The "settled" bottom layer — never changes mid-transition
+  const [baseSrc, setBaseSrc] = useState(canonicalSrc);
+  // The incoming top layer — fades from 0→1, then gets promoted to base
+  const [topSrc, setTopSrc]   = useState<string | undefined>(undefined);
+  const [topReady, setTopReady] = useState(false);   // triggers the CSS transition
+  const baseSrcRef = useRef(baseSrc);
+
+  useEffect(() => {
+    if (!canonicalSrc || canonicalSrc === baseSrcRef.current) return;
+
+    if (!baseSrcRef.current) {
+      // No existing image — set directly, nothing to crossfade over
+      setBaseSrc(canonicalSrc);
+      baseSrcRef.current = canonicalSrc;
+      return;
+    }
+
+    // New URL arrived — render it on top at opacity 0; onLoad will trigger the fade
+    setTopSrc(canonicalSrc);
+    setTopReady(false);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canonicalSrc]);
+
+  // Uploading = local blob present but CDN URL not yet confirmed
+  const hasImage = !!baseSrc;
   // CSS aspect-ratio accepts "width / height" string directly (e.g. "1920 / 1080")
   const ratio    = (data.imageNaturalRatio as string | undefined) ?? "1 / 1";
 
@@ -171,26 +201,44 @@ export default function ImageInputNode({ id, data }: NodeProps<ImageInputNodeTyp
           style={{ borderRadius: 7, overflow: "hidden" }}
           onDoubleClick={openLightbox}
         >
-          {imageSrc.startsWith("https://") ? (
-            <Image
-              ref={nodeImgRef}
-              src={imageSrc}
-              alt="Input"
-              fill
-              quality={30}
-              sizes="400px"
-              style={{ objectFit: "fill" }}
-            />
-          ) : (
-            // blob: or data: URLs — next/image doesn't handle these, use plain img
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              ref={nodeImgRef}
-              src={imageSrc}
-              alt="Input"
-              style={{ width: "100%", height: "100%", display: "block", objectFit: "fill" }}
-            />
-          )}
+          {/* Layer 1 — base image; always a plain <img> so React only updates src, never remounts */}
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          {baseSrc && <img
+            ref={nodeImgRef}
+            src={baseSrc}
+            alt="Input"
+            style={{
+              position: "absolute", inset: 0, width: "100%", height: "100%",
+              display: "block", objectFit: "fill", zIndex: 1,
+              animation: isUploading ? "upload-pulse 1.6s ease-in-out infinite" : undefined,
+            }}
+          />}
+
+          {/* Layer 2 — incoming URL rendered on top at opacity 0; fades in, then base src is updated */}
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          {topSrc && <img
+            src={topSrc}
+            alt=""
+            aria-hidden
+            onLoad={() => requestAnimationFrame(() => requestAnimationFrame(() => setTopReady(true)))}
+            onTransitionEnd={() => {
+              const oldBase = baseSrcRef.current;
+              setBaseSrc(topSrc);
+              baseSrcRef.current = topSrc!;
+              setTopSrc(undefined);
+              setTopReady(false);
+              if (oldBase?.startsWith("blob:")) URL.revokeObjectURL(oldBase);
+            }}
+            style={{
+              position: "absolute", inset: 0, zIndex: 2,
+              width: "100%", height: "100%",
+              display: "block", objectFit: "fill",
+              opacity: topReady ? 1 : 0,
+              transition: "opacity 450ms ease",
+              pointerEvents: "none",
+            }}
+          />}
+
 
           {/* Hover overlay */}
           <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
@@ -246,7 +294,7 @@ export default function ImageInputNode({ id, data }: NodeProps<ImageInputNodeTyp
               {/* Layer 1: full-res image */}
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
-                src={imageSrc}
+                src={canonicalSrc}
                 alt="Full quality"
                 className="block max-w-[90vw] max-h-[90vh] object-contain"
                 onLoad={() => setLightboxImgLoaded(true)}

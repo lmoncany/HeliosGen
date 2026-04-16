@@ -379,6 +379,35 @@ body {
   animation: handle-error-blink 1.4s ease 1 forwards;
 }
 
+/* ── Upload pulse (image node while uploading) ───────────────────────────── */
+@keyframes upload-pulse {
+  0%, 100% { opacity: 1;   }
+  50%       { opacity: 0.2; }
+}
+
+/* ── Upload skeleton shimmer ─────────────────────────────────────────────── */
+@keyframes upload-shimmer {
+  0%   { left: -70%; }
+  100% { left: 130%; }
+}
+
+.upload-shimmer-bar {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 50%;
+  background: linear-gradient(
+    to right,
+    transparent        0%,
+    rgba(255,255,255,0.13) 30%,
+    rgba(255,255,255,0.28) 50%,
+    rgba(255,255,255,0.13) 70%,
+    transparent        100%
+  );
+  animation: upload-shimmer 1.4s ease-in-out infinite;
+  pointer-events: none;
+}
+
 /* ── Lightbox blur-up pulse ───────────────────────────────────────────────── */
 @keyframes lightbox-blur-pulse {
   0%, 100% { filter: blur(6px);  opacity: 1;    }
