@@ -3,8 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useWorkflowStore, Space } from "./store";
 import { createClient } from "./supabase/client";
 
-const DEBOUNCE_MS  = 10_000; // wait 10s of inactivity before syncing
-const MIN_INTERVAL = 60_000; // never sync more than once per 60s
+const DEBOUNCE_MS = 1_500; // wait 1.5s of inactivity before syncing
 
 export type SyncStatus = "idle" | "syncing" | "synced" | "error";
 
@@ -42,6 +41,7 @@ export function useSpaceSync() {
         edges:        row.data?.edges        ?? [],
         nodeCounters: row.data?.nodeCounters ?? {},
         createdAt:    row.data?.createdAt    ?? Date.parse(row.created_at),
+        updatedAt:    row.data?.updatedAt    ?? row.data?.createdAt ?? Date.parse(row.created_at),
       }));
 
       loadSpacesFromDB(dbSpaces);
@@ -73,6 +73,7 @@ export function useSpaceSync() {
           edges:        sp.edges,
           nodeCounters: sp.nodeCounters,
           createdAt:    sp.createdAt,
+          updatedAt:    sp.updatedAt ?? sp.createdAt,
         },
       }));
 
@@ -105,9 +106,8 @@ export function useSpaceSync() {
     save();
   }, [save]);
 
-  // ── Debounced + rate-limited sync for regular edits ──────────────────────────
+  // ── Debounced sync — fires 1.5s after the last change ────────────────────────
   const syncDebounced = useCallback(() => {
-    if (Date.now() - lastSyncedRef.current < MIN_INTERVAL) return;
     if (timerRef.current) clearTimeout(timerRef.current);
     timerRef.current = setTimeout(save, DEBOUNCE_MS);
   }, [save]);

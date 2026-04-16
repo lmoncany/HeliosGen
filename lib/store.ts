@@ -71,6 +71,7 @@ export interface Space {
   edges: Edge[];
   nodeCounters: Record<string, number>;
   createdAt: number;
+  updatedAt?: number;
   viewport?: { x: number; y: number; zoom: number };
 }
 
@@ -98,7 +99,7 @@ function syncSpace(
   nodeCounters: Record<string, number>,
 ): Space[] {
   return spaces.map((sp) =>
-    sp.id === activeId ? { ...sp, nodes, edges, nodeCounters } : sp
+    sp.id === activeId ? { ...sp, nodes, edges, nodeCounters, updatedAt: Date.now() } : sp
   );
 }
 
@@ -220,9 +221,18 @@ export const useWorkflowStore = create<WorkflowStore>()(
         onNodesChange: (changes) =>
           set((s) => {
             const nodes = applyNodeChanges(changes, s.nodes) as Node<NodeData>[];
+            const removedIds = new Set(
+              changes
+                .filter((c): c is Extract<NodeChange, { type: "remove" }> => c.type === "remove")
+                .map((c) => c.id)
+            );
+            const edges = removedIds.size > 0
+              ? s.edges.filter((e) => !removedIds.has(e.source) && !removedIds.has(e.target))
+              : s.edges;
             return {
               nodes,
-              spaces: syncSpace(s.spaces, s.activeSpaceId, nodes, s.edges, s.nodeCounters),
+              edges,
+              spaces: syncSpace(s.spaces, s.activeSpaceId, nodes, edges, s.nodeCounters),
             };
           }),
 
@@ -353,11 +363,29 @@ export const useWorkflowStore = create<WorkflowStore>()(
         loadSpacesFromDB: (dbSpaces) =>
           set((s) => {
             if (!dbSpaces.length) return {};
-            // Prefer the active space from DB; fall back to first
-            const activeId = dbSpaces.find((sp) => sp.id === s.activeSpaceId)?.id ?? dbSpaces[0].id;
-            const active   = dbSpaces.find((sp) => sp.id === activeId)!;
+
+            // Build a lookup of local spaces by id
+            const localById = new Map(s.spaces.map((sp) => [sp.id, sp]));
+
+            // For each DB space, prefer whichever version is newer (local wins on tie)
+            const merged = dbSpaces.map((dbSp) => {
+              const local = localById.get(dbSp.id);
+              if (!local) return dbSp;
+              const localTs = local.updatedAt ?? local.createdAt ?? 0;
+              const dbTs    = dbSp.updatedAt  ?? dbSp.createdAt  ?? 0;
+              return localTs >= dbTs ? local : dbSp;
+            });
+
+            // Add any local-only spaces not in the DB (created offline)
+            const dbIds = new Set(dbSpaces.map((sp) => sp.id));
+            for (const sp of s.spaces) {
+              if (!dbIds.has(sp.id)) merged.push(sp);
+            }
+
+            const activeId = merged.find((sp) => sp.id === s.activeSpaceId)?.id ?? merged[0].id;
+            const active   = merged.find((sp) => sp.id === activeId)!;
             return {
-              spaces:        dbSpaces,
+              spaces:        merged,
               activeSpaceId: activeId,
               nodes:         active.nodes,
               edges:         active.edges,
