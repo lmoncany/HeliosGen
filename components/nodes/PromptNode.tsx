@@ -19,13 +19,10 @@ function getMentionQuery(text: string, cursor: number): string | null {
   return match ? match[1] : null;
 }
 
-type MentionPreview = { imageUrl?: string; videoUrl?: string };
-
-/** Render text with exact @NodeLabel matches highlighted as chips + inline preview thumbnails. */
+/** Render text with exact @NodeLabel matches highlighted as chips. */
 function renderWithMentions(
   text: string,
   knownLabels: string[],
-  previews: Map<string, MentionPreview> = new Map(),
 ): ReactNode {
   if (!text) return null;
   const sorted = [...knownLabels].sort((a, b) => b.length - a.length);
@@ -43,26 +40,8 @@ function renderWithMentions(
     if (!earliest) { parts.push(<span key={key++}>{rest}</span>); break; }
     if (earliest.idx > 0) parts.push(<span key={key++}>{rest.slice(0, earliest.idx)}</span>);
 
-    const preview = previews.get(earliest.label);
     parts.push(
-      <span key={key++} className="mention-chip" style={{ display: "inline-flex", alignItems: "center", gap: 3 }}>
-        {preview?.videoUrl ? (
-          // eslint-disable-next-line jsx-a11y/media-has-caption
-          <video
-            src={preview.videoUrl}
-            autoPlay loop muted playsInline
-            style={{ width: 14, height: 14, objectFit: "cover", borderRadius: 2, flexShrink: 0 }}
-          />
-        ) : preview?.imageUrl ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            src={preview.imageUrl}
-            alt=""
-            style={{ width: 14, height: 14, objectFit: "cover", borderRadius: 2, flexShrink: 0 }}
-          />
-        ) : null}
-        @{earliest.label}
-      </span>
+      <span key={key++} className="mention-chip">@{earliest.label}</span>
     );
     rest = rest.slice(earliest.idx + earliest.label.length + 1);
   }
@@ -135,16 +114,6 @@ export default function PromptNode({ id, data, selected }: NodeProps<PromptNodeT
   });
 
   const knownLabels = mentionableNodes.map((n) => n.data.label as string).filter(Boolean);
-
-  const mentionPreviews = new Map<string, MentionPreview>(
-    mentionableNodes.map((n) => [
-      n.data.label as string,
-      {
-        imageUrl: (n.data.r2Url ?? n.data.inputImage ?? n.data.imageUrl) as string | undefined,
-        videoUrl: n.data.videoUrl as string | undefined,
-      },
-    ])
-  );
 
   const filteredMentions =
     mentionQuery !== null
@@ -249,8 +218,11 @@ export default function PromptNode({ id, data, selected }: NodeProps<PromptNodeT
       const newText = `${before.slice(0, lastAt)}@${label} ${after}`;
       const newPos  = lastAt + label.length + 2;
 
-      // Update textarea value directly (uncontrolled)
+      // Update textarea value directly (uncontrolled); set cursor immediately before paint
       ta.value = newText;
+      ta.focus();
+      ta.selectionStart = newPos;
+      ta.selectionEnd   = newPos;
       setLocalText(newText);
       pendingCursorRef.current = newPos;
       updateNodeData(id, { prompt: newText });
@@ -283,9 +255,9 @@ export default function PromptNode({ id, data, selected }: NodeProps<PromptNodeT
         <div
           ref={highlightRef}
           aria-hidden
-          className="absolute inset-0 px-3 py-2.5 text-[12px] text-white leading-[1.6] pointer-events-none whitespace-pre-wrap break-words overflow-hidden select-none"
+          className="absolute inset-0 px-3 pt-2.5 pb-8 text-[13px] text-white leading-[1.6] pointer-events-none whitespace-pre-wrap break-words overflow-hidden select-none"
         >
-          {renderWithMentions(localText, knownLabels, mentionPreviews)}
+          {renderWithMentions(localText, knownLabels)}
           {"\u200b"}
         </div>
 
@@ -293,7 +265,7 @@ export default function PromptNode({ id, data, selected }: NodeProps<PromptNodeT
         {!localText && (
           <div
             aria-hidden
-            className="absolute inset-0 px-3 py-2.5 text-[12px] text-[#444444] leading-[1.6] pointer-events-none select-none"
+            className="absolute inset-0 px-3 pt-2.5 pb-8 text-[13px] text-[#444444] leading-[1.6] pointer-events-none select-none"
           >
             Describe what you want to generate…
           </div>
@@ -303,7 +275,7 @@ export default function PromptNode({ id, data, selected }: NodeProps<PromptNodeT
             React never writes .value, so cursor position is never reset. */}
         <textarea
           ref={textareaRef}
-          className="relative w-full h-full px-3 py-2.5 bg-transparent text-[12px] leading-[1.6] resize-none outline-none overflow-y-auto z-10"
+          className="relative w-full h-full px-3 pt-2.5 pb-8 bg-transparent text-[13px] leading-[1.6] resize-none outline-none overflow-y-auto z-10"
           style={{ color: "transparent", caretColor: "white", overscrollBehavior: "contain" }}
           defaultValue={storePrompt}
           onChange={handleChange}

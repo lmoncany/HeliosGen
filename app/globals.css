@@ -37,7 +37,7 @@ body {
 }
 
 .node-label {
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 500;
   color: #8D8E89;
   letter-spacing: 0.02em;
@@ -46,7 +46,7 @@ body {
 
 .node-field-label {
   display: block;
-  font-size: 10px;
+  font-size: 11px;
   color: #8D8E89;
   margin-bottom: 4px;
   letter-spacing: 0.02em;
@@ -58,7 +58,7 @@ body {
   border: 1px solid #1A100C;
   border-radius: 5px;
   color: #FFFFFF;
-  font-size: 12px;
+  font-size: 13px;
   line-height: 1.5;
   padding: 7px 8px;
   resize: none;
@@ -75,7 +75,7 @@ body {
   border: 1px solid #1A100C;
   border-radius: 5px;
   color: #FFFFFF;
-  font-size: 11px;
+  font-size: 12px;
   padding: 5px 8px;
   outline: none;
   font-family: inherit;
@@ -90,7 +90,7 @@ body {
   border: 1px solid #1A100C;
   border-radius: 5px;
   color: #8D8E89;
-  font-size: 11px;
+  font-size: 12px;
   padding: 5px 8px;
   outline: none;
   font-family: inherit;
@@ -105,7 +105,7 @@ body {
   position: absolute;
   top: -20px;
   left: 2px;
-  font-size: 10px;
+  font-size: 11px;
   color: #707070;
   text-transform: uppercase;
   letter-spacing: 0.05em;
@@ -302,7 +302,7 @@ body {
 
 /* ── Toolbar buttons ─────────────────────────────────── */
 .toolbar-btn {
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 500;
   color: #8D8E89;
   background: #0D1012;
@@ -320,7 +320,7 @@ body {
 .toolbar-btn:disabled { opacity: 0.3; cursor: not-allowed; }
 
 .toolbar-btn-primary {
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 500;
   color: #0A0C0E;
   background: #77E544;
@@ -442,10 +442,13 @@ body {
 
 /* ── @mention chip in PromptNode ─────────────────────────────────────────── */
 .mention-chip {
-  display: inline-flex;
-  align-items: center;
+  display: inline;
   background: rgba(255, 255, 255, 0.13);
-  border-radius: 3px;
+  border-radius: 4px;
   color: #FFFFFF;
-  padding: 0 6px;
+  padding: 2px 0;
+  /* shadows stay well under space-char width (~3-4 px) so the natural space
+     character creates a visible gap to surrounding text, and the caret lands
+     outside the chip */
+  box-shadow: -2px 0 0 rgba(255, 255, 255, 0.13), 2px 0 0 rgba(255, 255, 255, 0.13);
 }
