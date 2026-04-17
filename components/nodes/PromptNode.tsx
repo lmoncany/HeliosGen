@@ -53,7 +53,7 @@ function renderWithMentions(text: string, knownLabels: string[]): ReactNode {
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
-export default function PromptNode({ id, data }: NodeProps<PromptNodeType>) {
+export default function PromptNode({ id, data, selected }: NodeProps<PromptNodeType>) {
   const updateNodeData = useWorkflowStore((s) => s.updateNodeData);
   const nodes          = useWorkflowStore((s) => s.nodes);
   const edges          = useWorkflowStore((s) => s.edges);
@@ -61,11 +61,17 @@ export default function PromptNode({ id, data }: NodeProps<PromptNodeType>) {
   const textareaRef      = useRef<HTMLTextAreaElement>(null);
   const highlightRef     = useRef<HTMLDivElement>(null);
   const cardRef          = useRef<HTMLDivElement>(null);
+  const textZoneRef      = useRef<HTMLDivElement>(null);
   // Desired cursor position after a programmatic text change (insertion / deletion)
   const pendingCursorRef = useRef<number | null>(null);
+  const selectedRef      = useRef(selected);
 
-  const [mentionQuery, setMentionQuery] = useState<string | null>(null);
-  const [selectedIdx,  setSelectedIdx]  = useState(0);
+  const [mentionQuery,    setMentionQuery]    = useState<string | null>(null);
+  const [selectedIdx,    setSelectedIdx]    = useState(0);
+  const [hasScrollTop,   setHasScrollTop]   = useState(false);
+  const [hasScrollBottom, setHasScrollBottom] = useState(false);
+
+  selectedRef.current = selected;
 
   const storePrompt = (data.prompt as string) ?? "";
   const hasError    = !!data.hasError;
@@ -142,6 +148,40 @@ export default function PromptNode({ id, data }: NodeProps<PromptNodeType>) {
     }
   }, []);
 
+  // ── Track overflow for gradient fades ────────────────────────────────────
+  const checkScrollState = useCallback(() => {
+    const ta = textareaRef.current;
+    if (!ta) return;
+    setHasScrollTop(ta.scrollTop > 2);
+    setHasScrollBottom(ta.scrollTop + ta.clientHeight < ta.scrollHeight - 2);
+  }, []);
+
+  useEffect(() => { checkScrollState(); }, [localText, checkScrollState]);
+
+  // Native listeners on the text zone — must be native (not React synthetic) so they
+  // fire during DOM bubble before ReactFlow's listener on the node wrapper sees the event.
+  useEffect(() => {
+    const el = textZoneRef.current;
+    if (!el) return;
+    // Block mousedown (and thus drag/text-selection) only when the node is selected
+    const onMouseDown = (e: MouseEvent) => { if (selectedRef.current) e.stopPropagation(); };
+    // Block wheel only when the node is selected (otherwise canvas zooms normally).
+    // No passive:true so stopPropagation is fully honoured; stopImmediatePropagation
+    // also blocks any other listeners registered on this same element.
+    const onWheel = (e: WheelEvent) => {
+      if (selectedRef.current) {
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+      }
+    };
+    el.addEventListener("mousedown", onMouseDown);
+    el.addEventListener("wheel", onWheel);
+    return () => {
+      el.removeEventListener("mousedown", onMouseDown);
+      el.removeEventListener("wheel", onWheel);
+    };
+  }, []);
+
   // ── onChange — textarea is uncontrolled; React never writes .value ────────
   const handleChange = useCallback(
     (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -189,15 +229,20 @@ export default function PromptNode({ id, data }: NodeProps<PromptNodeType>) {
   return (
     <div
       ref={cardRef}
-      className={`node-card w-full h-full${hasError ? " node-error-blink" : ""}`}
+      className={`node-card w-full h-full flex flex-col${hasError ? " node-error-blink" : ""}`}
       style={{ minWidth: 260 }}
       onAnimationEnd={() => updateNodeData(id, { hasError: false })}
     >
       <CornerResizer minWidth={200} minHeight={80} />
       <span className="node-above-label">{data.label as string}</span>
 
-      {/* ── Text area ──────────────────────────────────────────────────── */}
-      <div className="relative overflow-hidden rounded-[7px] h-full">
+      {/* Padding zone — fills remaining height; clicking here drags the node */}
+      <div className="flex-1 p-2.5 min-h-0">
+        {/* Text zone — stops propagation so clicking edits text, not drags node */}
+        <div
+          ref={textZoneRef}
+          className="relative h-full rounded-[7px] overflow-hidden"
+        >
         {/* Highlight overlay — driven by localText so it updates on every keystroke */}
         <div
           ref={highlightRef}
@@ -223,10 +268,10 @@ export default function PromptNode({ id, data }: NodeProps<PromptNodeType>) {
         <textarea
           ref={textareaRef}
           className="relative w-full h-full px-3 py-2.5 bg-transparent text-[12px] leading-[1.6] resize-none outline-none overflow-y-auto z-10"
-          style={{ color: "transparent", caretColor: "white" }}
+          style={{ color: "transparent", caretColor: "white", overscrollBehavior: "contain" }}
           defaultValue={storePrompt}
           onChange={handleChange}
-          onScroll={syncScroll}
+          onScroll={() => { syncScroll(); checkScrollState(); }}
           onKeyDown={(e) => {
             const ta = textareaRef.current;
 
@@ -279,6 +324,25 @@ export default function PromptNode({ id, data }: NodeProps<PromptNodeType>) {
             }
           }}
         />
+
+        {/* Top gradient — visible when scrolled down */}
+        {hasScrollTop && (
+          <div
+            aria-hidden
+            className="absolute top-0 left-0 right-0 h-8 pointer-events-none z-20"
+            style={{ background: "linear-gradient(to bottom, #0D1012 0%, transparent 100%)" }}
+          />
+        )}
+
+        {/* Bottom gradient — visible when more text is below */}
+        {hasScrollBottom && (
+          <div
+            aria-hidden
+            className="absolute bottom-0 left-0 right-0 h-8 pointer-events-none z-20"
+            style={{ background: "linear-gradient(to top, #0D1012 0%, transparent 100%)" }}
+          />
+        )}
+        </div>
       </div>
 
       <Handle

@@ -488,7 +488,7 @@ export default function VideoGeneratorNode({ id, data }: NodeProps<VideoGenerato
       {generations.length > 0 ? (
         <div
           className="relative bg-[#090B0D] rounded-t-[7px] overflow-hidden group/player group/gen"
-          style={{ aspectRatio: (data.imageNaturalRatio as string | undefined) ?? aspectRatio.replace(":", " / "), width: "100%" }}
+          style={{ aspectRatio: (data.imageNaturalRatio as string | undefined) ?? aspectRatio.replace(":", " / "), width: "100%", transition: "aspect-ratio 0.35s cubic-bezier(0.4, 0, 0.2, 1)" }}
         >
           {/* Sliding strip — same approach as image carousel */}
           <div
@@ -591,7 +591,7 @@ export default function VideoGeneratorNode({ id, data }: NodeProps<VideoGenerato
 
         </div>
       ) : (
-        <div className="relative bg-[#090B0D] rounded-t-[7px] overflow-hidden" style={{ aspectRatio: aspectRatio.replace(":", " / "), width: "100%" }}>
+        <div className="relative bg-[#090B0D] rounded-t-[7px] overflow-hidden" style={{ aspectRatio: aspectRatio.replace(":", " / "), width: "100%", transition: "aspect-ratio 0.35s cubic-bezier(0.4, 0, 0.2, 1)" }}>
           {status === "error" && (
             <div className="absolute inset-0 flex flex-col items-center justify-center px-5 gap-2.5 text-center">
               <div className="flex items-center gap-2.5">
@@ -874,7 +874,6 @@ export default function VideoGeneratorNode({ id, data }: NodeProps<VideoGenerato
         );
       })()}
 
-      {busy && <SpinnerOverlay color="#3A6FFF" />}
     </div>
   );
 }

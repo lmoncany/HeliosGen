@@ -8,10 +8,10 @@ interface Props {
   minHeight?: number;
 }
 
-const S = 14;    // handle bounding box (px)
-const T = 2.5;   // border thickness (px)
-const R = 9;     // corner radius — large makes it look arc-like
-const O = -10;   // offset: push handle outside the card border
+const S = 8;     // handle bounding box (px)
+const T = 1.5;   // border thickness (px)
+const R = 4;     // corner radius
+const O = -6;    // offset: push handle outside the card border
 const C = "#707070"; // muted gray
 
 type CornerDef = {

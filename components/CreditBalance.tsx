@@ -1,0 +1,44 @@
+"use client";
+import { useEffect, useRef, useState } from "react";
+import { useWorkflowStore } from "@/lib/store";
+
+export default function CreditBalance() {
+  const [balance, setBalance] = useState<number | null>(null);
+  const isRunning = useWorkflowStore((s) => s.isRunning);
+  const prevRunning = useRef(false);
+
+  const fetchBalance = async () => {
+    try {
+      const res = await fetch("/api/credit");
+      if (!res.ok) return;
+      const data = await res.json();
+      const val = typeof data?.data === "number" ? data.data : (data?.data?.balance ?? data?.balance ?? null);
+      setBalance(val);
+    } catch {
+      // silently ignore
+    }
+  };
+
+  // Fetch on mount (covers page refresh)
+  useEffect(() => {
+    fetchBalance();
+    const id = setInterval(fetchBalance, 60_000);
+    return () => clearInterval(id);
+  }, []);
+
+  // Refresh when a run finishes (success or failure)
+  useEffect(() => {
+    if (prevRunning.current && !isRunning) {
+      fetchBalance();
+    }
+    prevRunning.current = isRunning;
+  }, [isRunning]);
+
+  if (balance === null) return null;
+
+  return (
+    <span className="text-[11px] text-[#8D8E89] tabular-nums">
+      {balance.toLocaleString()} credits
+    </span>
+  );
+}

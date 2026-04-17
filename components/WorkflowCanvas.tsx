@@ -31,6 +31,7 @@ import GenerateNode        from "./nodes/GenerateNode";
 import VideoGeneratorNode  from "./nodes/VideoGeneratorNode";
 import NodePickerMenu, { DropState } from "./NodePickerMenu";
 import AuthButton from "./AuthButton";
+import CreditBalance from "./CreditBalance";
 
 async function getAccessToken(): Promise<string | undefined> {
   try {
@@ -1019,6 +1020,7 @@ export default function WorkflowCanvas() {
         />
 
         <Panel position="top-right" className="flex items-center gap-2 m-3">
+          <CreditBalance />
           <AuthButton />
 
           {/* Debug toggle */}
