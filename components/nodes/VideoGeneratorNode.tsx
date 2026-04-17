@@ -13,7 +13,7 @@ type VideoGeneratorNodeType = Node<NodeData, "videoGeneratorNode">;
 
 type HandleDef = { id: string; label: string; topPct: number; className: string };
 
-const KLING_HANDLES: HandleDef[] = [
+const BASE_HANDLES: HandleDef[] = [
   { id: "prompt",     label: "Text prompt",               topPct: 26, className: "node-handle-icon node-handle-icon-prompt" },
   { id: "startFrame", label: "Reference image",           topPct: 44, className: "node-handle-icon node-handle-icon-image" },
   { id: "endFrame",   label: "End frame",                 topPct: 60, className: "node-handle-icon node-handle-icon-image" },
@@ -36,8 +36,76 @@ const STATUS_DOT: Record<string, string> = {
   error: "bg-red-500",
 };
 
-// ── Component ─────────────────────────────────────────────────────────────────
+// ── @mention → <<<image N>>> replacement (same logic as GenerateNode) ─────────
 
+function resolveMentions(
+  prompt: string,
+  labels: string[],
+  imageUrls: string[],
+  tagFormat: "default" | "grok" = "default",
+): { resolvedPrompt: string; orderedUrls: string[] } {
+  if (!labels.length) return { resolvedPrompt: prompt, orderedUrls: imageUrls };
+
+  type Span = { start: number; end: number; labelIdx: number | null };
+  const spans: Span[] = [];
+  const claimed = new Set<number>();
+
+  const sortedLabels = labels
+    .map((label, i) => ({ label, i }))
+    .filter(({ label }) => !!label)
+    .sort((a, b) => b.label.length - a.label.length);
+
+  for (const { label, i } of sortedLabels) {
+    const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const re = new RegExp(`@${escaped}`, "gi");
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(prompt)) !== null) {
+      if (!claimed.has(m.index)) {
+        spans.push({ start: m.index, end: m.index + m[0].length, labelIdx: i });
+        claimed.add(m.index);
+      }
+    }
+  }
+
+  const fallback = /@\S+(?:\s+#\d+)?/g;
+  let fm: RegExpExecArray | null;
+  while ((fm = fallback.exec(prompt)) !== null) {
+    if (!claimed.has(fm.index)) {
+      spans.push({ start: fm.index, end: fm.index + fm[0].length, labelIdx: null });
+      claimed.add(fm.index);
+    }
+  }
+
+  spans.sort((a, b) => a.start - b.start);
+  if (spans.length === 0) return { resolvedPrompt: prompt, orderedUrls: imageUrls };
+
+  const orderedUrls: string[] = [];
+  const usedIdxs = new Set<number>();
+
+  for (const span of spans) {
+    if (span.labelIdx !== null && !usedIdxs.has(span.labelIdx) && imageUrls[span.labelIdx]) {
+      orderedUrls.push(imageUrls[span.labelIdx]);
+      usedIdxs.add(span.labelIdx);
+    } else {
+      const next = imageUrls.findIndex((_, j) => !usedIdxs.has(j));
+      if (next !== -1) { orderedUrls.push(imageUrls[next]); usedIdxs.add(next); }
+      else if (imageUrls.length > 0) orderedUrls.push(imageUrls[0]);
+    }
+  }
+
+  let resolvedPrompt = "";
+  let lastEnd = 0;
+  for (let i = 0; i < spans.length; i++) {
+    resolvedPrompt += prompt.slice(lastEnd, spans[i].start);
+    resolvedPrompt += tagFormat === "grok" ? `@image${i + 1} ` : `<<<image ${i + 1}>>>`;
+    lastEnd = spans[i].end;
+  }
+  resolvedPrompt += prompt.slice(lastEnd);
+
+  return { resolvedPrompt, orderedUrls };
+}
+
+// ── Component ─────────────────────────────────────────────────────────────────
 
 export default function VideoGeneratorNode({ id, data }: NodeProps<VideoGeneratorNodeType>) {
   const updateNodeData = useWorkflowStore((s) => s.updateNodeData);
@@ -64,7 +132,8 @@ export default function VideoGeneratorNode({ id, data }: NodeProps<VideoGenerato
   const [hovering, setHovering] = useState(false);
   const [progress, setProgress] = useState(0);
   const [currentSec, setCurrentSec] = useState(0);
-  const videoRef = useRef<HTMLVideoElement>(null);
+  const videoRef  = useRef<HTMLVideoElement>(null);
+  const videoRefs = useRef<Map<number, HTMLVideoElement>>(new Map());
 
   const fmtTime = (s: number) => `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
 
@@ -83,27 +152,43 @@ export default function VideoGeneratorNode({ id, data }: NodeProps<VideoGenerato
   const videoUrl = data.videoUrl as string | undefined;
 
   // ── Generation history ────────────────────────────────────────────────────
-  const generations    = (data.generations as string[] | undefined) ?? (videoUrl ? [videoUrl] : []);
+  type GenEntry = string | null | { error: string };
+  const generations: GenEntry[]  = Array.isArray(data.generations)
+    ? (data.generations as GenEntry[])
+    : (videoUrl ? [videoUrl] : []);
   const currentGenIdx  = Math.min((data.currentGenIdx as number | undefined) ?? Math.max(0, generations.length - 1), Math.max(0, generations.length - 1));
   const generationsRef = useRef(generations);
   generationsRef.current = generations;
 
   const goToGen = useCallback((idx: number) => {
-    const gens = generationsRef.current;
+    const gens    = generationsRef.current;
     const clamped = Math.max(0, Math.min(gens.length - 1, idx));
-    updateNodeData(id, { currentGenIdx: clamped, videoUrl: gens[clamped], status: "done", errorMsg: undefined });
+    const entry   = gens[clamped];
+    if (entry === null) {
+      updateNodeData(id, { currentGenIdx: clamped, videoUrl: undefined, status: "running", errorMsg: undefined });
+    } else if (typeof entry === "object") {
+      updateNodeData(id, { currentGenIdx: clamped, videoUrl: undefined, status: "error", errorMsg: entry.error });
+    } else {
+      updateNodeData(id, { currentGenIdx: clamped, videoUrl: entry, status: "done", errorMsg: undefined });
+    }
   }, [id, updateNodeData]);
+
+  // Play current, pause all others
+  useEffect(() => {
+    videoRefs.current.forEach((v, i) => {
+      if (i === currentGenIdx) v.play().catch(() => {});
+      else v.pause();
+    });
+  }, [currentGenIdx]);
 
   const handleVideoMeta = (e: React.SyntheticEvent<HTMLVideoElement>) => {
     const v = e.currentTarget;
     if (!v.videoWidth || !v.videoHeight) return;
     updateNodeData(id, { imageNaturalRatio: `${v.videoWidth} / ${v.videoHeight}` });
-    const nodeWidth = cardRef.current?.offsetWidth ?? 320;
-    const videoH = nodeWidth * (v.videoHeight / v.videoWidth);
-    updateNodeSize(id, nodeWidth, videoH + 76);
+    // Sizing is handled by the useEffect below once the DOM reflects the new state
   };
 
-  // Re-sync edge anchor positions whenever the node resizes
+  // Re-sync node size and edge anchor positions whenever layout-affecting data changes
   useEffect(() => {
     const raf = requestAnimationFrame(() => {
       if (cardRef.current) {
@@ -113,7 +198,7 @@ export default function VideoGeneratorNode({ id, data }: NodeProps<VideoGenerato
       updateNodeInternals(id);
     });
     return () => cancelAnimationFrame(raf);
-  }, [id, aspectRatio, data.imageNaturalRatio, updateNodeSize, updateNodeInternals]);
+  }, [id, aspectRatio, data.imageNaturalRatio, data.generations, updateNodeSize, updateNodeInternals]);
 
   // ── Poll job-status while a taskId is pending ────────────────────────────
   useEffect(() => {
@@ -129,15 +214,25 @@ export default function VideoGeneratorNode({ id, data }: NodeProps<VideoGenerato
         if (cancelled) return;
 
         if (json.status === "done" && json.videoUrl) {
-          const prevGens = (useWorkflowStore.getState().nodes.find((n) => n.id === id)?.data?.generations as string[] | undefined) ?? [];
-          const newGens  = [...prevGens, json.videoUrl as string];
-          updateNodeData(id, { status: "done", videoUrl: json.videoUrl, taskId: undefined, generations: newGens, currentGenIdx: newGens.length - 1 });
+          const storeNode = useWorkflowStore.getState().nodes.find((n) => n.id === id);
+          const gens = [...((storeNode?.data?.generations as GenEntry[] | undefined) ?? [])] as GenEntry[];
+          const slot = storeNode?.data?.currentGenIdx as number ?? gens.length - 1;
+          gens[slot] = json.videoUrl as string;
+          updateNodeData(id, { status: "done", videoUrl: json.videoUrl, taskId: undefined, generations: gens, currentGenIdx: slot });
           clearInterval(interval);
         } else if (json.status === "error") {
-          updateNodeData(id, { status: "error", errorMsg: json.error, taskId: undefined });
+          const storeNode = useWorkflowStore.getState().nodes.find((n) => n.id === id);
+          const gens = [...((storeNode?.data?.generations as GenEntry[] | undefined) ?? [])] as GenEntry[];
+          const slot = storeNode?.data?.currentGenIdx as number ?? gens.length - 1;
+          gens[slot] = { error: json.error ?? "Generation failed" };
+          updateNodeData(id, { status: "error", errorMsg: json.error, taskId: undefined, generations: gens, currentGenIdx: slot });
           clearInterval(interval);
         } else if (json.status === "not_found") {
-          updateNodeData(id, { status: "error", errorMsg: "Job lost (server restarted)", taskId: undefined });
+          const storeNode = useWorkflowStore.getState().nodes.find((n) => n.id === id);
+          const gens = [...((storeNode?.data?.generations as GenEntry[] | undefined) ?? [])] as GenEntry[];
+          const slot = storeNode?.data?.currentGenIdx as number ?? gens.length - 1;
+          gens[slot] = { error: "Job lost (server restarted)" };
+          updateNodeData(id, { status: "error", errorMsg: "Job lost (server restarted)", taskId: undefined, generations: gens, currentGenIdx: slot });
           clearInterval(interval);
         }
         // "pending" → keep polling
@@ -151,7 +246,11 @@ export default function VideoGeneratorNode({ id, data }: NodeProps<VideoGenerato
 
   // All 4 handle slots always render at fixed positions so anchors never jump.
   // Handles not in cfg.handles are hidden.
-  const handles = KLING_HANDLES;
+  const handles = BASE_HANDLES.map((h) =>
+    h.id === "resource" && cfg.maxResources
+      ? { ...h, label: `Reference images (up to ${cfg.maxResources})` }
+      : h
+  );
   const activeHandles = new Set<string>(cfg.handles);
   const ratios = cfg.ratios;
   const durations = cfg.durations;
@@ -159,6 +258,7 @@ export default function VideoGeneratorNode({ id, data }: NodeProps<VideoGenerato
   const closeAll = () => {
     setModelOpen(false); setRatioOpen(false); setDurOpen(false);
     setModeOpen(false); setGrokResOpen(false);
+    setHovering(false);
   };
 
   const textEdge = edges.find((e) => e.target === id && e.targetHandle === "prompt");
@@ -171,7 +271,18 @@ export default function VideoGeneratorNode({ id, data }: NodeProps<VideoGenerato
     if (!authData.session) { setAuthModalOpen(true); return; }
 
     const upstream = resolveInputs(id, nodes as Node<NodeData>[], edges);
-    const finalPrompt = upstream.prompt ?? prompt;
+    const maxRes = cfg.maxResources ?? 3;
+    const limitedResources = upstream.resources.slice(0, maxRes);
+    const { resolvedPrompt, orderedUrls } = resolveMentions(
+      upstream.prompt ?? prompt,
+      limitedResources.map((r) => r.label),
+      limitedResources.map((r) => r.url),
+      cfg.resourceTagFormat ?? "default",
+    );
+    const finalPrompt = resolvedPrompt;
+    const orderedResources = orderedUrls.map(
+      (url) => limitedResources.find((r) => r.url === url) ?? { url, label: "element" }
+    );
 
     if (!cfg.promptOptional && !finalPrompt.trim()) {
       if (textEdge) {
@@ -261,9 +372,9 @@ export default function VideoGeneratorNode({ id, data }: NodeProps<VideoGenerato
       startFrameUrl:      upstream.startFrameUrl,
       endFrameUrl:        upstream.endFrameUrl,
       videoRefUrl:        finalVideoRefUrl,
-      resources:          upstream.resources,
-      referenceImageUrls: upstream.resources.length > 0
-        ? upstream.resources.map((r) => r.url)
+      resources:          orderedResources,
+      referenceImageUrls: orderedResources.length > 0
+        ? orderedResources.map((r) => r.url)
         : undefined,
     };
 
@@ -286,7 +397,9 @@ export default function VideoGeneratorNode({ id, data }: NodeProps<VideoGenerato
     }
 
     setLoading(true);
-    updateNodeData(id, { status: "running", videoUrl: undefined, imageNaturalRatio: undefined, errorMsg: undefined, taskId: undefined });
+    const prevGens2 = [...((useWorkflowStore.getState().nodes.find(n => n.id === id)?.data?.generations as GenEntry[] | undefined) ?? [])] as GenEntry[];
+    const loadingGens2 = [...prevGens2, null] as GenEntry[];
+    updateNodeData(id, { status: "running", videoUrl: undefined, imageNaturalRatio: undefined, errorMsg: undefined, taskId: undefined, generations: loadingGens2, currentGenIdx: loadingGens2.length - 1 });
 
     try {
       const res = await fetch("/api/generate-video", {
@@ -317,8 +430,9 @@ export default function VideoGeneratorNode({ id, data }: NodeProps<VideoGenerato
   return (
     <div
       ref={cardRef}
-      className={`video-node-card node-card w-full h-full flex flex-col${(data.hasError as boolean) ? " node-error-blink" : ""}`}
+      className={`video-node-card node-card w-full flex flex-col${(data.hasError as boolean) ? " node-error-blink" : ""}`}
       style={{ minWidth: 320, minHeight: 280, ...(busy ? { animation: "video-node-pulse-glow 2.4s ease-in-out infinite" } : {}) }}
+      onMouseEnter={() => setHovering(true)}
       onMouseLeave={closeAll}
       onAnimationEnd={(e) => { if (e.animationName === "node-error-blink") updateNodeData(id, { hasError: false }); }}
     >
@@ -371,32 +485,63 @@ export default function VideoGeneratorNode({ id, data }: NodeProps<VideoGenerato
       )}
 
       {/* ── Main content ─────────────────────────────────────────────── */}
-      {videoUrl ? (
+      {generations.length > 0 ? (
         <div
           className="relative bg-[#090B0D] rounded-t-[7px] overflow-hidden group/player group/gen"
-          style={{ aspectRatio: (data.imageNaturalRatio as string | undefined) ?? "16 / 9", width: "100%" }}
-          onMouseEnter={() => setHovering(true)}
-          onMouseLeave={() => setHovering(false)}
+          style={{ aspectRatio: (data.imageNaturalRatio as string | undefined) ?? aspectRatio.replace(":", " / "), width: "100%" }}
         >
-          {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
-          <video
-            ref={videoRef}
-            key={videoUrl}
-            src={videoUrl}
-            className="w-full h-full block"
-            style={{ objectFit: "fill" }}
-            autoPlay
-            loop
-            playsInline
-            muted={muted || !hovering}
-            onLoadedMetadata={handleVideoMeta}
-            onTimeUpdate={(e) => {
-              const v = e.currentTarget;
-              setCurrentSec(v.currentTime);
-              if (v.duration) setProgress(v.currentTime / v.duration);
+          {/* Sliding strip — same approach as image carousel */}
+          <div
+            style={{
+              display: "flex",
+              height: "100%",
+              transform: `translateX(${-currentGenIdx * 100}%)`,
+              transition: "transform 320ms cubic-bezier(0.4, 0, 0.2, 1)",
+              willChange: "transform",
             }}
-          />
+          >
+            {generations.map((entry, i) => (
+              <div key={i} style={{ minWidth: "100%", height: "100%", flexShrink: 0, position: "relative", background: "#090B0D" }}>
+                {entry === null ? (
+                  <div className="absolute inset-0 flex items-center justify-center">
+                    <div className="w-5 h-5 rounded-full border-2 border-[#2a2a2a] border-t-[#666] animate-spin" />
+                  </div>
+                ) : typeof entry === "object" ? (
+                  <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 px-4 text-center">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+                      <circle cx="12" cy="12" r="10" fill="#1a0a0a" stroke="#5a1a1a" strokeWidth="1.5"/>
+                      <path d="M12 7v5" stroke="#c04040" strokeWidth="2" strokeLinecap="round"/>
+                      <circle cx="12" cy="16" r="1" fill="#c04040"/>
+                    </svg>
+                    <p className="text-[10px] text-[#555] leading-snug break-words">{entry.error}</p>
+                  </div>
+                ) : (
+                  // eslint-disable-next-line jsx-a11y/media-has-caption
+                  <video
+                    ref={(el) => {
+                      if (el) { videoRefs.current.set(i, el); if (i === currentGenIdx) (videoRef as React.MutableRefObject<HTMLVideoElement | null>).current = el; }
+                      else videoRefs.current.delete(i);
+                    }}
+                    src={entry}
+                    className="w-full h-full block"
+                    style={{ objectFit: "fill" }}
+                    loop
+                    playsInline
+                    muted={i !== currentGenIdx || muted || !hovering}
+                    onLoadedMetadata={i === currentGenIdx ? handleVideoMeta : undefined}
+                    onTimeUpdate={i === currentGenIdx ? (e) => {
+                      const v = e.currentTarget;
+                      setCurrentSec(v.currentTime);
+                      if (v.duration) setProgress(v.currentTime / v.duration);
+                    } : undefined}
+                  />
+                )}
+              </div>
+            ))}
+          </div>
 
+          {/* Overlay controls — only visible when current slot is a done video */}
+          {typeof generations[currentGenIdx] === "string" && <>
           {/* Timer badge — top-left, visible on hover */}
           <div className="absolute top-2 left-2 h-7 px-2 rounded-full bg-black/40 backdrop-blur-sm flex items-center justify-center opacity-0 group-hover/player:opacity-100 transition-opacity z-10 pointer-events-none">
             <span className="text-[11px] text-white font-mono tabular-nums">{fmtTime(currentSec)}</span>
@@ -442,56 +587,23 @@ export default function VideoGeneratorNode({ id, data }: NodeProps<VideoGenerato
               style={{ width: `${progress * 100}%` }}
             />
           </div>
+          </>}
 
-          {/* ── Carousel ───────────────────────────────────────────────── */}
-          {generations.length > 1 && (
-            <>
-              <button
-                onMouseDown={(e) => e.stopPropagation()}
-                onClick={(e) => { e.stopPropagation(); goToGen(currentGenIdx - 1); }}
-                disabled={currentGenIdx === 0}
-                className="absolute left-2 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-black/40 backdrop-blur-sm flex items-center justify-center opacity-0 group-hover/gen:opacity-100 transition-opacity disabled:opacity-0 z-10 pointer-events-auto"
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                  <polyline points="15 18 9 12 15 6" />
-                </svg>
-              </button>
-              <button
-                onMouseDown={(e) => e.stopPropagation()}
-                onClick={(e) => { e.stopPropagation(); goToGen(currentGenIdx + 1); }}
-                disabled={currentGenIdx === generations.length - 1}
-                className="absolute right-2 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-black/40 backdrop-blur-sm flex items-center justify-center opacity-0 group-hover/gen:opacity-100 transition-opacity disabled:opacity-0 z-10 pointer-events-auto"
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                  <polyline points="9 18 15 12 9 6" />
-                </svg>
-              </button>
-              <div className="absolute bottom-5 left-1/2 -translate-x-1/2 flex items-center gap-1 z-10" onMouseDown={(e) => e.stopPropagation()}>
-                {generations.length <= 8 ? generations.map((_, i) => (
-                  <button
-                    key={i}
-                    onMouseDown={(e) => e.stopPropagation()}
-                    onClick={(e) => { e.stopPropagation(); goToGen(i); }}
-                    className={`w-1.5 h-1.5 rounded-full transition-colors pointer-events-auto ${i === currentGenIdx ? "bg-white" : "bg-white/30 hover:bg-white/60"}`}
-                  />
-                )) : (
-                  <span className="text-[10px] text-white/60 font-mono tabular-nums bg-black/30 px-1.5 py-0.5 rounded-full">
-                    {currentGenIdx + 1} / {generations.length}
-                  </span>
-                )}
-              </div>
-            </>
-          )}
         </div>
       ) : (
-        <div className="relative flex-1 bg-[#090B0D] rounded-t-[7px] overflow-hidden group/gen" style={{ minHeight: 160 }}>
+        <div className="relative bg-[#090B0D] rounded-t-[7px] overflow-hidden" style={{ aspectRatio: aspectRatio.replace(":", " / "), width: "100%" }}>
           {status === "error" && (
-            <div className="absolute inset-0 flex flex-col justify-center px-5 gap-2.5">
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" className="shrink-0 mb-0.5">
-                <circle cx="12" cy="12" r="10" fill="#1a0a0a" stroke="#5a1a1a" strokeWidth="1.5" />
-                <path d="M12 7v5" stroke="#c04040" strokeWidth="2" strokeLinecap="round" />
-                <circle cx="12" cy="16" r="1" fill="#c04040" />
-              </svg>
+            <div className="absolute inset-0 flex flex-col items-center justify-center px-5 gap-2.5 text-center">
+              <div className="flex items-center gap-2.5">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" className="shrink-0">
+                  <circle cx="12" cy="12" r="10" fill="#1a0a0a" stroke="#5a1a1a" strokeWidth="1.5" />
+                  <path d="M12 7v5" stroke="#c04040" strokeWidth="2" strokeLinecap="round" />
+                  <circle cx="12" cy="16" r="1" fill="#c04040" />
+                </svg>
+                <span className="text-[10px] px-2 py-0.5 rounded-full whitespace-nowrap" style={{ border: "1px solid rgba(74,222,128,0.2)", color: "#4ade80", background: "rgba(74,222,128,0.07)" }}>
+                  Credits refunded
+                </span>
+              </div>
               <p className="text-white text-[12px] font-semibold leading-snug">Oops! Something went wrong.</p>
               <p className="text-[#555] text-[10px] leading-[1.5] break-words">
                 {(data.errorMsg as string) ?? "Generation failed"}
@@ -504,46 +616,47 @@ export default function VideoGeneratorNode({ id, data }: NodeProps<VideoGenerato
               <span className="text-[11px] text-[#555]">{textNode.data.label as string}</span>
             </div>
           )}
+        </div>
+      )}
 
-          {/* Carousel — shown even on error so user can browse previous generations */}
-          {generations.length > 0 && (
-            <>
+      {/* ── Carousel nav — always visible when multiple generations exist ── */}
+      {generations.length > 1 && (
+        <div
+          className="flex items-center justify-between px-2 border-t border-[#1E1410] shrink-0"
+          style={{ height: 30 }}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          <button
+            onClick={(e) => { e.stopPropagation(); goToGen(currentGenIdx - 1); }}
+            disabled={currentGenIdx === 0}
+            className="w-6 h-6 flex items-center justify-center rounded transition-opacity disabled:opacity-20"
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="15 18 9 12 15 6" />
+            </svg>
+          </button>
+          <div className="flex items-center gap-1.5">
+            {generations.length <= 8 ? generations.map((_, i) => (
               <button
-                onMouseDown={(e) => e.stopPropagation()}
-                onClick={(e) => { e.stopPropagation(); goToGen(currentGenIdx - 1); }}
-                disabled={currentGenIdx === 0}
-                className="absolute left-2 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-black/40 backdrop-blur-sm flex items-center justify-center opacity-0 group-hover/gen:opacity-100 transition-opacity disabled:opacity-0 z-10 pointer-events-auto"
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                  <polyline points="15 18 9 12 15 6" />
-                </svg>
-              </button>
-              <button
-                onMouseDown={(e) => e.stopPropagation()}
-                onClick={(e) => { e.stopPropagation(); goToGen(currentGenIdx + 1); }}
-                disabled={currentGenIdx === generations.length - 1}
-                className="absolute right-2 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-black/40 backdrop-blur-sm flex items-center justify-center opacity-0 group-hover/gen:opacity-100 transition-opacity disabled:opacity-0 z-10 pointer-events-auto"
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                  <polyline points="9 18 15 12 9 6" />
-                </svg>
-              </button>
-              <div className="absolute bottom-2 left-1/2 -translate-x-1/2 flex items-center gap-1 z-10" onMouseDown={(e) => e.stopPropagation()}>
-                {generations.length <= 8 ? generations.map((_, i) => (
-                  <button
-                    key={i}
-                    onMouseDown={(e) => e.stopPropagation()}
-                    onClick={(e) => { e.stopPropagation(); goToGen(i); }}
-                    className={`w-1.5 h-1.5 rounded-full transition-colors pointer-events-auto ${i === currentGenIdx ? "bg-white" : "bg-white/30 hover:bg-white/60"}`}
-                  />
-                )) : (
-                  <span className="text-[10px] text-white/60 font-mono tabular-nums bg-black/30 px-1.5 py-0.5 rounded-full">
-                    {currentGenIdx + 1} / {generations.length}
-                  </span>
-                )}
-              </div>
-            </>
-          )}
+                key={i}
+                onClick={(e) => { e.stopPropagation(); goToGen(i); }}
+                className={`rounded-full transition-all ${i === currentGenIdx ? "w-3 h-1.5 bg-white" : "w-1.5 h-1.5 bg-white/40 hover:bg-white/70"}`}
+              />
+            )) : (
+              <span className="text-[10px] text-white/50 font-mono tabular-nums">
+                {currentGenIdx + 1} / {generations.length}
+              </span>
+            )}
+          </div>
+          <button
+            onClick={(e) => { e.stopPropagation(); goToGen(currentGenIdx + 1); }}
+            disabled={currentGenIdx === generations.length - 1}
+            className="w-6 h-6 flex items-center justify-center rounded transition-opacity disabled:opacity-20"
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="9 18 15 12 9 6" />
+            </svg>
+          </button>
         </div>
       )}
 

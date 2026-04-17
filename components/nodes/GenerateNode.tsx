@@ -215,19 +215,34 @@ export default function GenerateNode({ id, data }: NodeProps<GenerateNodeType>) 
   const busy     = loading || status === "running";
 
   // ── Generation history ────────────────────────────────────────────────────
-  const rawGens    = data.generations;
-  const generations = Array.isArray(rawGens) ? (rawGens as string[]) : (data.imageUrl ? [data.imageUrl as string] : []);
+  type GenEntry = string | null | { error: string };
+  const rawGens     = data.generations;
+  const generations: GenEntry[] = Array.isArray(rawGens)
+    ? (rawGens as GenEntry[])
+    : (data.imageUrl ? [data.imageUrl as string] : []);
   const currentGenIdx = Math.min(
     (data.currentGenIdx as number | undefined) ?? Math.max(0, generations.length - 1),
     Math.max(0, generations.length - 1)
   );
 
+  const slideDir = useRef<"left" | "right">("right");
+
   const goToGen = useCallback((idx: number) => {
-    const gens = Array.isArray(useWorkflowStore.getState().nodes.find(n => n.id === id)?.data?.generations)
-      ? useWorkflowStore.getState().nodes.find(n => n.id === id)!.data.generations as string[]
+    const storeNode = useWorkflowStore.getState().nodes.find(n => n.id === id);
+    const gens: GenEntry[] = Array.isArray(storeNode?.data?.generations)
+      ? storeNode!.data.generations as GenEntry[]
       : generations;
-    const clamped = Math.max(0, Math.min((gens as string[]).length - 1, idx));
-    updateNodeData(id, { currentGenIdx: clamped, imageUrl: (gens as string[])[clamped], status: "done", errorMsg: undefined });
+    const curr    = (storeNode?.data?.currentGenIdx as number | undefined) ?? 0;
+    const clamped = Math.max(0, Math.min(gens.length - 1, idx));
+    slideDir.current = idx > curr ? "right" : "left";
+    const entry = gens[clamped];
+    if (entry === null) {
+      updateNodeData(id, { currentGenIdx: clamped, imageUrl: undefined, status: "running", errorMsg: undefined });
+    } else if (typeof entry === "object") {
+      updateNodeData(id, { currentGenIdx: clamped, imageUrl: undefined, status: "error", errorMsg: entry.error });
+    } else {
+      updateNodeData(id, { currentGenIdx: clamped, imageUrl: entry, status: "done", errorMsg: undefined });
+    }
   }, [id, updateNodeData, generations]);
 
   // Re-sync edge anchor positions on every resize — including during CSS transitions
@@ -262,16 +277,25 @@ export default function GenerateNode({ id, data }: NodeProps<GenerateNodeType>) 
         if (cancelled) return;
 
         if (json.status === "done") {
-          const prevGens = (useWorkflowStore.getState().nodes.find(n => n.id === id)?.data?.generations as string[] | undefined) ?? [];
-          const newGens = [...prevGens, json.imageUrl as string];
-          updateNodeData(id, { status: "done", imageUrl: json.imageUrl, taskId: undefined, generations: newGens, currentGenIdx: newGens.length - 1 });
+          const storeNode = useWorkflowStore.getState().nodes.find(n => n.id === id);
+          const gens = [...((storeNode?.data?.generations as GenEntry[] | undefined) ?? [])] as GenEntry[];
+          const slot = storeNode?.data?.currentGenIdx as number ?? gens.length - 1;
+          gens[slot] = json.imageUrl as string;
+          updateNodeData(id, { status: "done", imageUrl: json.imageUrl, taskId: undefined, generations: gens, currentGenIdx: slot });
           clearInterval(interval);
         } else if (json.status === "error") {
-          updateNodeData(id, { status: "error", errorMsg: json.error, taskId: undefined });
+          const storeNode = useWorkflowStore.getState().nodes.find(n => n.id === id);
+          const gens = [...((storeNode?.data?.generations as GenEntry[] | undefined) ?? [])] as GenEntry[];
+          const slot = storeNode?.data?.currentGenIdx as number ?? gens.length - 1;
+          gens[slot] = { error: json.error ?? "Generation failed" };
+          updateNodeData(id, { status: "error", errorMsg: json.error, taskId: undefined, generations: gens, currentGenIdx: slot });
           clearInterval(interval);
         } else if (json.status === "not_found") {
-          // Server restarted and lost the job — mark as error
-          updateNodeData(id, { status: "error", errorMsg: "Job lost (server restarted)", taskId: undefined });
+          const storeNode = useWorkflowStore.getState().nodes.find(n => n.id === id);
+          const gens = [...((storeNode?.data?.generations as GenEntry[] | undefined) ?? [])] as GenEntry[];
+          const slot = storeNode?.data?.currentGenIdx as number ?? gens.length - 1;
+          gens[slot] = { error: "Job lost (server restarted)" };
+          updateNodeData(id, { status: "error", errorMsg: "Job lost (server restarted)", taskId: undefined, generations: gens, currentGenIdx: slot });
           clearInterval(interval);
         }
         // "pending" → keep polling
@@ -318,7 +342,9 @@ export default function GenerateNode({ id, data }: NodeProps<GenerateNodeType>) 
     }
 
     setLoading(true);
-    updateNodeData(id, { status: "running", imageUrl: undefined, imageNaturalRatio: undefined, errorMsg: undefined, taskId: undefined });
+    const prevGens = [...(((useWorkflowStore.getState().nodes.find(n => n.id === id)?.data?.generations) as GenEntry[] | undefined) ?? [])] as GenEntry[];
+    const loadingGens = [...prevGens, null] as GenEntry[];
+    updateNodeData(id, { status: "running", imageUrl: undefined, imageNaturalRatio: undefined, errorMsg: undefined, taskId: undefined, generations: loadingGens, currentGenIdx: loadingGens.length - 1 });
     try {
       const res  = await fetch("/api/generate", {
         method: "POST",
@@ -330,7 +356,12 @@ export default function GenerateNode({ id, data }: NodeProps<GenerateNodeType>) 
       // Store taskId — the useEffect above will poll until done
       updateNodeData(id, { taskId: json.taskId });
     } catch (e: unknown) {
-      updateNodeData(id, { status: "error", errorMsg: e instanceof Error ? e.message : String(e) });
+      const errMsg = e instanceof Error ? e.message : String(e);
+      const storeNode = useWorkflowStore.getState().nodes.find(n => n.id === id);
+      const gens = [...((storeNode?.data?.generations as GenEntry[] | undefined) ?? [])] as GenEntry[];
+      const slot = storeNode?.data?.currentGenIdx as number ?? gens.length - 1;
+      gens[slot] = { error: errMsg };
+      updateNodeData(id, { status: "error", errorMsg: errMsg, generations: gens, currentGenIdx: slot });
     } finally {
       setLoading(false);
     }
@@ -410,35 +441,68 @@ export default function GenerateNode({ id, data }: NodeProps<GenerateNodeType>) 
           }}
           onDoubleClick={() => { if (data.imageUrl) openLightbox(); }}
         >
-          {data.imageUrl ? (
-            <Image
-              ref={nodeImgRef}
-              src={data.imageUrl as string}
-              alt="Generated"
-              fill
-              quality={30}
-              sizes="400px"
-              style={{ objectFit: "fill" }}
-              onLoad={(e) => {
-                const img = e.currentTarget as HTMLImageElement;
-                const nw = img.naturalWidth, nh = img.naturalHeight;
-                updateNodeData(id, { imageNaturalRatio: `${nw} / ${nh}` });
-                requestAnimationFrame(() => {
-                  if (!cardRef.current) return;
-                  const w = cardRef.current.offsetWidth;
-                  const h = cardRef.current.offsetHeight;
-                  if (w > 0 && h > 0) updateNodeSize(id, w, h);
-                });
+          {generations.length > 0 ? (
+            <div
+              style={{
+                display: "flex",
+                height: "100%",
+                transform: `translateX(${-currentGenIdx * 100}%)`,
+                transition: "transform 320ms cubic-bezier(0.4, 0, 0.2, 1)",
+                willChange: "transform",
               }}
-            />
+            >
+              {generations.map((entry, i) => (
+                <div key={i} style={{ minWidth: "100%", height: "100%", position: "relative", flexShrink: 0 }}>
+                  {entry === null ? (
+                    <div className="absolute inset-0 flex items-center justify-center" style={{ background: "#090B0D" }}>
+                      <div className="w-5 h-5 rounded-full border-2 border-[#2a2a2a] border-t-[#666] animate-spin" />
+                    </div>
+                  ) : typeof entry === "object" ? (
+                    <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 px-4 text-center" style={{ background: "#090B0D" }}>
+                      <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+                        <circle cx="12" cy="12" r="10" fill="#1a0a0a" stroke="#5a1a1a" strokeWidth="1.5"/>
+                        <path d="M12 7v5" stroke="#c04040" strokeWidth="2" strokeLinecap="round"/>
+                        <circle cx="12" cy="16" r="1" fill="#c04040"/>
+                      </svg>
+                      <p className="text-[10px] text-[#555] leading-snug break-words">{entry.error}</p>
+                    </div>
+                  ) : (
+                    <Image
+                      ref={i === currentGenIdx ? nodeImgRef : undefined}
+                      src={entry}
+                      alt="Generated"
+                      fill
+                      quality={30}
+                      sizes="400px"
+                      style={{ objectFit: "fill" }}
+                      onLoad={i === currentGenIdx ? (e) => {
+                        const img = e.currentTarget as HTMLImageElement;
+                        const nw = img.naturalWidth, nh = img.naturalHeight;
+                        updateNodeData(id, { imageNaturalRatio: `${nw} / ${nh}` });
+                        requestAnimationFrame(() => {
+                          if (!cardRef.current) return;
+                          const w = cardRef.current.offsetWidth;
+                          const h = cardRef.current.offsetHeight;
+                          if (w > 0 && h > 0) updateNodeSize(id, w, h);
+                        });
+                      } : undefined}
+                    />
+                  )}
+                </div>
+              ))}
+            </div>
           ) : status === "error" ? (
-            <div className="absolute inset-0 flex flex-col justify-center px-5 gap-2.5">
-              {/* Error icon */}
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" className="shrink-0 mb-0.5">
-                <circle cx="12" cy="12" r="10" fill="#1a0a0a" stroke="#5a1a1a" strokeWidth="1.5" />
-                <path d="M12 7v5" stroke="#c04040" strokeWidth="2" strokeLinecap="round" />
-                <circle cx="12" cy="16" r="1" fill="#c04040" />
-              </svg>
+            <div className="absolute inset-0 flex flex-col items-center justify-center px-5 gap-2.5 text-center">
+              <div className="flex items-center gap-2.5">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" className="shrink-0">
+                  <circle cx="12" cy="12" r="10" fill="#1a0a0a" stroke="#5a1a1a" strokeWidth="1.5" />
+                  <path d="M12 7v5" stroke="#c04040" strokeWidth="2" strokeLinecap="round" />
+                  <circle cx="12" cy="16" r="1" fill="#c04040" />
+                </svg>
+                <span className="text-[10px] px-2 py-0.5 rounded-full whitespace-nowrap" style={{ border: "1px solid rgba(74,222,128,0.2)", color: "#4ade80", background: "rgba(74,222,128,0.07)" }}>
+                  Credits refunded
+                </span>
+              </div>
               <p className="text-white text-[12px] font-semibold leading-snug">
                 Oops! Something went wrong.
               </p>
@@ -450,49 +514,48 @@ export default function GenerateNode({ id, data }: NodeProps<GenerateNodeType>) 
             <div className="w-full h-full" />
           )}
 
-          {/* ── Carousel ──────────────────────────────────────────────── */}
-          {(generations.length > 1 || (status === "error" && generations.length > 0)) && (
-            <>
-              {/* Left arrow */}
-              <button
-                onMouseDown={(e) => e.stopPropagation()}
-                onClick={(e) => { e.stopPropagation(); goToGen(currentGenIdx - 1); }}
-                disabled={currentGenIdx === 0}
-                className="absolute left-2 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-black/40 backdrop-blur-sm flex items-center justify-center opacity-0 group-hover/gen:opacity-100 transition-opacity disabled:opacity-0 z-10 pointer-events-auto"
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                  <polyline points="15 18 9 12 15 6" />
-                </svg>
-              </button>
-              {/* Right arrow */}
-              <button
-                onMouseDown={(e) => e.stopPropagation()}
-                onClick={(e) => { e.stopPropagation(); goToGen(currentGenIdx + 1); }}
-                disabled={currentGenIdx === generations.length - 1}
-                className="absolute right-2 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-black/40 backdrop-blur-sm flex items-center justify-center opacity-0 group-hover/gen:opacity-100 transition-opacity disabled:opacity-0 z-10 pointer-events-auto"
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                  <polyline points="9 18 15 12 9 6" />
-                </svg>
-              </button>
-              {/* Dots / counter */}
-              <div className="absolute bottom-2 left-1/2 -translate-x-1/2 flex items-center gap-1 z-10" onMouseDown={(e) => e.stopPropagation()}>
-                {generations.length <= 8 ? generations.map((_, i) => (
-                  <button
-                    key={i}
-                    onMouseDown={(e) => e.stopPropagation()}
-                    onClick={(e) => { e.stopPropagation(); goToGen(i); }}
-                    className={`w-1.5 h-1.5 rounded-full transition-colors pointer-events-auto ${i === currentGenIdx ? "bg-white" : "bg-white/30 hover:bg-white/60"}`}
-                  />
-                )) : (
-                  <span className="text-[10px] text-white/60 font-mono tabular-nums bg-black/30 px-1.5 py-0.5 rounded-full">
-                    {currentGenIdx + 1} / {generations.length}
-                  </span>
-                )}
-              </div>
-            </>
-          )}
         </div>
+
+        {/* ── Carousel nav — always visible when multiple generations exist ── */}
+        {generations.length > 1 && (
+          <div
+            className="flex items-center justify-between px-2 border-t border-[#1E1410] shrink-0"
+            style={{ height: 30 }}
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            <button
+              onClick={(e) => { e.stopPropagation(); goToGen(currentGenIdx - 1); }}
+              disabled={currentGenIdx === 0}
+              className="w-6 h-6 flex items-center justify-center rounded transition-opacity disabled:opacity-20"
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="15 18 9 12 15 6" />
+              </svg>
+            </button>
+            <div className="flex items-center gap-1.5">
+              {generations.length <= 8 ? generations.map((_, i) => (
+                <button
+                  key={i}
+                  onClick={(e) => { e.stopPropagation(); goToGen(i); }}
+                  className={`rounded-full transition-all ${i === currentGenIdx ? "w-3 h-1.5 bg-white" : "w-1.5 h-1.5 bg-white/40 hover:bg-white/70"}`}
+                />
+              )) : (
+                <span className="text-[10px] text-white/50 font-mono tabular-nums">
+                  {currentGenIdx + 1} / {generations.length}
+                </span>
+              )}
+            </div>
+            <button
+              onClick={(e) => { e.stopPropagation(); goToGen(currentGenIdx + 1); }}
+              disabled={currentGenIdx === generations.length - 1}
+              className="w-6 h-6 flex items-center justify-center rounded transition-opacity disabled:opacity-20"
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="9 18 15 12 9 6" />
+              </svg>
+            </button>
+          </div>
+        )}
 
         {/* ── Control bar ─────────────────────────────────────────────────
              Lives outside the image area — dropdowns open freely.          */}

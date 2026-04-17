@@ -355,6 +355,16 @@ body {
   box-shadow: 0 0 0 1px rgba(119, 229, 68, 0.12), 0 0 18px rgba(0,0,0,0.5);
 }
 
+/* ── Carousel slide ─────────────────────────────────────────────────────── */
+@keyframes carousel-slide-from-right {
+  from { transform: translateX(100%); }
+  to   { transform: translateX(0); }
+}
+@keyframes carousel-slide-from-left {
+  from { transform: translateX(-100%); }
+  to   { transform: translateX(0); }
+}
+
 /* ── Spinner ─────────────────────────────────────────────────────────────── */
 @keyframes spin {
   to { transform: rotate(360deg); }
@@ -426,8 +436,8 @@ body {
 }
 
 @keyframes video-node-pulse-glow {
-  0%, 100% { box-shadow: 0 0 6px 2px rgba(58,111,255,0.15); }
-  50%       { box-shadow: 0 0 22px 8px rgba(58,111,255,0.55); }
+  0%, 100% { box-shadow: 0 0 6px 2px rgba(119,229,68,0.15); }
+  50%       { box-shadow: 0 0 22px 8px rgba(119,229,68,0.50); }
 }
 
 /* ── @mention chip in PromptNode ─────────────────────────────────────────── */

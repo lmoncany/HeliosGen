@@ -1,11 +1,15 @@
 "use client";
 import { useRef, useCallback, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
+import NextImage from "next/image";
 import { Handle, Position, NodeProps, Node } from "@xyflow/react";
 import CornerResizer from "./CornerResizer";
 import { useWorkflowStore, NodeData } from "@/lib/store";
 import { createClient } from "@/lib/supabase/client";
 import { sha256Hex } from "@/lib/assetHash";
+
+// Only HTTP(S) URLs can be optimized by next/image; blob/data URLs cannot.
+const isRemote = (src: string) => src.startsWith("http://") || src.startsWith("https://");
 
 type ImageInputNodeType = Node<NodeData, "imageInputNode">;
 
@@ -201,43 +205,76 @@ export default function ImageInputNode({ id, data }: NodeProps<ImageInputNodeTyp
           style={{ borderRadius: 7, overflow: "hidden" }}
           onDoubleClick={openLightbox}
         >
-          {/* Layer 1 — base image; always a plain <img> so React only updates src, never remounts */}
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          {baseSrc && <img
-            ref={nodeImgRef}
-            src={baseSrc}
-            alt="Input"
-            style={{
-              position: "absolute", inset: 0, width: "100%", height: "100%",
-              display: "block", objectFit: "fill", zIndex: 1,
-              animation: isUploading ? "upload-pulse 1.6s ease-in-out infinite" : undefined,
-            }}
-          />}
+          {/* Layer 1 — base image (optimized for display; lightbox shows full-res) */}
+          {baseSrc && (
+            isRemote(baseSrc) ? (
+              <NextImage
+                ref={nodeImgRef}
+                src={baseSrc}
+                alt="Input"
+                fill
+                quality={30}
+                sizes="600px"
+                style={{
+                  objectFit: "fill", zIndex: 1,
+                  animation: isUploading ? "upload-pulse 1.6s ease-in-out infinite" : undefined,
+                }}
+              />
+            ) : (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                ref={nodeImgRef}
+                src={baseSrc}
+                alt="Input"
+                style={{
+                  position: "absolute", inset: 0, width: "100%", height: "100%",
+                  display: "block", objectFit: "fill", zIndex: 1,
+                  animation: isUploading ? "upload-pulse 1.6s ease-in-out infinite" : undefined,
+                }}
+              />
+            )
+          )}
 
-          {/* Layer 2 — incoming URL rendered on top at opacity 0; fades in, then base src is updated */}
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          {topSrc && <img
-            src={topSrc}
-            alt=""
-            aria-hidden
-            onLoad={() => requestAnimationFrame(() => requestAnimationFrame(() => setTopReady(true)))}
-            onTransitionEnd={() => {
-              const oldBase = baseSrcRef.current;
-              setBaseSrc(topSrc);
-              baseSrcRef.current = topSrc!;
-              setTopSrc(undefined);
-              setTopReady(false);
-              if (oldBase?.startsWith("blob:")) URL.revokeObjectURL(oldBase);
-            }}
-            style={{
-              position: "absolute", inset: 0, zIndex: 2,
-              width: "100%", height: "100%",
-              display: "block", objectFit: "fill",
-              opacity: topReady ? 1 : 0,
-              transition: "opacity 450ms ease",
-              pointerEvents: "none",
-            }}
-          />}
+          {/* Layer 2 — incoming URL fades in on top, then gets promoted to base */}
+          {topSrc && (
+            <div
+              aria-hidden
+              onTransitionEnd={() => {
+                const oldBase = baseSrcRef.current;
+                setBaseSrc(topSrc);
+                baseSrcRef.current = topSrc!;
+                setTopSrc(undefined);
+                setTopReady(false);
+                if (oldBase?.startsWith("blob:")) URL.revokeObjectURL(oldBase);
+              }}
+              style={{
+                position: "absolute", inset: 0, zIndex: 2,
+                opacity: topReady ? 1 : 0,
+                transition: "opacity 450ms ease",
+                pointerEvents: "none",
+              }}
+            >
+              {isRemote(topSrc) ? (
+                <NextImage
+                  src={topSrc}
+                  alt=""
+                  fill
+                  quality={30}
+                  sizes="600px"
+                  style={{ objectFit: "fill" }}
+                  onLoad={() => requestAnimationFrame(() => requestAnimationFrame(() => setTopReady(true)))}
+                />
+              ) : (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={topSrc}
+                  alt=""
+                  style={{ position: "absolute", inset: 0, width: "100%", height: "100%", display: "block", objectFit: "fill" }}
+                  onLoad={() => requestAnimationFrame(() => requestAnimationFrame(() => setTopReady(true)))}
+                />
+              )}
+            </div>
+          )}
 
 
           {/* Hover overlay */}

@@ -181,6 +181,10 @@ export interface VideoModel {
   /** Optional secondary resolution picker (shown in addition to modes) */
   resolutions?: string[];
   defaultResolution?: string;
+  /** Max number of resource-handle images accepted by this model (default 3) */
+  maxResources?: number;
+  /** How @mention tags are serialised in the final prompt (default: "<<<image N>>>") */
+  resourceTagFormat?: "default" | "grok";
   apiInput: {
     aspectRatioKey?: string;
     durationKey?: string;
@@ -265,6 +269,8 @@ export const VIDEO_MODELS: VideoModel[] = [
     defaultRatio: "16:9",
     handles: ["prompt", "resource"],
     sound: false,
+    maxResources: 7,
+    resourceTagFormat: "grok",
     modes: [
       { value: "fun", label: "Fun" },
       { value: "normal", label: "Normal" },
@@ -280,7 +286,7 @@ export const VIDEO_MODELS: VideoModel[] = [
       durationMax: 30,
       modeKey: "mode",
       resolutionKey: "resolution",
-      referenceImagesKey: "reference_images",
+      referenceImagesKey: "image_urls",
     },
   },
   // ── Kling motion control ─────────────────────────────────────────────────────

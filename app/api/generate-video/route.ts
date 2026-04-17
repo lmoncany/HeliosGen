@@ -55,6 +55,7 @@ export async function POST(req: NextRequest) {
     : 0;
 
   let input: Record<string, unknown>;
+  let effectiveApiId = cfg.apiId;
 
   if (apiInput.useMotionControl) {
     // ── Kling 2.6 motion control ──────────────────────────────────────────────
@@ -80,16 +81,19 @@ export async function POST(req: NextRequest) {
       )
     ).filter((u): u is string => u !== null);
 
+    const hasImages = refImageUrls.length > 0;
+    effectiveApiId = hasImages ? "grok-imagine/image-to-video" : "grok-imagine/text-to-video";
+
     input = {
-      prompt:                    prompt ?? "",
+      prompt:                     prompt ?? "",
       [apiInput.aspectRatioKey!]: aspectRatio,
-      [apiInput.durationKey!]:    clampedDuration,
+      [apiInput.durationKey!]:    String(clampedDuration),
     };
 
     if (apiInput.modeKey)       input[apiInput.modeKey]       = mode;
     if (apiInput.resolutionKey) input[apiInput.resolutionKey] = resolution;
     if (apiInput.extra)         Object.assign(input, apiInput.extra);
-    if (refImageUrls.length > 0) input[apiInput.referenceImagesKey] = refImageUrls;
+    if (hasImages) input[apiInput.referenceImagesKey] = refImageUrls;
 
   } else {
     // ── Start/end-frame + elements models (Kling) ─────────────────────────────
@@ -132,14 +136,14 @@ export async function POST(req: NextRequest) {
 
   // Debug mode — return the exact kie.ai payload without submitting
   if (debugOnly) {
-    return NextResponse.json({ debugPayload: { model: cfg.apiId, callBackUrl, input } });
+    return NextResponse.json({ debugPayload: { model: effectiveApiId, callBackUrl, input } });
   }
 
   // Submit task to kie.ai
   const createRes = await fetch(`${KIE_BASE}/api/v1/jobs/createTask`, {
     method:  "POST",
     headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-    body:    JSON.stringify({ model: cfg.apiId, callBackUrl, input }),
+    body:    JSON.stringify({ model: effectiveApiId, callBackUrl, input }),
   });
 
   if (!createRes.ok) {
