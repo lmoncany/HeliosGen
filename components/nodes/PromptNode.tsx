@@ -3,7 +3,8 @@ import {
   useRef, useState, useCallback, useEffect, useLayoutEffect,
   type ReactNode,
 } from "react";
-import { Handle, Position, NodeProps, Node } from "@xyflow/react";
+import { createPortal } from "react-dom";
+import { Handle, Position, NodeProps, Node, useViewport } from "@xyflow/react";
 import { useWorkflowStore, NodeData } from "@/lib/store";
 import CornerResizer from "./CornerResizer";
 
@@ -18,6 +19,8 @@ function getMentionQuery(text: string, cursor: number): string | null {
   const match  = before.match(/@(\S*)$/);
   return match ? match[1] : null;
 }
+
+type MentionPreview = { imageUrl?: string; videoUrl?: string };
 
 /** Render text with exact @NodeLabel matches highlighted as chips. */
 function renderWithMentions(
@@ -68,7 +71,17 @@ export default function PromptNode({ id, data, selected }: NodeProps<PromptNodeT
   const [hasScrollTop,   setHasScrollTop]   = useState(false);
   const [hasScrollBottom, setHasScrollBottom] = useState(false);
 
+  const [chipPopover, setChipPopover] = useState<{
+    label: string; preview: MentionPreview;
+  } | null>(null);
+  const [popoverIn,    setPopoverIn]    = useState(false);
+  const popoverHideTimer  = useRef<ReturnType<typeof setTimeout>>();
+  const popoverRaf        = useRef<number>();
+  const chipElementRef    = useRef<HTMLElement | null>(null);  // the live chip DOM node
+  const popoverPosRef     = useRef<HTMLDivElement | null>(null); // outer positioning div
+
   selectedRef.current = selected;
+  const { zoom } = useViewport();
 
   const storePrompt = (data.prompt as string) ?? "";
   const hasError    = !!data.hasError;
@@ -115,6 +128,18 @@ export default function PromptNode({ id, data, selected }: NodeProps<PromptNodeT
 
   const knownLabels = mentionableNodes.map((n) => n.data.label as string).filter(Boolean);
 
+  const mentionPreviews = new Map<string, MentionPreview>(
+    mentionableNodes.map((n) => [
+      n.data.label as string,
+      {
+        imageUrl: (n.data.r2Url ?? n.data.inputImage ?? n.data.imageUrl) as string | undefined,
+        videoUrl: n.data.videoUrl as string | undefined,
+      },
+    ])
+  );
+  const mentionPreviewsRef = useRef(mentionPreviews);
+  mentionPreviewsRef.current = mentionPreviews;
+
   const filteredMentions =
     mentionQuery !== null
       ? mentionableNodes.filter((n) =>
@@ -155,6 +180,58 @@ export default function PromptNode({ id, data, selected }: NodeProps<PromptNodeT
 
   useEffect(() => { checkScrollState(); }, [localText, checkScrollState]);
 
+  // ── Chip hover popover ────────────────────────────────────────────────────
+  const currentChipLabel = useRef<string | null>(null);
+
+  const openChipPopover = useCallback((el: HTMLElement) => {
+    const label   = (el.textContent ?? "").replace(/^@/, "");
+    // Already showing this chip — just cancel any pending close
+    if (currentChipLabel.current === label) {
+      clearTimeout(popoverHideTimer.current);
+      chipElementRef.current = el; // keep ref fresh
+      return;
+    }
+    const preview = mentionPreviewsRef.current.get(label);
+    if (!preview?.imageUrl && !preview?.videoUrl) return;
+    clearTimeout(popoverHideTimer.current);
+    cancelAnimationFrame(popoverRaf.current ?? 0);
+    currentChipLabel.current = label;
+    chipElementRef.current   = el;
+    setChipPopover({ label, preview });
+    popoverRaf.current = requestAnimationFrame(() => setPopoverIn(true));
+  }, []);
+
+  const closeChipPopover = useCallback(() => {
+    cancelAnimationFrame(popoverRaf.current ?? 0);
+    currentChipLabel.current = null;
+    setPopoverIn(false);
+    popoverHideTimer.current = setTimeout(() => setChipPopover(null), 180);
+  }, []);
+
+  useEffect(() => () => {
+    clearTimeout(popoverHideTimer.current);
+    cancelAnimationFrame(popoverRaf.current ?? 0);
+  }, []);
+
+  // Continuously lock the popover to the chip's live viewport position.
+  // Direct DOM writes avoid React re-renders; runs only while a chip is shown.
+  useEffect(() => {
+    if (!chipPopover) return;
+    let rafId: number;
+    const tick = () => {
+      const el  = chipElementRef.current;
+      const div = popoverPosRef.current;
+      if (el && div) {
+        const r = el.getBoundingClientRect();
+        div.style.left = `${r.left + r.width / 2}px`;
+        div.style.top  = `${r.top - 10}px`;
+      }
+      rafId = requestAnimationFrame(tick);
+    };
+    rafId = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(rafId);
+  }, [chipPopover?.label]);
+
   // Native listeners on the text zone — must be native (not React synthetic) so they
   // fire during DOM bubble before ReactFlow's listener on the node wrapper sees the event.
   useEffect(() => {
@@ -179,13 +256,33 @@ export default function PromptNode({ id, data, selected }: NodeProps<PromptNodeT
         e.stopImmediatePropagation();
       }
     };
+    const onMouseMove = (e: MouseEvent) => {
+      const chips = highlightRef.current?.querySelectorAll<HTMLElement>(".mention-chip");
+      if (chips?.length) {
+        for (const chip of Array.from(chips)) {
+          const r = chip.getBoundingClientRect();
+          if (e.clientX >= r.left && e.clientX <= r.right &&
+              e.clientY >= r.top  && e.clientY <= r.bottom) {
+            openChipPopover(chip);
+            return;
+          }
+        }
+      }
+      if (currentChipLabel.current) closeChipPopover();
+    };
+    const onMouseLeave = () => closeChipPopover();
+
     el.addEventListener("mousedown", onMouseDown);
     el.addEventListener("wheel", onWheel);
+    el.addEventListener("mousemove", onMouseMove);
+    el.addEventListener("mouseleave", onMouseLeave);
     return () => {
       el.removeEventListener("mousedown", onMouseDown);
       el.removeEventListener("wheel", onWheel);
+      el.removeEventListener("mousemove", onMouseMove);
+      el.removeEventListener("mouseleave", onMouseLeave);
     };
-  }, []);
+  }, [openChipPopover, closeChipPopover]);
 
   // ── onChange — textarea is uncontrolled; React never writes .value ────────
   const handleChange = useCallback(
@@ -235,6 +332,7 @@ export default function PromptNode({ id, data, selected }: NodeProps<PromptNodeT
 
   // ── Render ────────────────────────────────────────────────────────────────
   return (
+    <>
     <div
       ref={cardRef}
       className={`node-card w-full h-full flex flex-col${hasError ? " node-error-blink" : ""}`}
@@ -419,6 +517,59 @@ export default function PromptNode({ id, data, selected }: NodeProps<PromptNodeT
         </div>
       )}
     </div>
+
+    {/* ── Chip hover popover — portal outside ReactFlow transforms ─────── */}
+    {chipPopover && createPortal(
+      <div
+        ref={popoverPosRef}
+        aria-hidden
+        style={{
+          position: "fixed",
+          left: 0, top: 0,          // set each frame by the rAF loop
+          transform: "translateX(-50%) translateY(-100%)",
+          zIndex: 9999,
+          pointerEvents: "none",
+        }}
+      >
+        {/* Scale with canvas zoom — no transition so it tracks zoom instantly */}
+        <div style={{ transform: `scale(${zoom})`, transformOrigin: "bottom center" }}>
+        <div
+          style={{
+            opacity:         popoverIn ? 1 : 0,
+            transform:       popoverIn ? "translateY(0px) scale(1)" : "translateY(14px) scale(0.88)",
+            transition:      popoverIn
+              ? "opacity 220ms cubic-bezier(0.16,1,0.3,1), transform 280ms cubic-bezier(0.16,1,0.3,1)"
+              : "opacity 150ms ease, transform 150ms ease",
+            transformOrigin: "bottom center",
+            background:      "#16191C",
+            borderRadius:    8,
+            overflow:        "hidden",
+            boxShadow:       "0 12px 40px rgba(0,0,0,0.85), 0 0 0 1px rgba(255,255,255,0.06)",
+            maxWidth:        140,
+            minHeight:       80,
+          }}
+        >
+          {chipPopover.preview.videoUrl ? (
+            // eslint-disable-next-line jsx-a11y/media-has-caption
+            <video
+              src={chipPopover.preview.videoUrl}
+              autoPlay loop muted playsInline
+              style={{ display: "block", width: "100%", height: "auto" }}
+            />
+          ) : chipPopover.preview.imageUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={chipPopover.preview.imageUrl}
+              alt=""
+              style={{ display: "block", width: "100%", height: "auto" }}
+            />
+          ) : null}
+        </div>
+        </div>
+      </div>,
+      document.body
+    )}
+    </>
   );
 }
 

@@ -447,6 +447,7 @@ body {
   border-radius: 4px;
   color: #FFFFFF;
   padding: 2px 0;
+  pointer-events: auto;
   /* shadows stay well under space-char width (~3-4 px) so the natural space
      character creates a visible gap to surrounding text, and the caret lands
      outside the chip */
