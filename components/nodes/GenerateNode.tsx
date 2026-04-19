@@ -4,6 +4,7 @@ import { createPortal } from "react-dom";
 import Image from "next/image";
 import { Handle, Position, NodeProps, Node, useUpdateNodeInternals } from "@xyflow/react";
 import CornerResizer from "./CornerResizer";
+import NodeActionBar from "./NodeActionBar";
 import { useWorkflowStore, NodeData } from "@/lib/store";
 import { createClient } from "@/lib/supabase/client";
 import { resolveInputs } from "@/lib/executor";
@@ -147,6 +148,9 @@ export default function GenerateNode({ id, data, selected }: NodeProps<GenerateN
   const removeEdgesForHandle = useWorkflowStore((s) => s.removeEdgesForHandle);
   const setAuthModalOpen     = useWorkflowStore((s) => s.setAuthModalOpen);
   const flashEdgeError       = useWorkflowStore((s) => s.flashEdgeError);
+  const onNodesChange        = useWorkflowStore((s) => s.onNodesChange);
+  const addNode              = useWorkflowStore((s) => s.addNode);
+  const insertEdge           = useWorkflowStore((s) => s.insertEdge);
   const nodes                = useWorkflowStore((s) => s.nodes);
   const edges                = useWorkflowStore((s) => s.edges);
   const debugMode            = useWorkflowStore((s) => s.debugMode);
@@ -167,6 +171,8 @@ export default function GenerateNode({ id, data, selected }: NodeProps<GenerateN
     }
   }, [selected]);
 
+  const [hovering, setHovering]        = useState(false);
+  const [isSaving, setIsSaving]        = useState(false);
   const [modelOpen, setModelOpen]     = useState(false);
   const [ratioOpen, setRatioOpen]     = useState(false);
   const [qualityOpen, setQualityOpen] = useState(false);
@@ -212,6 +218,51 @@ export default function GenerateNode({ id, data, selected }: NodeProps<GenerateN
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, [lightboxOpen, closeLightbox]);
+
+  const handleDelete = useCallback(() => {
+    onNodesChange([{ type: "remove", id }]);
+  }, [id, onNodesChange]);
+
+  const handleDuplicate = useCallback(() => {
+    const state = useWorkflowStore.getState();
+    const src = state.nodes.find((n) => n.id === id);
+    if (!src) return;
+    const newId = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+    onNodesChange([{ type: "select", id, selected: false }]);
+    addNode({
+      ...src,
+      id: newId,
+      position: { x: src.position.x + 20, y: src.position.y + 20 },
+      selected: true,
+      data: { ...src.data, status: "idle" as const, taskId: undefined, hasError: false },
+    });
+    state.edges
+      .filter((e) => (e.source === id || e.target === id) && e.deletable !== false)
+      .forEach((e) => insertEdge({
+        ...e,
+        id: Date.now().toString(36) + Math.random().toString(36).slice(2, 8),
+        source: e.source === id ? newId : e.source,
+        target: e.target === id ? newId : e.target,
+      }));
+  }, [id, addNode, insertEdge, onNodesChange]);
+
+  const handleSave = useCallback(async () => {
+    const url = data.imageUrl as string | undefined;
+    if (!url || isSaving) return;
+    const filename = `image-${Date.now()}.png`;
+    setIsSaving(true);
+    try {
+      const resp = await fetch(`/api/download?url=${encodeURIComponent(url)}&filename=${filename}`);
+      const blob = await resp.blob();
+      const obj = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = obj; a.download = filename;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      URL.revokeObjectURL(obj);
+    } finally {
+      setIsSaving(false);
+    }
+  }, [data.imageUrl, isSaving]);
 
   const model       = (data.model as string) ?? "nano-banana-2";
   const caps        = MODEL_CAPS[model] ?? DEFAULT_CAPS;
@@ -390,10 +441,20 @@ export default function GenerateNode({ id, data, selected }: NodeProps<GenerateN
       ref={cardRef}
       className={`node-card w-full flex flex-col${(data.hasError as boolean) ? " node-error-blink" : ""}`}
       style={{ minWidth: 280, ...(busy ? { animation: "node-pulse-glow 2.4s ease-in-out infinite" } : {}) }}
-      onMouseLeave={closeDropdowns}
+      onMouseEnter={() => setHovering(true)}
+      onMouseLeave={() => { setHovering(false); closeDropdowns(); }}
       onAnimationEnd={() => updateNodeData(id, { hasError: false })}
     >
       <CornerResizer minWidth={220} minHeight={80} keepAspectRatio={!!data.imageUrl} />
+      <NodeActionBar
+        visible={!!selected}
+        hasContent={!!data.imageUrl}
+        isSaving={isSaving}
+        onPreview={openLightbox}
+        onDelete={handleDelete}
+        onSave={handleSave}
+        onDuplicate={handleDuplicate}
+      />
       <span className="node-above-label">{data.label as string}</span>
 
         {/* ── Icon handles — bottom-anchored, consistent with other nodes ── */}

@@ -1,7 +1,9 @@
 "use client";
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Handle, Position, NodeProps, Node, useUpdateNodeInternals } from "@xyflow/react";
 import CornerResizer from "./CornerResizer";
+import NodeActionBar from "./NodeActionBar";
 import { useWorkflowStore, NodeData } from "@/lib/store";
 import { resolveInputs } from "@/lib/executor";
 import { createClient } from "@/lib/supabase/client";
@@ -129,6 +131,9 @@ export default function VideoGeneratorNode({ id, data, selected }: NodeProps<Vid
   const setAuthModalOpen = useWorkflowStore((s) => s.setAuthModalOpen);
   const killEdgesForHandles = useWorkflowStore((s) => s.killEdgesForHandles);
   const flashEdgeError = useWorkflowStore((s) => s.flashEdgeError);
+  const onNodesChange = useWorkflowStore((s) => s.onNodesChange);
+  const addNode = useWorkflowStore((s) => s.addNode);
+  const insertEdge = useWorkflowStore((s) => s.insertEdge);
   const nodes = useWorkflowStore((s) => s.nodes);
   const edges = useWorkflowStore((s) => s.edges);
   const debugMode = useWorkflowStore((s) => s.debugMode);
@@ -162,11 +167,79 @@ export default function VideoGeneratorNode({ id, data, selected }: NodeProps<Vid
   const [hovering, setHovering] = useState(false);
   const [progress, setProgress] = useState(0);
   const [currentSec, setCurrentSec] = useState(0);
+  const [isSaving, setIsSaving]               = useState(false);
+  const [lightboxOpen, setLightboxOpen]       = useState(false);
+  const [lightboxVisible, setLightboxVisible] = useState(false);
   const videoRef        = useRef<HTMLVideoElement>(null);
   const videoRefs       = useRef<Map<number, HTMLVideoElement>>(new Map());
   const durLeaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const fmtTime = (s: number) => `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
+
+  // ── Lightbox ──────────────────────────────────────────────────────────────
+  const openLightbox = useCallback(() => {
+    if (!(data.videoUrl as string | undefined)) return;
+    setLightboxOpen(true);
+    requestAnimationFrame(() => setLightboxVisible(true));
+  }, [data.videoUrl]);
+
+  const closeLightbox = useCallback(() => {
+    setLightboxVisible(false);
+    setTimeout(() => setLightboxOpen(false), 220);
+  }, []);
+
+  useEffect(() => {
+    if (!lightboxOpen) return;
+    const handler = (e: KeyboardEvent) => { if (e.key === "Escape") closeLightbox(); };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [lightboxOpen, closeLightbox]);
+
+  // ── Toolbar actions ───────────────────────────────────────────────────────
+  const handleDelete = useCallback(() => {
+    onNodesChange([{ type: "remove", id }]);
+  }, [id, onNodesChange]);
+
+  const handleDuplicate = useCallback(() => {
+    const state = useWorkflowStore.getState();
+    const src = state.nodes.find((n) => n.id === id);
+    if (!src) return;
+    const newId = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+    onNodesChange([{ type: "select", id, selected: false }]);
+    addNode({
+      ...src,
+      id: newId,
+      position: { x: src.position.x + 20, y: src.position.y + 20 },
+      selected: true,
+      data: { ...src.data, status: "idle" as const, taskId: undefined, hasError: false },
+    });
+    state.edges
+      .filter((e) => (e.source === id || e.target === id) && e.deletable !== false)
+      .forEach((e) => insertEdge({
+        ...e,
+        id: Date.now().toString(36) + Math.random().toString(36).slice(2, 8),
+        source: e.source === id ? newId : e.source,
+        target: e.target === id ? newId : e.target,
+      }));
+  }, [id, addNode, insertEdge, onNodesChange]);
+
+  const handleSave = useCallback(async () => {
+    const url = data.videoUrl as string | undefined;
+    if (!url || isSaving) return;
+    const filename = `video-${Date.now()}.mp4`;
+    setIsSaving(true);
+    try {
+      const resp = await fetch(`/api/download?url=${encodeURIComponent(url)}&filename=${filename}`);
+      const blob = await resp.blob();
+      const obj = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = obj; a.download = filename;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      URL.revokeObjectURL(obj);
+    } finally {
+      setIsSaving(false);
+    }
+  }, [data.videoUrl, isSaving]);
 
   // ── Data ──────────────────────────────────────────────────────────────────
   const videoModelId = (data.videoModel as string) ?? "kling-3.0";
@@ -525,6 +598,15 @@ export default function VideoGeneratorNode({ id, data, selected }: NodeProps<Vid
       onAnimationEnd={(e) => { if (e.animationName === "node-error-blink") updateNodeData(id, { hasError: false }); }}
     >
       <CornerResizer minWidth={280} minHeight={80} keepAspectRatio={!!data.videoUrl} />
+      <NodeActionBar
+        visible={!!selected}
+        hasContent={!!data.videoUrl}
+        isSaving={isSaving}
+        onPreview={openLightbox}
+        onDelete={handleDelete}
+        onSave={handleSave}
+        onDuplicate={handleDuplicate}
+      />
 
       <span className="node-above-label" style={{ display: "flex", alignItems: "center", gap: 4 }}>
         <VideoNodeIcon />
@@ -1015,6 +1097,31 @@ export default function VideoGeneratorNode({ id, data, selected }: NodeProps<Vid
         );
       })()}
 
+      {/* ── Video lightbox ───────────────────────────────────────────── */}
+      {lightboxOpen && typeof document !== "undefined" && createPortal(
+        <div
+          className="fixed inset-0 z-[9999] flex items-center justify-center transition-opacity duration-200 ease-in-out"
+          style={{ backgroundColor: `rgba(0,0,0,${lightboxVisible ? 0.9 : 0})`, opacity: lightboxVisible ? 1 : 0 }}
+          onClick={closeLightbox}
+        >
+          <div
+            className="relative transition-all duration-200 ease-in-out rounded-2xl overflow-hidden"
+            style={{ transform: lightboxVisible ? "scale(1)" : "scale(0.95)", boxShadow: "0 0 0 8px #3a3a3a" }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
+            <video
+              src={data.videoUrl as string}
+              controls
+              autoPlay
+              loop
+              playsInline
+              className="block max-w-[90vw] max-h-[90vh]"
+            />
+          </div>
+        </div>,
+        document.body
+      )}
     </div>
   );
 }
