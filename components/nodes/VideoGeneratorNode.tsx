@@ -231,6 +231,20 @@ export default function VideoGeneratorNode({ id, data, selected }: NodeProps<Vid
     return () => cancelAnimationFrame(raf);
   }, [id, aspectRatio, data.videoModel, data.imageNaturalRatio, data.generations, updateNodeSize, updateNodeInternals]);
 
+  // Loop updateNodeInternals for the full duration of the aspect-ratio CSS transition
+  // so edges track the handle positions as the node height animates.
+  useEffect(() => {
+    const TRANSITION_MS = 380;
+    const start = performance.now();
+    let raf: number;
+    const tick = () => {
+      updateNodeInternals(id);
+      if (performance.now() - start < TRANSITION_MS) raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [id, aspectRatio, updateNodeInternals]);
+
   // ── Poll job-status while a taskId is pending ────────────────────────────
   useEffect(() => {
     const taskId = data.taskId as string | undefined;
