@@ -179,6 +179,16 @@ export default function VideoGeneratorNode({ id, data, selected }: NodeProps<Vid
   const videoRef        = useRef<HTMLVideoElement>(null);
   const videoRefs       = useRef<Map<number, HTMLVideoElement>>(new Map());
   const durLeaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const durRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!durOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (durRef.current && !durRef.current.contains(e.target as Node)) setDurOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [durOpen]);
 
   const fmtTime = (s: number) => `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
 
@@ -246,6 +256,29 @@ export default function VideoGeneratorNode({ id, data, selected }: NodeProps<Vid
       setIsSaving(false);
     }
   }, [data.videoUrl, isSaving]);
+
+  const deleteGen = useCallback((idx: number) => {
+    const storeNode = useWorkflowStore.getState().nodes.find((n) => n.id === id);
+    const gens = [...((storeNode?.data?.generations as GenEntry[] | undefined) ?? [])] as GenEntry[];
+    const meta = [...((storeNode?.data?.generationsMeta as (GenMeta | null)[] | undefined) ?? [])];
+    const cur = (storeNode?.data?.currentGenIdx as number | undefined) ?? Math.max(0, gens.length - 1);
+    gens.splice(idx, 1);
+    meta.splice(idx, 1);
+    if (gens.length === 0) {
+      updateNodeData(id, { generations: [], generationsMeta: [], currentGenIdx: 0, videoUrl: undefined, status: "idle", errorMsg: undefined });
+      return;
+    }
+    const newIdx = Math.max(0, Math.min(gens.length - 1, idx <= cur ? cur - 1 : cur));
+    const entry = gens[newIdx];
+    updateNodeData(id, {
+      generations: gens,
+      generationsMeta: meta,
+      currentGenIdx: newIdx,
+      videoUrl: typeof entry === "string" ? entry : undefined,
+      status: typeof entry === "string" ? "done" : typeof entry === "object" && entry !== null ? "error" : "idle",
+      errorMsg: typeof entry === "object" && entry !== null ? (entry as { error: string }).error : undefined,
+    });
+  }, [id, updateNodeData]);
 
   const handleCancel = useCallback(() => {
     setLoading(false);
@@ -342,31 +375,18 @@ export default function VideoGeneratorNode({ id, data, selected }: NodeProps<Vid
     // Sizing is handled by the useEffect below once the DOM reflects the new state
   };
 
-  // Re-sync node size and edge anchor positions whenever layout-affecting data changes
+  // Persistent ResizeObserver — fires throughout CSS transitions so group
+  // expansion in the store always gets the final measured dimensions.
   useEffect(() => {
-    const raf = requestAnimationFrame(() => {
-      if (cardRef.current) {
-        const { offsetWidth, offsetHeight } = cardRef.current;
-        updateNodeSize(id, offsetWidth, offsetHeight);
-      }
+    const el = cardRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => {
+      updateNodeSize(id, el.offsetWidth, el.offsetHeight);
       updateNodeInternals(id);
     });
-    return () => cancelAnimationFrame(raf);
-  }, [id, aspectRatio, data.videoModel, data.imageNaturalRatio, data.generations, updateNodeSize, updateNodeInternals]);
-
-  // Loop updateNodeInternals for the full duration of the aspect-ratio CSS transition
-  // so edges track the handle positions as the node height animates.
-  useEffect(() => {
-    const TRANSITION_MS = 380;
-    const start = performance.now();
-    let raf: number;
-    const tick = () => {
-      updateNodeInternals(id);
-      if (performance.now() - start < TRANSITION_MS) raf = requestAnimationFrame(tick);
-    };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-  }, [id, aspectRatio, updateNodeInternals]);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [id, updateNodeSize, updateNodeInternals]);
 
   // ── Poll job-status while a taskId is pending ────────────────────────────
   useEffect(() => {
@@ -747,6 +767,20 @@ export default function VideoGeneratorNode({ id, data, selected }: NodeProps<Vid
                       <circle cx="12" cy="16" r="1" fill="#c04040"/>
                     </svg>
                     <p className="text-[10px] text-[#555] leading-snug break-words">{entry.error}</p>
+                    <button
+                      onMouseDown={(e) => e.stopPropagation()}
+                      onClick={(e) => { e.stopPropagation(); deleteGen(i); }}
+                      className="absolute bottom-2 right-2 flex items-center gap-1.5 h-7 px-3 rounded-full z-20 transition-colors hover:bg-white/10"
+                      style={{ background: "rgba(0,0,0,0.58)", backdropFilter: "blur(10px)", border: "1px solid rgba(255,255,255,0.08)" }}
+                    >
+                      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.7)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="3 6 5 6 21 6" />
+                        <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+                        <path d="M10 11v6M14 11v6" />
+                        <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+                      </svg>
+                      <span className="text-[11px] text-[#ccc] font-medium">Delete</span>
+                    </button>
                   </div>
                 ) : (
                   // eslint-disable-next-line jsx-a11y/media-has-caption
@@ -924,8 +958,6 @@ export default function VideoGeneratorNode({ id, data, selected }: NodeProps<Vid
       {(() => {
         // When a model has no ratio/duration options (e.g. motion control), collapse
         // both rows into one and show mode+resolution inline with the model selector.
-        const hasRatioOrDur = ratios.length > 0 || durations.length > 0;
-
         // Reusable mode picker — composite pill with optional i tooltip inside
         const modePicker = cfg.modes ? (
           <div className="relative shrink-0">
@@ -1010,165 +1042,139 @@ export default function VideoGeneratorNode({ id, data, selected }: NodeProps<Vid
         );
 
         return (
-          <>
-            {/* ── Row 1: model · ratio · duration (+ mode/res when no ratio/dur) ── */}
-            <div className="flex items-center flex-wrap gap-1.5 px-3 py-2 border-t border-[#111]">
-              {/* Model selector */}
+          <div className="flex items-center flex-wrap gap-1.5 px-3 py-2 border-t border-[#111]">
+            {/* Model selector */}
+            <div className="relative">
+              <Pill
+                onClick={() => { setModelOpen((o) => !o); setRatioOpen(false); setDurOpen(false); setModeOpen(false); setGrokResOpen(false); }}
+              >
+                <span className="text-[11px] text-[#AAAAAA]">{cfg.name}</span>
+                <ChevronIcon open={modelOpen} />
+              </Pill>
+              {modelOpen && (
+                <FloatMenu>
+                  {VIDEO_MODEL_CFG.map((m) => (
+                    <button
+                      key={m.id}
+                      onMouseDown={(e) => e.stopPropagation()}
+                      onClick={() => {
+                        const validRatio = m.ratios.includes(aspectRatio) ? aspectRatio : m.defaultRatio;
+                        const validDur = m.durations.includes(duration) ? duration : m.defaultDuration;
+                        updateNodeData(id, { videoModel: m.id, aspectRatio: validRatio, duration: validDur });
+                        const removedHandles = (cfg.handles as string[]).filter((h) => !(m.handles as string[]).includes(h));
+                        const wasMotionControl = cfg.id === "kling-2.6-motion-control";
+                        const isMotionControl  = m.id   === "kling-2.6-motion-control";
+                        if (wasMotionControl !== isMotionControl && !removedHandles.includes("startFrame")) {
+                          removedHandles.push("startFrame");
+                        }
+                        if (removedHandles.length) killEdgesForHandles(id, removedHandles);
+                        setModelOpen(false);
+                      }}
+                      className={`w-full flex items-center justify-between px-3 py-2 text-[11px] hover:bg-[#161A1E] transition-colors ${videoModelId === m.id ? "text-white font-medium" : "text-[#8D8E89]"}`}
+                    >
+                      <span>{m.name}</span>
+                      <span className="text-[#4A4A45]">{m.provider}</span>
+                    </button>
+                  ))}
+                </FloatMenu>
+              )}
+            </div>
+
+            {/* Ratio */}
+            {ratios.length > 0 && (
               <div className="relative">
-                <Pill
-                  onClick={() => { setModelOpen((o) => !o); setRatioOpen(false); setDurOpen(false); setModeOpen(false); setGrokResOpen(false); }}
-                >
-                  <span className="text-[11px] text-[#AAAAAA]">{cfg.name}</span>
-                  <ChevronIcon open={modelOpen} />
+                <Pill onClick={() => { setRatioOpen((o) => !o); setModelOpen(false); setDurOpen(false); setModeOpen(false); setGrokResOpen(false); }}>
+                  <AspectIcon ratio={aspectRatio} />
+                  <span className="text-[11px] text-[#AAAAAA]">{aspectRatio}</span>
+                  <ChevronIcon open={ratioOpen} />
                 </Pill>
-                {modelOpen && (
+                {ratioOpen && (
                   <FloatMenu>
-                    {VIDEO_MODEL_CFG.map((m) => (
-                      <button
-                        key={m.id}
-                        onMouseDown={(e) => e.stopPropagation()}
-                        onClick={() => {
-                          const validRatio = m.ratios.includes(aspectRatio) ? aspectRatio : m.defaultRatio;
-                          const validDur = m.durations.includes(duration) ? duration : m.defaultDuration;
-                          updateNodeData(id, { videoModel: m.id, aspectRatio: validRatio, duration: validDur });
-                          const removedHandles = (cfg.handles as string[]).filter((h) => !(m.handles as string[]).includes(h));
-                          // startFrame is "Character" on motion-control and "Start frame" on others —
-                          // kill its edges whenever the character-ness changes between models.
-                          const wasMotionControl = cfg.id === "kling-2.6-motion-control";
-                          const isMotionControl  = m.id   === "kling-2.6-motion-control";
-                          if (wasMotionControl !== isMotionControl && !removedHandles.includes("startFrame")) {
-                            removedHandles.push("startFrame");
-                          }
-                          if (removedHandles.length) killEdgesForHandles(id, removedHandles);
-                          setModelOpen(false);
-                        }}
-                        className={`w-full flex items-center justify-between px-3 py-2 text-[11px] hover:bg-[#161A1E] transition-colors ${videoModelId === m.id ? "text-white font-medium" : "text-[#8D8E89]"}`}
-                      >
-                        <span>{m.name}</span>
-                        <span className="text-[#4A4A45]">{m.provider}</span>
-                      </button>
+                    {(ratios as readonly string[]).map((r) => (
+                      <FloatItem key={r} active={aspectRatio === r} onClick={() => { updateNodeData(id, { aspectRatio: r }); setRatioOpen(false); }}>
+                        {r}
+                      </FloatItem>
                     ))}
                   </FloatMenu>
                 )}
               </div>
+            )}
 
-              {/* Ratio */}
-              {ratios.length > 0 && (
-                <div className="relative">
-                  <Pill onClick={() => { setRatioOpen((o) => !o); setModelOpen(false); setDurOpen(false); setModeOpen(false); setGrokResOpen(false); }}>
-                    <AspectIcon ratio={aspectRatio} />
-                    <span className="text-[11px] text-[#AAAAAA]">{aspectRatio}</span>
-                    <ChevronIcon open={ratioOpen} />
-                  </Pill>
-                  {ratioOpen && (
-                    <FloatMenu>
-                      {(ratios as readonly string[]).map((r) => (
-                        <FloatItem key={r} active={aspectRatio === r} onClick={() => { updateNodeData(id, { aspectRatio: r }); setRatioOpen(false); }}>
-                          {r}
-                        </FloatItem>
-                      ))}
-                    </FloatMenu>
-                  )}
-                </div>
-              )}
-
-              {/* Duration */}
-              {durations.length > 0 && (
-                <div
-                  className="relative flex-1"
-                  onMouseEnter={() => {
-                    if (durLeaveTimerRef.current) clearTimeout(durLeaveTimerRef.current);
-                    setDurOpen(true);
-                  }}
-                  onMouseLeave={() => {
-                    durLeaveTimerRef.current = setTimeout(() => setDurOpen(false), 120);
-                  }}
-                >
-                  <Pill fullWidth>
-                    <span className="text-[11px] text-[#AAAAAA] tabular-nums">{duration}s</span>
-                  </Pill>
-                  {durOpen && (
+            {/* Duration */}
+            {durations.length > 0 && (
+              <div ref={durRef} className="relative">
+                <Pill onClick={() => { setDurOpen((o) => !o); setModelOpen(false); setRatioOpen(false); setModeOpen(false); setGrokResOpen(false); }}>
+                  <span className="text-[11px] text-[#AAAAAA] tabular-nums">{duration}s</span>
+                  <ChevronIcon open={durOpen} />
+                </Pill>
+                {durOpen && (
+                  <div
+                    className="absolute bottom-full left-0 mb-1.5 bg-[#0F1214] border border-[#222] rounded-xl z-50 shadow-2xl p-3"
+                    style={{ minWidth: 240 }}
+                    onMouseDown={(e) => e.stopPropagation()}
+                  >
+                    <p className="text-[12px] text-white font-medium mb-2.5">Choose duration</p>
                     <div
-                      className="absolute bottom-full left-0 mb-1.5 bg-[#0F1214] border border-[#222] rounded-xl z-50 shadow-2xl p-3"
-                      style={{ minWidth: 240 }}
-                      onMouseEnter={() => { if (durLeaveTimerRef.current) clearTimeout(durLeaveTimerRef.current); }}
-                      onMouseLeave={() => { durLeaveTimerRef.current = setTimeout(() => setDurOpen(false), 120); }}
+                      className="nodrag flex items-center gap-2.5 pl-3 pr-4 py-2 rounded-lg"
+                      style={{ background: "#161A1E" }}
                       onMouseDown={(e) => e.stopPropagation()}
+                      onPointerDown={(e) => e.stopPropagation()}
                     >
-                      <p className="text-[12px] text-white font-medium mb-2.5">Choose duration</p>
-                      <div
-                        className="nodrag flex items-center gap-2.5 pl-3 pr-4 py-2 rounded-lg"
-                        style={{ background: "#161A1E" }}
-                        onMouseDown={(e) => e.stopPropagation()}
-                        onPointerDown={(e) => e.stopPropagation()}
-                      >
-                        <span className="text-[11px] text-[#AAAAAA] tabular-nums shrink-0 w-6">{duration}s</span>
-                        <div className="w-px h-3.5 shrink-0" style={{ background: "#2A2A2A" }} />
-                        <input
-                          type="range"
-                          min={0}
-                          max={(durations as readonly number[]).length - 1}
-                          step={1}
-                          value={Math.max(0, (durations as readonly number[]).indexOf(duration))}
-                          onChange={(e) => {
-                            const idx = parseInt(e.target.value);
-                            updateNodeData(id, { duration: (durations as readonly number[])[idx] });
-                          }}
-                          className="dur-slider"
-                        />
-                      </div>
+                      <span className="text-[11px] text-[#AAAAAA] tabular-nums shrink-0 w-6">{duration}s</span>
+                      <div className="w-px h-3.5 shrink-0" style={{ background: "#2A2A2A" }} />
+                      <input
+                        type="range"
+                        min={0}
+                        max={(durations as readonly number[]).length - 1}
+                        step={1}
+                        value={Math.max(0, (durations as readonly number[]).indexOf(duration))}
+                        onChange={(e) => {
+                          const idx = parseInt(e.target.value);
+                          updateNodeData(id, { duration: (durations as readonly number[])[idx] });
+                        }}
+                        className="dur-slider"
+                      />
                     </div>
-                  )}
-                </div>
-              )}
-
-              {/* When no ratio/duration: show mode + resolution inline here */}
-              {!hasRatioOrDur && modePicker}
-              {!hasRatioOrDur && resPicker}
-              {!hasRatioOrDur && actionControls}
-            </div>
-
-            {/* ── Row 2: model-specific controls + status + generate ────────── */}
-            {/* Only rendered when Row 1 already has ratio/duration controls */}
-            {hasRatioOrDur && (
-              <div className="flex items-center flex-wrap gap-1.5 px-3 py-2 border-t border-[#111]">
-                {modePicker}
-                {resPicker}
-
-                {/* Sound toggle */}
-                {cfg.sound && (
-                  <>
-                    <button
-                      onMouseDown={(e) => e.stopPropagation()}
-                      onClick={() => updateNodeData(id, { sound: !sound })}
-                      className="flex items-center gap-2 rounded-full px-2.5 py-1.5 transition-colors"
-                      style={{ background: "#111317" }}
-                    >
-                      <ToggleSwitch on={sound} />
-                      <span className="text-[11px] text-[#AAAAAA]">Sound</span>
-                    </button>
-                    <button
-                      onMouseDown={(e) => e.stopPropagation()}
-                      className="w-6 h-6 flex items-center justify-center rounded-full text-[#444] hover:text-[#888] transition-colors"
-                      style={{ background: "#111317" }}
-                    >
-                      <GearIcon />
-                    </button>
-                  </>
-                )}
-
-                {/* Reference image indicator */}
-                {activeHandles.has("resource") && hasResource && (
-                  <div className="flex items-center gap-1.5 px-2 py-1 rounded-full" style={{ background: "#111317" }}>
-                    <span className="w-1.5 h-1.5 rounded-full bg-[#fb923c] shrink-0" />
-                    <span className="text-[10px] text-[#AAAAAA]">Img ref</span>
                   </div>
                 )}
-
-                {actionControls}
               </div>
             )}
-          </>
+
+            {modePicker}
+            {resPicker}
+
+            {/* Sound toggle */}
+            {cfg.sound && (
+              <>
+                <button
+                  onMouseDown={(e) => e.stopPropagation()}
+                  onClick={() => updateNodeData(id, { sound: !sound })}
+                  className="flex items-center gap-2 rounded-full px-2.5 py-1.5 transition-colors"
+                  style={{ background: "#111317" }}
+                >
+                  <ToggleSwitch on={sound} />
+                  <span className="text-[11px] text-[#AAAAAA]">Sound</span>
+                </button>
+                <button
+                  onMouseDown={(e) => e.stopPropagation()}
+                  className="w-6 h-6 flex items-center justify-center rounded-full text-[#444] hover:text-[#888] transition-colors"
+                  style={{ background: "#111317" }}
+                >
+                  <GearIcon />
+                </button>
+              </>
+            )}
+
+            {/* Reference image indicator */}
+            {activeHandles.has("resource") && hasResource && (
+              <div className="flex items-center gap-1.5 px-2 py-1 rounded-full" style={{ background: "#111317" }}>
+                <span className="w-1.5 h-1.5 rounded-full bg-[#fb923c] shrink-0" />
+                <span className="text-[10px] text-[#AAAAAA]">Img ref</span>
+              </div>
+            )}
+
+            {actionControls}
+          </div>
         );
       })()}
 

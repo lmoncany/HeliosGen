@@ -15,16 +15,25 @@ type ImageInputNodeType = Node<NodeData, "imageInputNode">;
 
 export default function ImageInputNode({ id, data, selected }: NodeProps<ImageInputNodeType>) {
   const updateNodeData  = useWorkflowStore((s) => s.updateNodeData);
+  const updateNodeSize  = useWorkflowStore((s) => s.updateNodeSize);
   const edges           = useWorkflowStore((s) => s.edges);
   const sourceConnected = edges.some((e) => e.source === id);
   const fileRef        = useRef<HTMLInputElement>(null);
   const rootRef        = useRef<HTMLDivElement>(null);
   const updateNodeInternals = useUpdateNodeInternals();
 
+  // Persistent ResizeObserver — fires as image aspect ratio drives CSS height changes,
+  // keeping group bounds in sync throughout the transition.
   useEffect(() => {
-    const raf = requestAnimationFrame(() => updateNodeInternals(id));
-    return () => cancelAnimationFrame(raf);
-  }, [id, data.imageNaturalRatio, updateNodeInternals]);
+    const el = rootRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => {
+      updateNodeSize(id, el.offsetWidth, el.offsetHeight);
+      updateNodeInternals(id);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [id, updateNodeSize, updateNodeInternals]);
 
   // Instant hide on deselect
   const prevSelectedRef = useRef(selected);

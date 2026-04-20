@@ -354,11 +354,48 @@ export const useWorkflowStore = create<WorkflowStore>()(
 
         updateNodeSize: (id, width, height) =>
           set((s) => {
-            const nodes = s.nodes.map((n) =>
+            const GROUP_PADDING = 24;
+
+            // Update the resized node first
+            let nodes = s.nodes.map((n) =>
               n.id === id
                 ? { ...n, width, height, style: { ...n.style, width, height } }
                 : n
             );
+
+            // Expand the group if the resized node now exceeds its bounds (never shrink)
+            nodes = nodes.map((g) => {
+              if (g.type !== "groupNode") return g;
+              const memberIds = g.data?.memberIds as string[] | undefined;
+              if (!memberIds?.includes(id)) return g;
+
+              const node = nodes.find((n) => n.id === id);
+              if (!node) return g;
+
+              const gx = g.position.x;
+              const gy = g.position.y;
+              const gw = (g.style?.width  as number | undefined) ?? 0;
+              const gh = (g.style?.height as number | undefined) ?? 0;
+
+              // Right and bottom edges the node now occupies
+              const nodeR = node.position.x + width;
+              const nodeB = node.position.y + height;
+
+              // Required group extents to contain the node (with padding)
+              const reqX = Math.min(gx, node.position.x - GROUP_PADDING);
+              const reqY = Math.min(gy, node.position.y - GROUP_PADDING);
+              const reqR = Math.max(gx + gw, nodeR + GROUP_PADDING);
+              const reqB = Math.max(gy + gh, nodeB + GROUP_PADDING);
+
+              if (reqX === gx && reqY === gy && reqR === gx + gw && reqB === gy + gh) return g;
+
+              return {
+                ...g,
+                position: { x: reqX, y: reqY },
+                style: { ...g.style, width: reqR - reqX, height: reqB - reqY },
+              };
+            });
+
             return {
               nodes,
               spaces: syncSpace(s.spaces, s.activeSpaceId, nodes, s.edges, s.nodeCounters),

@@ -1,6 +1,6 @@
 "use client";
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { NodeProps, Node, useReactFlow } from "@xyflow/react";
+import { NodeProps, Node, useReactFlow, NodeResizeControl } from "@xyflow/react";
 import { useWorkflowStore, NodeData } from "@/lib/store";
 
 export type GroupNodeType = Node<NodeData, "groupNode">;
@@ -64,6 +64,7 @@ function LockBadge({ color }: { color: string }) {
 // ── Component ──────────────────────────────────────────────────────────────────
 export default function GroupNode({ id, data, selected }: NodeProps<GroupNodeType>) {
   const updateNodeData  = useWorkflowStore((s) => s.updateNodeData);
+  const updateNodeSize  = useWorkflowStore((s) => s.updateNodeSize);
   const onNodesChange   = useWorkflowStore((s) => s.onNodesChange);
   const insertEdge      = useWorkflowStore((s) => s.insertEdge);
   const addNode         = useWorkflowStore((s) => s.addNode);
@@ -73,8 +74,20 @@ export default function GroupNode({ id, data, selected }: NodeProps<GroupNodeTyp
   const locked = (data.locked as boolean) ?? false;
   const label  = data.label   as string;
 
+  const cardRef = useRef<HTMLDivElement>(null);
   const [colorPickerOpen, setColorPickerOpen] = useState(false);
   const colorPickerRef = useRef<HTMLDivElement>(null);
+
+  // Keep store's style.width/height in sync as the group is resized.
+  useEffect(() => {
+    const el = cardRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => {
+      updateNodeSize(id, el.offsetWidth, el.offsetHeight);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [id, updateNodeSize]);
 
   // Close color picker on click outside
   useEffect(() => {
@@ -201,8 +214,25 @@ export default function GroupNode({ id, data, selected }: NodeProps<GroupNodeTyp
       });
   }, [id, addNode, insertEdge]);
 
+  type ResizePos = "top-left" | "top-right" | "bottom-left" | "bottom-right" | "top" | "right" | "bottom" | "left";
+
+  // Corner and edge resize handle definitions (colour-matched to the group)
+  const resizeHandles: Array<{ position: ResizePos; style: React.CSSProperties }> = [
+    // Corners — bracket marks
+    { position: "top-left",     style: { width: 10, height: 10, background: "transparent", border: "none", borderTop: `2px solid ${color}`, borderLeft:  `2px solid ${color}`, borderTopLeftRadius:     3, top:    -6, left:   -6, zIndex: 100 } },
+    { position: "top-right",    style: { width: 10, height: 10, background: "transparent", border: "none", borderTop: `2px solid ${color}`, borderRight: `2px solid ${color}`, borderTopRightRadius:    3, top:    -6, right:  -6, zIndex: 100 } },
+    { position: "bottom-left",  style: { width: 10, height: 10, background: "transparent", border: "none", borderBottom: `2px solid ${color}`, borderLeft:  `2px solid ${color}`, borderBottomLeftRadius:  3, bottom: -6, left:   -6, zIndex: 100 } },
+    { position: "bottom-right", style: { width: 10, height: 10, background: "transparent", border: "none", borderBottom: `2px solid ${color}`, borderRight: `2px solid ${color}`, borderBottomRightRadius: 3, bottom: -6, right:  -6, zIndex: 100 } },
+    // Edges — small pill handles centred on each side
+    { position: "top",    style: { width: 22, height: 4,  border: "none", background: color, borderRadius: 2, opacity: 0.6, top:    -5, left: "50%", transform: "translateX(-50%)", zIndex: 100 } },
+    { position: "right",  style: { width: 4,  height: 22, border: "none", background: color, borderRadius: 2, opacity: 0.6, right:  -5, top:  "50%", transform: "translateY(-50%)", zIndex: 100 } },
+    { position: "bottom", style: { width: 22, height: 4,  border: "none", background: color, borderRadius: 2, opacity: 0.6, bottom: -5, left: "50%", transform: "translateX(-50%)", zIndex: 100 } },
+    { position: "left",   style: { width: 4,  height: 22, border: "none", background: color, borderRadius: 2, opacity: 0.6, left:   -5, top:  "50%", transform: "translateY(-50%)", zIndex: 100 } },
+  ];
+
   return (
     <div
+      ref={cardRef}
       className="relative w-full h-full rounded-[10px]"
       style={{
         border: `2px solid ${color}`,
@@ -210,6 +240,16 @@ export default function GroupNode({ id, data, selected }: NodeProps<GroupNodeTyp
         opacity: locked ? 0.85 : 1,
       }}
     >
+      {/* Resize handles — only when selected and unlocked */}
+      {selected && !locked && resizeHandles.map(({ position, style }) => (
+        <NodeResizeControl
+          key={position}
+          position={position}
+          minWidth={200}
+          minHeight={150}
+          style={style}
+        />
+      ))}
       {/* Label — outside top-left */}
       <span
         style={{
