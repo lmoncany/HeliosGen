@@ -131,7 +131,7 @@ body {
 }
 /* Hidden: inputs offset left (slide in from left); outputs sit at node edge (slide out rightward) */
 .react-flow__handle-left.node-handle  { transform: translate(calc(-100% - 10px), -50%) !important; }
-.react-flow__handle-right.node-handle { transform: translate(50%, -50%) !important; }
+.react-flow__handle-right.node-handle { transform: translate(calc(100% + 10px),  -50%) !important; }
 /* Visible: normal position (node hover or selected) — delay reset so hover-in is instant */
 /* Left (input) handles: suppress hover during connection dragging (only show compatible inputs) */
 .react-flow:not([data-connecting-type]) .react-flow__node:hover .react-flow__handle-left.node-handle,

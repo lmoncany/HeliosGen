@@ -32,6 +32,8 @@ import VideoGeneratorNode  from "./nodes/VideoGeneratorNode";
 import GroupNode           from "./nodes/GroupNode";
 import NodePickerMenu, { DropState } from "./NodePickerMenu";
 import SelectionToolbar    from "./SelectionToolbar";
+import CanvasToolbar       from "./CanvasToolbar";
+import AddNodeMenu         from "./AddNodeMenu";
 import AuthButton from "./AuthButton";
 import CreditBalance from "./CreditBalance";
 
@@ -614,10 +616,13 @@ export default function WorkflowCanvas() {
     updateNodeData(connection.source, { triggerTrimMaxDuration: maxDuration });
   }, [onConnect, nodes, updateNodeData]);
 
-  // ── Edge drop → node picker ──────────────────────────────────────────────────
+  // ── Edge drop → node picker ─────────────────────────────────────────────
   const [isConnecting, setIsConnecting]   = useState(false);
   const [dropState, setDropState] = useState<DropState | null>(null);
   const [log, setLog] = useState<{ text: string; ok: boolean }[]>([]);
+
+  // ── Add-node menu (+ button) ─────────────────────────────────────────
+  const [addMenuAnchor, setAddMenuAnchor] = useState<DOMRect | null>(null);
 
   // ── Alignment snap guides ─────────────────────────────────────────────────────
   const [snapGuides, setSnapGuides] = useState<SnapGuide[]>([]);
@@ -1093,6 +1098,14 @@ export default function WorkflowCanvas() {
           />
         )}
 
+        {/* ── Add-node menu (+ button) — needs to be inside ReactFlow for useReactFlow() ── */}
+        {addMenuAnchor && (
+          <AddNodeMenu
+            anchorRect={addMenuAnchor}
+            onClose={() => setAddMenuAnchor(null)}
+          />
+        )}
+
         <Controls
           showInteractive={false}
           className="[&>button]:!bg-[#0D1012] [&>button]:!border-[#1A100C] [&>button]:!text-[#8D8E89] [&>button:hover]:!text-white"
@@ -1132,6 +1145,13 @@ export default function WorkflowCanvas() {
           </button>
         </Panel>
       </ReactFlow>
+
+      {/* ── Left-middle toolbar ───────────────────────────────────────────── */}
+      <CanvasToolbar
+        onAddNode={(rect) => setAddMenuAnchor(rect)}
+        onUndo={() => document.execCommand("undo")}
+        onRedo={() => document.execCommand("redo")}
+      />
 
       {/* ── Alignment guide lines ────────────────────────────────────────────── */}
       {snapGuides.length > 0 && (
