@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import https from "node:https";
+import http from "node:http";
+import { fetch as undiciFetch, FormData as UndiciFormData } from "undici";
+import { Blob as NodeBlob } from "node:buffer";
 import { jobStore } from "@/lib/jobStore";
 import { ensureR2, uploadBuffer } from "@/lib/r2";
 import { supabaseAdmin } from "@/lib/supabase/admin";
@@ -65,6 +68,28 @@ function httpsPost(
 }
 
 
+// Fetch any http/https URL to a Buffer, following redirects
+function fetchBuffer(url: string, maxRedirects = 5): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    if (maxRedirects <= 0) return reject(new Error("Too many redirects"));
+    const u   = new URL(url);
+    const mod = u.protocol === "https:" ? https : (http as unknown as typeof https);
+    mod.get(url, (res) => {
+      if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        return fetchBuffer(res.headers.location, maxRedirects - 1).then(resolve).catch(reject);
+      }
+      if (!res.statusCode || res.statusCode < 200 || res.statusCode >= 300) {
+        return reject(new Error(`HTTP ${res.statusCode} fetching image`));
+      }
+      const chunks: Buffer[] = [];
+      res.on("data", (c: Buffer) => chunks.push(c));
+      res.on("end",  () => resolve(Buffer.concat(chunks)));
+      res.on("error", reject);
+    }).on("error", reject);
+  });
+}
+
+
 // Resolve every image URL to an R2 CDN URL (uploads base64 / mirrors external URLs)
 async function resolveImages(imageUrls: string[]): Promise<string[]> {
   const resolved = await Promise.all(
@@ -115,21 +140,12 @@ export async function POST(req: NextRequest) {
     const azureKey = process.env.AZURE_API_KEY;
     if (!azureKey) return NextResponse.json({ error: "AZURE_API_KEY is not set" }, { status: 500 });
 
-    const sizeMap = cfg.azureSizeMap ?? {};
-    const size    = sizeMap[aspectRatio] ?? "1024x1024";
-
-    const body: Record<string, unknown> = {
-      prompt:             prompt.slice(0, cfg.apiInput.promptMaxLength ?? 32000),
-      n:                  1,
-      output_format:      "png",
-      output_compression: 100,
-    };
-    if (size && size !== "auto") body.size = size;
-    body.quality = azureQuality || "medium";
-
+    const sizeMap         = cfg.azureSizeMap ?? {};
+    const size            = sizeMap[aspectRatio] ?? "1024x1024";
+    const quality         = azureQuality || "medium";
     const base            = azureBaseUrl.replace(/\/$/, "");
-    const azureApiVersion = cfg.azureApiVersion ?? "2024-02-01";
-    const azureUrl        = `${base}/openai/deployments/${azureDeployment}/images/generations?api-version=${azureApiVersion}`;
+    const azureApiVersion = cfg.azureApiVersion ?? "2025-04-01-preview";
+    const truncatedPrompt = prompt.slice(0, cfg.apiInput.promptMaxLength ?? 32000);
 
     const azureTaskId = `azure-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     jobStore.set(azureTaskId, { status: "pending", type: "image" });
@@ -137,15 +153,60 @@ export async function POST(req: NextRequest) {
     // Resolve user before the async fire-and-forget (req context will be gone)
     const azureUserId = await getUserId(req);
 
+    const hasRefImages = r2ImageUrls.length > 0;
+
     (async () => {
       try {
-        const res = await httpsPost(
-          azureUrl,
-          { "Content-Type": "application/json", Authorization: `Bearer ${azureKey}` },
-          JSON.stringify(body),
-        );
+        let res: { ok: boolean; status: number; text: () => Promise<string> };
+
+        if (hasRefImages) {
+          // ── Image-to-image: multipart /images/edits via undici ────────────
+          const azureUrl = `${base}/openai/deployments/${azureDeployment}/images/edits?api-version=${azureApiVersion}`;
+          console.log("[azure/edits] URL:", azureUrl);
+
+          const form = new UndiciFormData();
+          for (const imgUrl of r2ImageUrls.slice(0, cfg.maxImages)) {
+            const buf  = await fetchBuffer(imgUrl);
+            const raw  = imgUrl.split("?")[0].split(".").pop()?.toLowerCase() ?? "png";
+            const ext  = raw === "jpg" ? "jpeg" : raw;
+            const mime = ext === "jpeg" ? "image/jpeg" : "image/png";
+            form.append("image[]", new NodeBlob([buf], { type: mime }), `image.${ext}`);
+          }
+          form.append("prompt",        truncatedPrompt);
+          form.append("quality",       quality);
+          form.append("output_format", "png");
+          form.append("n",             "1");
+          if (size && size !== "auto") form.append("size", size);
+
+          const azureResp = await undiciFetch(azureUrl, {
+            method:  "POST",
+            headers: { Authorization: `Bearer ${azureKey}` },
+            body:    form,
+            signal:  AbortSignal.timeout(180_000),
+          });
+          res = { ok: azureResp.ok, status: azureResp.status, text: () => azureResp.text() };
+        } else {
+          // ── Text-to-image: JSON /images/generations ────────────────────────
+          const azureUrl = `${base}/openai/deployments/${azureDeployment}/images/generations?api-version=${azureApiVersion}`;
+
+          const body: Record<string, unknown> = {
+            prompt:             truncatedPrompt,
+            n:                  1,
+            output_format:      "png",
+            output_compression: 100,
+            quality,
+          };
+          if (size && size !== "auto") body.size = size;
+
+          res = await httpsPost(
+            azureUrl,
+            { "Content-Type": "application/json", Authorization: `Bearer ${azureKey}` },
+            JSON.stringify(body),
+          );
+        }
 
         const txt = await res.text();
+        console.log("[azure] raw response body:", txt.slice(0, 1000));
         if (!res.ok) {
           let displayError = `Azure error ${res.status}`;
           try {
@@ -168,23 +229,23 @@ export async function POST(req: NextRequest) {
         const imageUrl = await uploadBuffer(buf, "image/png", "generated");
         jobStore.set(azureTaskId, { status: "done", imageUrl });
 
-        // Persist to Supabase so the gallery can find it
         supabaseAdmin.from("generations").insert({
-          task_id:         azureTaskId,
-          user_id:         azureUserId,
-          generation_type: "image",
-          status:          "done",
-          image_url:       imageUrl,
-          prompt:          prompt.slice(0, 2000),
+          task_id:              azureTaskId,
+          user_id:              azureUserId,
+          generation_type:      "image",
+          status:               "done",
+          image_url:            imageUrl,
+          prompt:               prompt.slice(0, 2000),
           model,
-          aspect_ratio:    aspectRatio,
-          quality:         azureQuality ?? "medium",
+          aspect_ratio:         aspectRatio,
+          quality,
+          reference_image_urls: hasRefImages ? r2ImageUrls : undefined,
         }).then(({ error }) => {
           if (error) console.error("[azure] supabase insert error:", error.message);
         });
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : String(e);
-        console.error("[azure] background error:", msg);
+        console.error("[azure] background error:", msg, e);
         jobStore.set(azureTaskId, { status: "error", error: msg });
       }
     })();

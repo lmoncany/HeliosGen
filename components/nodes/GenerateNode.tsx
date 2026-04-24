@@ -924,7 +924,7 @@ export default function GenerateNode({ id, data, selected }: NodeProps<GenerateN
             )}
           </div>
 
-          {caps.supportsQuality && (
+          {caps.supportsQuality && !(caps.azureQualityOptions && isAzureProvider) && (
             <>
               {/* Divider */}
               <span className="w-px h-3 bg-[#2A1A14] shrink-0" />
