@@ -612,6 +612,16 @@ body {
 }
 
 /* ── @mention chip in PromptNode ─────────────────────────────────────────── */
+/* ── Canvas hand/pan mode cursor ─────────────────────────────────────────── */
+.canvas-hand-mode,
+.canvas-hand-mode .react-flow__pane {
+  cursor: grab !important;
+}
+.canvas-hand-mode:active,
+.canvas-hand-mode .react-flow__pane:active {
+  cursor: grabbing !important;
+}
+
 .mention-chip {
   display: inline;
   background: rgba(255, 255, 255, 0.13);

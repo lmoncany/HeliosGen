@@ -1,5 +1,7 @@
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import { randomUUID } from "crypto";
+import https from "node:https";
+import http  from "node:http";
 
 let _s3: S3Client | null = null;
 
@@ -48,12 +50,30 @@ export async function uploadBuffer(
   return cdnUrl(key);
 }
 
+/** Fetch a remote URL to a Buffer using Node.js core (immune to Next.js AbortSignal patching). */
+function fetchToBuffer(url: string, maxRedirects = 5): Promise<{ buf: Buffer; contentType: string }> {
+  return new Promise((resolve, reject) => {
+    if (maxRedirects <= 0) return reject(new Error("Too many redirects"));
+    const u   = new URL(url);
+    const mod = u.protocol === "https:" ? https : (http as unknown as typeof https);
+    mod.get(url, (res) => {
+      if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        return fetchToBuffer(res.headers.location, maxRedirects - 1).then(resolve).catch(reject);
+      }
+      if (!res.statusCode || res.statusCode < 200 || res.statusCode >= 300) {
+        return reject(new Error(`HTTP ${res.statusCode} fetching ${url}`));
+      }
+      const chunks: Buffer[] = [];
+      res.on("data",  (c: Buffer) => chunks.push(c));
+      res.on("end",   () => resolve({ buf: Buffer.concat(chunks), contentType: res.headers["content-type"] ?? "image/jpeg" }));
+      res.on("error", reject);
+    }).on("error", reject);
+  });
+}
+
 /** Fetch a remote URL, upload to R2, return CDN URL. */
 export async function mirrorToR2(sourceUrl: string, folder: string): Promise<string> {
-  const res = await fetch(sourceUrl);
-  if (!res.ok) throw new Error(`mirrorToR2: fetch failed ${res.status} for ${sourceUrl}`);
-  const contentType = res.headers.get("content-type") ?? "image/jpeg";
-  const buf = Buffer.from(await res.arrayBuffer());
+  const { buf, contentType } = await fetchToBuffer(sourceUrl);
   return uploadBuffer(buf, contentType, folder);
 }
 

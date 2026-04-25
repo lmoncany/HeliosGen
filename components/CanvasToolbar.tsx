@@ -249,6 +249,7 @@ export default function CanvasToolbar({
         id="toolbar-hand"
         title="Hand tool (H)"
         active={activeTool === "hand"}
+        activeStyle="circle"
         onClick={() => selectTool("hand")}
       >
         <IconHand />

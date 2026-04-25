@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import https from "node:https";
 import http from "node:http";
-import { fetch as undiciFetch, FormData as UndiciFormData } from "undici";
-import { Blob as NodeBlob } from "node:buffer";
+import { spawn } from "node:child_process";
+import { writeFile, unlink, readFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { jobStore } from "@/lib/jobStore";
 import { ensureR2, uploadBuffer } from "@/lib/r2";
 import { supabaseAdmin } from "@/lib/supabase/admin";
@@ -90,6 +92,61 @@ function fetchBuffer(url: string, maxRedirects = 5): Promise<Buffer> {
 }
 
 
+// Send a multipart/form-data request via curl (bypasses Node.js TLS quirks with Azure)
+async function curlMultipartPost(
+  url:        string,
+  authKey:    string,
+  images:     Array<{ buf: Buffer; mime: string; ext: string }>,
+  textFields: Record<string, string>,
+): Promise<{ ok: boolean; status: number; body: string }> {
+  const tmpFiles: string[] = [];
+  const bodyPath = join(tmpdir(), `azure-resp-${Date.now()}.json`);
+
+  try {
+    for (const img of images) {
+      const p = join(tmpdir(), `azure-img-${Date.now()}-${Math.random().toString(36).slice(2)}.${img.ext}`);
+      await writeFile(p, img.buf);
+      tmpFiles.push(p);
+    }
+
+    const args = [
+      "-s", "-m", "180",
+      "-X", "POST", url,
+      "-H", `Authorization: Bearer ${authKey}`,
+      "-o", bodyPath,
+      "-w", "%{http_code}",
+    ];
+    for (let i = 0; i < images.length; i++) {
+      args.push("-F", `image[]=@${tmpFiles[i]};type=${images[i].mime}`);
+    }
+    for (const [k, v] of Object.entries(textFields)) {
+      args.push("-F", `${k}=${v}`);
+    }
+
+    console.log("[azure/edits/curl] args:", args.map((a) => (a.startsWith("Bearer ") ? "Bearer ***" : a)));
+
+    const { statusStr, stderr, exitCode } = await new Promise<{ statusStr: string; stderr: string; exitCode: number }>((resolve, reject) => {
+      let out = "";
+      let err = "";
+      const proc = spawn("curl", args);
+      proc.stdout.on("data", (d: Buffer) => out += d.toString());
+      proc.stderr.on("data", (d: Buffer) => err += d.toString());
+      proc.on("close",  (code) => resolve({ statusStr: out.trim(), stderr: err, exitCode: code ?? -1 }));
+      proc.on("error",  (e) => reject(new Error(`curl spawn failed: ${e.message}`)));
+    });
+
+    console.log("[azure/edits/curl] exit code:", exitCode);
+    if (stderr) console.log("[azure/edits/curl] stderr:", stderr);
+
+    const status = parseInt(statusStr, 10) || 0;
+    const body   = await readFile(bodyPath, "utf-8").catch(() => "");
+    console.log("[azure/edits/curl] status:", status, "body:", body.slice(0, 1000));
+    return { ok: status >= 200 && status < 300, status, body };
+  } finally {
+    for (const f of [...tmpFiles, bodyPath]) unlink(f).catch(() => {});
+  }
+}
+
 // Resolve every image URL to an R2 CDN URL (uploads base64 / mirrors external URLs)
 async function resolveImages(imageUrls: string[]): Promise<string[]> {
   const resolved = await Promise.all(
@@ -133,7 +190,12 @@ export async function POST(req: NextRequest) {
   const cfg = IMAGE_MODELS.find((m) => m.id === model);
   if (!cfg) return NextResponse.json({ error: `Unknown model: ${model}` }, { status: 400 });
 
-  const r2ImageUrls = await resolveImages(imageUrls);
+  let r2ImageUrls: string[] = [];
+  try {
+    r2ImageUrls = await resolveImages(imageUrls);
+  } catch {
+    // image mirroring failures are non-fatal — proceed without reference images
+  }
 
   // ── Azure Foundry branch ──────────────────────────────────────────────────────
   if (azureBaseUrl && azureDeployment) {
@@ -151,7 +213,7 @@ export async function POST(req: NextRequest) {
     jobStore.set(azureTaskId, { status: "pending", type: "image" });
 
     // Resolve user before the async fire-and-forget (req context will be gone)
-    const azureUserId = await getUserId(req);
+    const azureUserId = await getUserId(req).catch(() => null);
 
     const hasRefImages = r2ImageUrls.length > 0;
 
@@ -160,31 +222,29 @@ export async function POST(req: NextRequest) {
         let res: { ok: boolean; status: number; text: () => Promise<string> };
 
         if (hasRefImages) {
-          // ── Image-to-image: multipart /images/edits via undici ────────────
+          // ── Image-to-image: multipart /images/edits via curl ─────────────
           const azureUrl = `${base}/openai/deployments/${azureDeployment}/images/edits?api-version=${azureApiVersion}`;
-          console.log("[azure/edits] URL:", azureUrl);
 
-          const form = new UndiciFormData();
-          for (const imgUrl of r2ImageUrls.slice(0, cfg.maxImages)) {
-            const buf  = await fetchBuffer(imgUrl);
-            const raw  = imgUrl.split("?")[0].split(".").pop()?.toLowerCase() ?? "png";
-            const ext  = raw === "jpg" ? "jpeg" : raw;
-            const mime = ext === "jpeg" ? "image/jpeg" : "image/png";
-            form.append("image[]", new NodeBlob([buf], { type: mime }), `image.${ext}`);
-          }
-          form.append("prompt",        truncatedPrompt);
-          form.append("quality",       quality);
-          form.append("output_format", "png");
-          form.append("n",             "1");
-          if (size && size !== "auto") form.append("size", size);
+          const images = await Promise.all(
+            r2ImageUrls.slice(0, cfg.maxImages).map(async (imgUrl) => {
+              const buf  = await fetchBuffer(imgUrl);
+              const raw  = imgUrl.split("?")[0].split(".").pop()?.toLowerCase() ?? "png";
+              const ext  = raw === "jpg" ? "jpeg" : raw;
+              const mime = ext === "jpeg" ? "image/jpeg" : "image/png";
+              return { buf, ext, mime };
+            }),
+          );
 
-          const azureResp = await undiciFetch(azureUrl, {
-            method:  "POST",
-            headers: { Authorization: `Bearer ${azureKey}` },
-            body:    form,
-            signal:  AbortSignal.timeout(180_000),
-          });
-          res = { ok: azureResp.ok, status: azureResp.status, text: () => azureResp.text() };
+          const textFields: Record<string, string> = {
+            prompt:        truncatedPrompt,
+            quality,
+            output_format: "png",
+            n:             "1",
+          };
+          if (size && size !== "auto") textFields.size = size;
+
+          const curl = await curlMultipartPost(azureUrl, azureKey, images, textFields);
+          res = { ok: curl.ok, status: curl.status, text: () => Promise.resolve(curl.body) };
         } else {
           // ── Text-to-image: JSON /images/generations ────────────────────────
           const azureUrl = `${base}/openai/deployments/${azureDeployment}/images/generations?api-version=${azureApiVersion}`;
@@ -197,6 +257,12 @@ export async function POST(req: NextRequest) {
             quality,
           };
           if (size && size !== "auto") body.size = size;
+
+          console.log("[azure/generations] request →", {
+            url:    azureUrl,
+            method: "POST",
+            body,
+          });
 
           res = await httpsPost(
             azureUrl,

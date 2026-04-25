@@ -103,6 +103,8 @@ function targetHandleFor(
   // Typed output handles take priority
   if (sourceHandleId) {
     switch (sourceHandleId) {
+      case "textOut":
+        return "prompt";
       case "startFrameOut":
       case "imagePickOut":
         if (targetNodeType === "videoGeneratorNode") return "startFrame";
@@ -121,7 +123,7 @@ function targetHandleFor(
     }
   }
   // Single-output nodes — fall back to node-type routing
-  if (sourceNodeType === "promptNode") return "prompt";
+  if (sourceNodeType === "promptNode" || sourceNodeType === "assistantNode") return "prompt";
   if (sourceNodeType === "imageInputNode" || sourceNodeType === "generateNode") {
     if (targetNodeType === "videoGeneratorNode") return "startFrame";
     if (targetNodeType === "generateNode")       return "image";

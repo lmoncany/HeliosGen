@@ -89,7 +89,7 @@ const SECTIONS: Array<{
   {
     id: "generators",
     label: "GENERATORS",
-    nodeTypes: ["generateNode", "videoGeneratorNode", "assistantNode"],
+    nodeTypes: ["generateNode", "videoGeneratorNode"],
   },
   {
     id: "resources",

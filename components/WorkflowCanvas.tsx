@@ -122,6 +122,8 @@ export default function WorkflowCanvas() {
   const updateNodeDataRef = useRef(updateNodeData);
   updateNodeDataRef.current = updateNodeData;
 
+  const [activeTool, setActiveTool] = useState<"select" | "hand">("select");
+
   const [dyingEdgeIds, setDyingEdgeIds]       = useState<Set<string>>(new Set());
   const [dyingNodeIds, setDyingNodeIds]       = useState<Set<string>>(new Set());
   const [ancestorIds, setAncestorIds]         = useState<Set<string>>(new Set());
@@ -600,6 +602,11 @@ export default function WorkflowCanvas() {
       // Ignore when typing in an input / textarea
       const tag = (e.target as HTMLElement).tagName;
       if (tag === "INPUT" || tag === "TEXTAREA") return;
+
+      if (!e.ctrlKey && !e.metaKey && !e.altKey) {
+        if (e.key === "v" || e.key === "V") setActiveTool("select");
+        if (e.key === "h" || e.key === "H") setActiveTool("hand");
+      }
 
       const mod = e.ctrlKey || e.metaKey;
       if (mod && e.key === "c") { e.preventDefault(); handleCopy(); }
@@ -1232,7 +1239,7 @@ export default function WorkflowCanvas() {
       />
       <div
         ref={wrapperRef}
-        className="relative flex-1 flex flex-col min-h-0 min-w-0"
+        className={`relative flex-1 flex flex-col min-h-0 min-w-0${activeTool === "hand" ? " canvas-hand-mode" : ""}`}
         onMouseMove={(e) => { mousePosRef.current = { x: e.clientX, y: e.clientY }; }}
       >
       <ReactFlow
@@ -1297,9 +1304,10 @@ export default function WorkflowCanvas() {
         minZoom={0.05}
         colorMode="dark"
         className="flex-1"
-        // Right-click drag pans; left-click drag draws selection box
-        panOnDrag={[2]}
-        selectionOnDrag
+        // Hand mode: left-click pans; Select mode: right-click pans + left-click selects
+        panOnDrag={activeTool === "hand" ? [0] : [2]}
+        selectionOnDrag={activeTool !== "hand"}
+        nodesDraggable={activeTool !== "hand"}
         deleteKeyCode={["Delete", "Backspace"]}
         multiSelectionKeyCode="Shift"
         panOnScroll
@@ -1339,6 +1347,8 @@ export default function WorkflowCanvas() {
 
       {/* ── Left-middle toolbar ───────────────────────────────────────────── */}
       <CanvasToolbar
+        activeTool={activeTool}
+        onToolChange={(tool) => setActiveTool(tool as "select" | "hand")}
         onAddNode={(rect) => setAddMenuAnchor(rect)}
         onUndo={() => document.execCommand("undo")}
         onRedo={() => document.execCommand("redo")}

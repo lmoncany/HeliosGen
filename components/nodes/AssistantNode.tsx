@@ -325,7 +325,6 @@ export default function AssistantNode({ id, data, selected }: NodeProps<Assistan
           {/* ── Bottom controls ────────────────────────────────────────── */}
           <div
             className="absolute bottom-0 inset-x-0 px-2.5 pb-1.5 pt-1 flex items-center justify-between z-20"
-            style={{ background: "linear-gradient(to top, rgba(13,16,18,0.95) 60%, transparent)" }}
             onMouseDown={(e) => e.stopPropagation()}
           >
             {/* Model dropdown */}
