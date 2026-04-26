@@ -25,7 +25,7 @@ export async function GET(req: NextRequest) {
 
   const { data: gens, error: genError } = await supabaseAdmin
     .from("generations")
-    .select("id, generation_type, prompt, model, aspect_ratio, image_url, video_url, quality, created_at")
+    .select("id, generation_type, prompt, model, aspect_ratio, image_url, video_url, quality, created_at, reference_image_urls")
     .eq("user_id", userId)
     .eq("generation_type", mediaType)
     .eq("status", "done")
@@ -64,18 +64,22 @@ export async function GET(req: NextRequest) {
     quality?: string;
     source: "generation" | "upload";
     created_at: string;
+    referenceImageUrls?: string[];
   };
 
   const genItems: Item[] = (gens ?? []).map((g) => ({
-    id:           g.id,
-    url:          (mediaType === "video" ? g.video_url : g.image_url) as string,
-    mediaType:    mediaType as "image" | "video",
-    prompt:       g.prompt   ?? undefined,
-    model:        g.model    ?? undefined,
-    aspect_ratio: g.aspect_ratio ?? undefined,
-    quality:      g.quality  ?? undefined,
-    source:       "generation",
-    created_at:   g.created_at,
+    id:                  g.id,
+    url:                 (mediaType === "video" ? g.video_url : g.image_url) as string,
+    mediaType:           mediaType as "image" | "video",
+    prompt:              g.prompt        ?? undefined,
+    model:               g.model         ?? undefined,
+    aspect_ratio:        g.aspect_ratio  ?? undefined,
+    quality:             g.quality       ?? undefined,
+    source:              "generation",
+    created_at:          g.created_at,
+    referenceImageUrls:  (g.reference_image_urls as string[] | null)?.length
+                           ? (g.reference_image_urls as string[])
+                           : undefined,
   }));
 
   const uploadItems: Item[] = (uploads ?? []).map((u) => ({
@@ -109,4 +113,29 @@ export async function GET(req: NextRequest) {
       uploadError:      uploadError?.message ?? null,
     },
   });
+}
+
+export async function DELETE(req: NextRequest) {
+  const auth  = req.headers.get("authorization") ?? "";
+  const token = auth.startsWith("Bearer ") ? auth.slice(7) : null;
+  if (!token) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const { data: authData, error: authError } = await supabaseAdmin.auth.getUser(token);
+  if (authError || !authData.user) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+  const userId = authData.user.id;
+
+  const { id, source } = await req.json() as { id: string; source: "generation" | "upload" };
+  if (!id || !source) return NextResponse.json({ error: "Missing id or source" }, { status: 400 });
+
+  const table = source === "generation" ? "generations" : "user_uploads";
+  const { error } = await supabaseAdmin
+    .from(table)
+    .delete()
+    .eq("id", id)
+    .eq("user_id", userId);
+
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  return NextResponse.json({ ok: true });
 }

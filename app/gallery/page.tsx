@@ -19,6 +19,7 @@ interface GalleryItem {
   quality?: string;
   source: "generation" | "upload";
   created_at: string;
+  referenceImageUrls?: string[];
 }
 
 interface RefImage {
@@ -37,7 +38,108 @@ interface PendingGen {
 
 type MasonryItem = { kind: "pending"; pg: PendingGen } | { kind: "gallery"; item: GalleryItem };
 
+interface DownloadTask {
+  id: string;
+  filename: string;
+  status: "preparing" | "ready" | "error";
+}
+
 type Tab = "images" | "videos";
+
+interface TaggedImage {
+  label: string;
+  refId: string;
+  url: string;
+}
+
+function resolveGalleryMentions(
+  text: string,
+  tagged: TaggedImage[],
+): { resolvedPrompt: string; extraUrls: string[] } {
+  if (!tagged.length) return { resolvedPrompt: text, extraUrls: [] };
+  type Span = { start: number; end: number; url: string };
+  const spans: Span[] = [];
+  const claimed = new Set<number>();
+  for (const t of [...tagged].sort((a, b) => b.label.length - a.label.length)) {
+    const escaped = t.label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const re = new RegExp(`@${escaped}(?!\\w)`, "g");
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(text)) !== null) {
+      if (!claimed.has(m.index)) {
+        spans.push({ start: m.index, end: m.index + m[0].length, url: t.url });
+        claimed.add(m.index);
+      }
+    }
+  }
+  spans.sort((a, b) => a.start - b.start);
+  if (!spans.length) return { resolvedPrompt: text, extraUrls: [] };
+  const extraUrls: string[] = [];
+  let resolvedPrompt = "";
+  let lastEnd = 0;
+  let n = 1;
+  for (const span of spans) {
+    resolvedPrompt += text.slice(lastEnd, span.start);
+    resolvedPrompt += `<<<image ${n++}>>>`;
+    extraUrls.push(span.url);
+    lastEnd = span.end;
+  }
+  resolvedPrompt += text.slice(lastEnd);
+  return { resolvedPrompt, extraUrls };
+}
+
+function renderGalleryMentions(
+  text: string,
+  tagged: TaggedImage[],
+  onEnter: (tag: TaggedImage, rect: DOMRect) => void,
+  onLeave: () => void,
+  onMouseDown: (tag: TaggedImage) => void,
+): React.ReactNode {
+  if (!text) return null;
+  if (!tagged.length) return <span style={{ color: "#e8e8e6" }}>{text}</span>;
+
+  const sorted = [...tagged].sort((a, b) => b.label.length - a.label.length);
+  const parts: React.ReactNode[] = [];
+  let rest = text;
+  let key = 0;
+
+  while (rest.length > 0) {
+    let earliest: { idx: number; tag: TaggedImage } | null = null;
+    for (const tag of sorted) {
+      const idx = rest.indexOf(`@${tag.label}`);
+      if (idx !== -1 && (earliest === null || idx < earliest.idx)) earliest = { idx, tag };
+    }
+    if (!earliest) { parts.push(<span key={key++} style={{ color: "#e8e8e6" }}>{rest}</span>); break; }
+    if (earliest.idx > 0) parts.push(<span key={key++} style={{ color: "#e8e8e6" }}>{rest.slice(0, earliest.idx)}</span>);
+    const tag = earliest.tag;
+    parts.push(
+      <span
+        key={key++}
+        style={{
+          color:        "#77E544",
+          fontWeight:   500,
+          cursor:       "text",
+          pointerEvents: "auto",
+          userSelect:   "none",
+          background:   "rgba(119,229,68,0.15)",
+          boxShadow:    "0 0 0 3px rgba(119,229,68,0.15)",
+          borderRadius: "3px",
+        }}
+        onMouseEnter={e => onEnter(tag, e.currentTarget.getBoundingClientRect())}
+        onMouseLeave={onLeave}
+        onMouseDown={e => { e.preventDefault(); onMouseDown(tag); }}
+      >
+        @{tag.label}
+      </span>,
+    );
+    rest = rest.slice(earliest.idx + tag.label.length + 1);
+  }
+  return <>{parts}</>;
+}
+
+function resizeTextarea(el: HTMLTextAreaElement, maxH = 66) {
+  el.style.height = "auto";
+  el.style.height = Math.min(el.scrollHeight, maxH) + "px";
+}
 
 async function getToken(): Promise<string | undefined> {
   const { data } = await createClient().auth.getSession();
@@ -52,6 +154,7 @@ const loadedImageUrls = new Set<string>();
 interface SavedSettings {
   prompt: string; modelId: string; aspectRatio: string;
   quality: string; count: number; duration: number; mode: string;
+  refImageUrls?: string[];
 }
 
 function loadSettings(tab: Tab): Partial<SavedSettings> | null {
@@ -106,10 +209,41 @@ function GalleryInner() {
   const [submitting, setSubmitting]   = useState(false);
   const [genError, setGenError]       = useState<string>("");
   const debugMode = useWorkflowStore((s) => s.debugMode);
+  const [sourceFilter, setSourceFilter] = useState<"generated" | "uploaded">("generated");
+  const [zoom, setZoom]                 = useState(3);
+  const [downloads, setDownloads]       = useState<DownloadTask[]>([]);
+  const [refError, setRefError]         = useState("");
 
-  // Reference images
-  const [refImages, setRefImages]     = useState<RefImage[]>([]);
-  const fileInputRef                  = useRef<HTMLInputElement>(null);
+  const [removingIds, setRemovingIds] = useState<Set<string>>(new Set());
+
+  // Reference images — restored from localStorage on mount
+  const [refImages, setRefImages] = useState<RefImage[]>(() => {
+    const s = loadSettings(tab);
+    return (s?.refImageUrls ?? []).map(url => ({
+      id: url, objectUrl: url, cdnUrl: url, uploading: false, error: false,
+    }));
+  });
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Prompt expansion
+  const [promptExpanded, setPromptExpanded] = useState(false);
+
+  // @ mention state — tagged images also restored from localStorage
+  const [taggedImages, setTaggedImages] = useState<TaggedImage[]>(() => {
+    const s = loadSettings(tab);
+    const urls = s?.refImageUrls ?? [];
+    const p    = s?.prompt ?? "";
+    return urls.flatMap((url, idx) => {
+      const label = `img${idx + 1}`;
+      return p.includes(`@${label}`) ? [{ label, refId: url, url }] : [];
+    });
+  });
+  const [mentionQuery, setMentionQuery]   = useState<string | null>(null);
+  const [mentionSelIdx, setMentionSelIdx] = useState(0);
+  const inputRef                          = useRef<HTMLTextAreaElement>(null);
+  const promptBarRef                      = useRef<HTMLDivElement>(null);
+  const overlayInnerRef                   = useRef<HTMLDivElement>(null);
+  const [chipPreview, setChipPreview]     = useState<{ tag: TaggedImage; rect: DOMRect } | null>(null);
 
   const pageRef     = useRef(0);
   const tabRef      = useRef<Tab>(tab);
@@ -198,7 +332,18 @@ function GalleryInner() {
     setCount(saved?.count ?? 1);
     if ("defaultDuration" in model) setDuration(saved?.duration ?? (model as { defaultDuration: number }).defaultDuration ?? 5);
     if ("defaultMode" in model) setMode(saved?.mode ?? (model as { defaultMode: string }).defaultMode ?? "");
-    setRefImages(prev => { prev.forEach(r => URL.revokeObjectURL(r.objectUrl)); return []; });
+    const savedUrls = saved?.refImageUrls ?? [];
+    const savedPrompt = saved?.prompt ?? "";
+    setRefImages(prev => {
+      prev.forEach(r => URL.revokeObjectURL(r.objectUrl));
+      return savedUrls.map(url => ({ id: url, objectUrl: url, cdnUrl: url, uploading: false, error: false }));
+    });
+    setTaggedImages(
+      savedUrls.flatMap((url, idx) => {
+        const label = `img${idx + 1}`;
+        return savedPrompt.includes(`@${label}`) ? [{ label, refId: url, url }] : [];
+      })
+    );
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab]);
 
@@ -211,6 +356,7 @@ function GalleryInner() {
     if ("defaultMode" in m) setMode(m.defaultMode ?? "");
     if (!("supportsImages" in m) || !m.supportsImages) {
       setRefImages(prev => { prev.forEach(r => URL.revokeObjectURL(r.objectUrl)); return []; });
+      setTaggedImages([]);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [modelId]);
@@ -230,12 +376,17 @@ function GalleryInner() {
 
   // Persist settings
   useEffect(() => {
-    saveSettings(tab, { prompt, modelId, aspectRatio, quality, count, duration, mode });
-  }, [tab, prompt, modelId, aspectRatio, quality, count, duration, mode]);
+    const refImageUrls = refImages
+      .filter(r => r.cdnUrl && !r.uploading && !r.error)
+      .map(r => r.cdnUrl!);
+    saveSettings(tab, { prompt, modelId, aspectRatio, quality, count, duration, mode, refImageUrls });
+  }, [tab, prompt, modelId, aspectRatio, quality, count, duration, mode, refImages]);
 
-  // Track window width for masonry column count
+  // Track window width; set initial zoom from breakpoints
   useEffect(() => {
-    setWindowWidth(window.innerWidth);
+    const w = window.innerWidth;
+    setWindowWidth(w);
+    setZoom(w >= 1400 ? 5 : w >= 900 ? 4 : w >= 640 ? 3 : 2);
     const handler = () => setWindowWidth(window.innerWidth);
     window.addEventListener("resize", handler);
     return () => window.removeEventListener("resize", handler);
@@ -274,9 +425,9 @@ function GalleryInner() {
           },
           body: file,
         });
-        const data = await res.json() as { url?: string; error?: string };
-        if (!res.ok || !data.url) throw new Error(data.error ?? "Upload failed");
-        setRefImages(prev => prev.map(r => r.id === entry.id ? { ...r, cdnUrl: data.url!, uploading: false } : r));
+        const data = await res.json() as { cdnUrl?: string; error?: string };
+        if (!res.ok || !data.cdnUrl) throw new Error(data.error ?? "Upload failed");
+        setRefImages(prev => prev.map(r => r.id === entry.id ? { ...r, cdnUrl: data.cdnUrl!, uploading: false } : r));
       } catch {
         setRefImages(prev => prev.map(r => r.id === entry.id ? { ...r, uploading: false, error: true } : r));
       }
@@ -284,22 +435,36 @@ function GalleryInner() {
   };
 
   const removeImage = (id: string) => {
-    setRefImages(prev => {
-      const img = prev.find(r => r.id === id);
-      if (img) URL.revokeObjectURL(img.objectUrl);
-      return prev.filter(r => r.id !== id);
-    });
+    const el = document.querySelector(`[data-refimg-id="${id}"]`) as HTMLElement | null;
+    if (el) {
+      // Synchronous DOM write — zero frame delay, starts before React scheduler
+      el.style.transition = "opacity 170ms cubic-bezier(0.4,0,1,1), transform 170ms cubic-bezier(0.4,0,1,1)";
+      el.style.opacity    = "0";
+      el.style.transform  = "translateY(-10px) scale(0.92)";
+    }
+    // React state as a backup so any re-render in the window doesn't reset the styles
+    setRemovingIds(prev => new Set(prev).add(id));
+    setTimeout(() => {
+      setRemovingIds(prev => { const s = new Set(prev); s.delete(id); return s; });
+      setRefImages(prev => {
+        const img = prev.find(r => r.id === id);
+        if (img) URL.revokeObjectURL(img.objectUrl);
+        return prev.filter(r => r.id !== id);
+      });
+    }, 190);
   };
 
   // ── Generate ──────────────────────────────────────────────────────────────
 
   const generateOne = async (token: string): Promise<string> => {
     if (!isVideo) {
-      const imageUrls = refImages.filter(r => r.cdnUrl && !r.error).map(r => r.cdnUrl!);
+      const { resolvedPrompt, extraUrls } = resolveGalleryMentions(prompt, taggedImages);
+      const refUrls   = refImages.filter(r => r.cdnUrl && !r.error).map(r => r.cdnUrl!);
+      const imageUrls = [...extraUrls, ...refUrls];
       const res = await fetch("/api/generate", {
         method:  "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body:    JSON.stringify({ prompt, model: modelId, aspectRatio, quality, imageUrls }),
+        body:    JSON.stringify({ prompt: resolvedPrompt, model: modelId, aspectRatio, quality, imageUrls }),
       });
       const d = await res.json() as { taskId?: string; error?: string };
       if (!res.ok) throw new Error(d.error ?? "Failed");
@@ -348,13 +513,14 @@ function GalleryInner() {
 
     // ── Debug mode: log + simulate, no real API call ────────────────────────
     if (debugMode) {
-      const imageUrls = refImages.filter(r => r.cdnUrl && !r.error).map(r => r.cdnUrl!);
+      const { resolvedPrompt: dbgPrompt, extraUrls: dbgExtra } = resolveGalleryMentions(prompt, taggedImages);
+      const dbgRefUrls = refImages.filter(r => r.cdnUrl && !r.error).map(r => r.cdnUrl!);
       console.log("[Gallery Debug] Generate request:", {
         type: isVideo ? "video" : "image",
-        prompt, model: modelId, aspectRatio, quality,
+        prompt: dbgPrompt, model: modelId, aspectRatio, quality,
         ...(isVideo
           ? { duration, mode }
-          : { imageUrls, count: n }),
+          : { imageUrls: [...dbgExtra, ...dbgRefUrls], count: n }),
       });
       setTimeout(() => {
         setPendingGens(prev => prev.filter(p => !newPendings.some(np => np.id === p.id)));
@@ -399,6 +565,70 @@ function GalleryInner() {
     });
   };
 
+  // ── @ mention derived + helpers ───────────────────────────────────────────
+
+  const mentionableImages = useMemo(() =>
+    refImages.filter(r => !r.uploading && !r.error && r.cdnUrl),
+  [refImages]);
+
+  const filteredMentions = useMemo(() => {
+    if (mentionQuery === null) return [];
+    return mentionableImages.slice(0, 8);
+  }, [mentionableImages, mentionQuery]);
+
+  const atMenuOpen = !isVideo && mentionQuery !== null && filteredMentions.length > 0;
+
+  useEffect(() => { setMentionSelIdx(0); }, [filteredMentions.length]);
+
+  // Sync: remove chips whose @label was deleted from the prompt
+  useEffect(() => {
+    setTaggedImages(prev => prev.filter(t => prompt.includes(`@${t.label}`)));
+    if (inputRef.current) {
+      if (!promptExpanded) resizeTextarea(inputRef.current);
+      if (!promptExpanded) inputRef.current.scrollTop = 0;
+    }
+    if (!promptExpanded && overlayInnerRef.current) overlayInnerRef.current.style.transform = "";
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prompt]);
+
+  // Close @ menu on outside click
+  useEffect(() => {
+    if (!atMenuOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (!(e.target as HTMLElement).closest("[data-at-menu]") &&
+          !(e.target as HTMLElement).closest("[data-prompt-input]")) {
+        setMentionQuery(null);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [atMenuOpen]);
+
+  const insertMention = (ref: RefImage) => {
+    const pos   = refImages.findIndex(r => r.id === ref.id);
+    const label = `img${pos + 1}`;
+    if (!taggedImages.some(t => t.refId === ref.id))
+      setTaggedImages(prev => [...prev, { label, refId: ref.id, url: ref.cdnUrl! }]);
+
+    const input  = inputRef.current;
+    const cursor = input?.selectionStart ?? prompt.length;
+    const before = prompt.slice(0, cursor);
+    const after  = prompt.slice(cursor);
+    const lastAt = before.lastIndexOf("@");
+    const newText = lastAt >= 0
+      ? `${before.slice(0, lastAt)}@${label} ${after}`
+      : `${before}@${label} ${after}`;
+    const newPos = (lastAt >= 0 ? lastAt : cursor) + label.length + 2;
+
+    setPrompt(newText);
+    setMentionQuery(null);
+    requestAnimationFrame(() => {
+      if (!input) return;
+      input.focus();
+      input.setSelectionRange(newPos, newPos);
+    });
+  };
+
   // ── Derived ───────────────────────────────────────────────────────────────
 
   const vidModel    = VIDEO_MODELS.find(m => m.id === modelId);
@@ -413,12 +643,78 @@ function GalleryInner() {
 
   const canGenerate = submitting ? false : isVideo ? true : prompt.trim().length > 0;
 
-  const colCount = windowWidth >= 1400 ? 5 : windowWidth >= 900 ? 4 : windowWidth >= 640 ? 3 : 2;
+  const handleAddReference = useCallback((url: string) => {
+    if (refImages.some(r => r.cdnUrl === url || r.objectUrl === url)) {
+      setRefError("Already added as a reference.");
+      setTimeout(() => setRefError(""), 3000);
+      return;
+    }
+    if (refImages.length >= maxImgs) return;
+    setRefImages(prev => [...prev, { id: crypto.randomUUID(), objectUrl: url, cdnUrl: url, uploading: false, error: false }]);
+  }, [refImages, maxImgs]);
+
+  const handleCopyPrompt = useCallback((text: string) => {
+    setPrompt(text);
+  }, []);
+
+  const handleDelete = useCallback(async (id: string, source: "generation" | "upload") => {
+    const token = await getToken();
+    if (!token) return;
+    await fetch("/api/gallery", {
+      method:  "DELETE",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body:    JSON.stringify({ id, source }),
+    });
+    setItems(prev => {
+      const updated = prev.filter(i => i.id !== id);
+      galleryCache.set(tabRef.current, { items: updated, hasMore });
+      return updated;
+    });
+  }, [hasMore]);
+
+  const handleDownload = useCallback(async (url: string, itemIsVideo: boolean): Promise<void> => {
+    const ext      = itemIsVideo ? "mp4" : "jpg";
+    const filename = `${Date.now()}.${ext}`;
+    const taskId   = crypto.randomUUID();
+    setDownloads(prev => [...prev, { id: taskId, filename, status: "preparing" }]);
+    try {
+      const res = await fetch(`/api/download?url=${encodeURIComponent(url)}&filename=${filename}`);
+      if (!res.ok) throw new Error("Failed");
+      const blob      = await res.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      const a         = document.createElement("a");
+      a.href          = objectUrl;
+      a.download      = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(objectUrl);
+      setDownloads(prev => prev.map(t => t.id === taskId ? { ...t, status: "ready" } : t));
+    } catch {
+      setDownloads(prev => prev.map(t => t.id === taskId ? { ...t, status: "error" } : t));
+    }
+  }, []);
+
+  // Auto-dismiss download toast when all tasks complete
+  useEffect(() => {
+    if (downloads.length > 0 && downloads.every(d => d.status !== "preparing")) {
+      const timer = setTimeout(() => setDownloads([]), 4000);
+      return () => clearTimeout(timer);
+    }
+  }, [downloads]);
+
+  const colCount = zoom;
+
+  const filteredItems = useMemo(() =>
+    sourceFilter === "generated"
+      ? items.filter(item => item.source === "generation")
+      : items.filter(item => item.source === "upload"),
+  [items, sourceFilter]);
 
   const masonryColumns = useMemo<MasonryItem[][]>(() => {
     const all: MasonryItem[] = [
       ...pendingGens.map(pg   => ({ kind: "pending" as const, pg })),
-      ...items.map(item        => ({ kind: "gallery" as const, item })),
+      ...filteredItems.map(item => ({ kind: "gallery" as const, item })),
     ];
     const cols: MasonryItem[][] = Array.from({ length: colCount }, () => []);
     const heights               = new Array<number>(colCount).fill(0);
@@ -441,7 +737,7 @@ function GalleryInner() {
       heights[col] += ar;
     }
     return cols;
-  }, [pendingGens, items, colCount]);
+  }, [pendingGens, filteredItems, colCount]);
 
   // ── Render ────────────────────────────────────────────────────────────────
 
@@ -458,10 +754,77 @@ function GalleryInner() {
   return (
     <div style={{ flex: 1, background: "#080A0C", display: "flex", flexDirection: "column", overflow: "hidden", color: "#fff" }}>
 
+      {/* ── Sub-navbar ── */}
+      <div style={{
+        display:      "flex",
+        alignItems:   "center",
+        justifyContent: "space-between",
+        padding:      "0 14px",
+        height:       "44px",
+        borderBottom: "1px solid rgba(255,255,255,0.05)",
+        flexShrink:   0,
+      }}>
+        {/* Left: source tabs */}
+        <div style={{ display: "flex", gap: "2px" }}>
+          {(["generated", "uploaded"] as const).map(src => (
+            <button
+              key={src}
+              onClick={() => setSourceFilter(src)}
+              style={{
+                display:      "flex",
+                alignItems:   "center",
+                gap:          "6px",
+                padding:      "5px 12px",
+                borderRadius: "8px",
+                border:       "none",
+                background:   sourceFilter === src ? "rgba(255,255,255,0.08)" : "transparent",
+                color:        sourceFilter === src ? "#ffffff" : "rgba(255,255,255,0.38)",
+                fontSize:     "13px",
+                fontWeight:   sourceFilter === src ? 500 : 400,
+                cursor:       "pointer",
+                transition:   "background 140ms, color 140ms",
+                fontFamily:   "inherit",
+                letterSpacing: "-0.01em",
+              }}
+              onMouseEnter={e => { if (sourceFilter !== src) e.currentTarget.style.color = "rgba(255,255,255,0.65)"; }}
+              onMouseLeave={e => { if (sourceFilter !== src) e.currentTarget.style.color = "rgba(255,255,255,0.38)"; }}
+            >
+              {src === "generated" ? (
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="3" y="3" width="18" height="18" rx="2" /><circle cx="8.5" cy="8.5" r="1.5" /><path d="m21 15-5-5L5 21" />
+                </svg>
+              ) : (
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="17 8 12 3 7 8" /><line x1="12" y1="3" x2="12" y2="15" />
+                </svg>
+              )}
+              {src === "generated" ? "Generated" : "Uploaded"}
+            </button>
+          ))}
+        </div>
+
+        {/* Right: zoom slider */}
+        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.35)" strokeWidth="2" strokeLinecap="round">
+            <circle cx="11" cy="11" r="8" /><path d="m21 21-4.35-4.35M8 11h6" />
+          </svg>
+          <input
+            type="range"
+            min={1} max={6} step={1}
+            value={7 - zoom}
+            onChange={e => setZoom(7 - Number(e.target.value))}
+            className="gallery-zoom-slider"
+          />
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.35)" strokeWidth="2" strokeLinecap="round">
+            <circle cx="11" cy="11" r="8" /><path d="m21 21-4.35-4.35M11 8v6M8 11h6" />
+          </svg>
+        </div>
+      </div>
+
       {/* ── Grid ── */}
       <div style={{ flex: 1, overflowY: "auto", paddingBottom: "160px" }}>
         {/* ── Gallery grid ── */}
-        {!loading && items.length === 0 && pendingGens.length === 0 ? (
+        {!loading && filteredItems.length === 0 && pendingGens.length === 0 ? (
           <EmptyState tab={tab} />
         ) : (
           <div style={{ display: "flex", gap: "3px", padding: "3px" }}>
@@ -505,7 +868,15 @@ function GalleryInner() {
                     );
                   }
                   return (
-                    <GalleryCard key={mi.item.id} item={mi.item} onOpen={mi.item.mediaType === "image" ? () => setLightboxItem(mi.item) : undefined} />
+                    <GalleryCard
+                      key={mi.item.id}
+                      item={mi.item}
+                      onOpen={mi.item.mediaType === "image" ? () => setLightboxItem(mi.item) : undefined}
+                      onAddReference={mi.item.mediaType === "image" && canAddImgs ? handleAddReference : undefined}
+                      onCopyPrompt={handleCopyPrompt}
+                      onDownload={handleDownload}
+                      onDelete={handleDelete}
+                    />
                   );
                 })}
               </div>
@@ -526,14 +897,17 @@ function GalleryInner() {
       />
 
       {/* ── Prompt bar ── */}
-      <div style={{
-        position:  "fixed",
-        bottom:    "20px",
-        left:      "50%",
-        transform: "translateX(-50%)",
-        width:     "min(860px, calc(100vw - 32px))",
-        zIndex:    200,
-      }}>
+      <div
+        ref={promptBarRef}
+        style={{
+          position:  "fixed",
+          bottom:    "20px",
+          left:      "50%",
+          transform: "translateX(-50%)",
+          width:     "min(860px, calc(100vw - 32px))",
+          zIndex:    200,
+        }}
+      >
 
         {/* Toast */}
         {genError && (
@@ -569,8 +943,10 @@ function GalleryInner() {
               flexWrap:   "wrap",
               alignItems: "flex-start",
             }}>
-              {refImages.map(img => (
-                <div key={img.id} style={{
+              {refImages.map(img => {
+                const isRemoving = removingIds.has(img.id);
+                return (
+                <div key={img.id} data-refimg-id={img.id} style={{
                   position:     "relative",
                   width:        "88px",
                   height:       "80px",
@@ -579,6 +955,14 @@ function GalleryInner() {
                   background:   "#1A1C1F",
                   flexShrink:   0,
                   border:       img.error ? "1px solid rgba(248,113,113,0.4)" : "1px solid rgba(255,255,255,0.08)",
+                  // Entry: spring animation on mount
+                  animation:    isRemoving ? "none" : "refImgIn 260ms cubic-bezier(0.16,1,0.3,1)",
+                  // Exit: CSS transition driven by React state (same values as DOM manipulation — no conflict)
+                  ...(isRemoving ? {
+                    transition: "opacity 170ms cubic-bezier(0.4,0,1,1), transform 170ms cubic-bezier(0.4,0,1,1)",
+                    opacity:    0,
+                    transform:  "translateY(-10px) scale(0.92)",
+                  } : {}),
                 }}>
                   {/* Thumbnail */}
                   {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -653,7 +1037,7 @@ function GalleryInner() {
                     </svg>
                   </button>
                 </div>
-              ))}
+              );})}
 
               {/* Add-more button */}
               {canAddImgs && (
@@ -707,29 +1091,180 @@ function GalleryInner() {
           <div style={{
             padding:    hasRefImgs ? "12px 14px 14px 16px" : "16px 14px 14px 16px",
             display:    "flex",
-            alignItems: "stretch",
+            alignItems: "flex-start",
             gap:        "12px",
           }}>
             {/* Left column: input + controls */}
             <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: "10px" }}>
-            <input
-              value={prompt}
-              onChange={e => setPrompt(e.target.value)}
-              onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey && !submitting) { e.preventDefault(); generate(); } }}
-              placeholder={isVideo ? "Describe the video you imagine…" : "Describe the scene you imagine…"}
-              disabled={submitting}
-              style={{
-                flex:        "none",
-                background:  "transparent",
-                border:      "none",
-                outline:     "none",
-                color:       "#e8e8e6",
-                fontSize:    "14.5px",
-                fontFamily:  "inherit",
-                caretColor:  "#77E544",
-                letterSpacing: "-0.01em",
-              }}
-            />
+            {/* Prompt input with inline mention chips */}
+            <div style={{ position: "relative", flex: "none" }}>
+              {/* Transparent textarea — editing layer */}
+              <textarea
+                ref={inputRef}
+                data-prompt-input=""
+                value={prompt}
+                rows={1}
+                onChange={e => {
+                  const text   = e.target.value;
+                  const cursor = e.target.selectionStart ?? text.length;
+                  setPrompt(text);
+                  if (!promptExpanded) resizeTextarea(e.target);
+                  if (!isVideo) {
+                    const match = text.slice(0, cursor).match(/@(\w*)$/);
+                    setMentionQuery(match ? match[1] : null);
+                  }
+                }}
+                onSelect={e => {
+                  if (isVideo) return;
+                  const ta     = e.currentTarget;
+                  const cursor = ta.selectionStart ?? ta.value.length;
+                  const match  = ta.value.slice(0, cursor).match(/@(\w*)$/);
+                  setMentionQuery(match ? match[1] : null);
+                }}
+                onScroll={e => {
+                  if (overlayInnerRef.current)
+                    overlayInnerRef.current.style.transform = `translateY(-${e.currentTarget.scrollTop}px)`;
+                }}
+                onKeyDown={e => {
+                  if (atMenuOpen) {
+                    if (e.key === "ArrowDown") { e.preventDefault(); setMentionSelIdx(i => (i + 1) % filteredMentions.length); return; }
+                    if (e.key === "ArrowUp")   { e.preventDefault(); setMentionSelIdx(i => (i - 1 + filteredMentions.length) % filteredMentions.length); return; }
+                    if (e.key === "Enter")     { e.preventDefault(); insertMention(filteredMentions[mentionSelIdx]); return; }
+                    if (e.key === "Escape")    { setMentionQuery(null); return; }
+                  }
+                  if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !submitting) { e.preventDefault(); generate(); }
+                }}
+                disabled={submitting}
+                style={{
+                  position:      "relative",
+                  display:       "block",
+                  width:         "100%",
+                  background:    "transparent",
+                  border:        "none",
+                  outline:       "none",
+                  color:         "transparent",
+                  caretColor:    "#77E544",
+                  fontSize:      "14.5px",
+                  fontFamily:    "inherit",
+                  lineHeight:    "22px",
+                  letterSpacing: "-0.01em",
+                  padding:       0,
+                  resize:        "none",
+                  maxHeight:     promptExpanded ? "none" : "66px",
+                  overflowY:     "auto",
+                  scrollbarWidth: "none",
+                } as React.CSSProperties}
+              />
+              {/* Chip overlay — visually replaces the transparent text */}
+              <div
+                aria-hidden
+                style={{
+                  position:      "absolute",
+                  inset:         0,
+                  overflow:      "hidden",
+                  pointerEvents: "none",
+                }}
+              >
+                <div
+                  ref={overlayInnerRef}
+                  style={{
+                    display:       "block",
+                    fontSize:      "14.5px",
+                    fontFamily:    "inherit",
+                    lineHeight:    "22px",
+                    letterSpacing: "-0.01em",
+                    whiteSpace:    "pre-wrap",
+                    wordBreak:     "break-word",
+                    willChange:    "transform",
+                  }}
+                >
+                  {renderGalleryMentions(
+                    prompt, taggedImages,
+                    (tag, rect) => setChipPreview({ tag, rect }),
+                    () => setChipPreview(null),
+                    tag => {
+                      const idx = prompt.indexOf(`@${tag.label}`);
+                      const pos = idx >= 0 ? idx + tag.label.length + 1 : prompt.length;
+                      inputRef.current?.focus();
+                      inputRef.current?.setSelectionRange(pos, pos);
+                    },
+                  )}
+                </div>
+              </div>
+              {/* Placeholder */}
+              {!prompt && (
+                <div
+                  aria-hidden
+                  style={{
+                    position:      "absolute",
+                    inset:         0,
+                    display:       "block",
+                    lineHeight:    "22px",
+                    fontSize:      "14.5px",
+                    fontFamily:    "inherit",
+                    letterSpacing: "-0.01em",
+                    color:         "rgba(255,255,255,0.3)",
+                    pointerEvents: "none",
+                  }}
+                >
+                  {isVideo ? "Describe the video you imagine…" : "Describe the scene you imagine…"}
+                </div>
+              )}
+              {/* Expand / collapse button */}
+              <button
+                type="button"
+                onClick={() => {
+                  const next = !promptExpanded;
+                  setPromptExpanded(next);
+                  requestAnimationFrame(() => {
+                    const el = inputRef.current;
+                    if (!el) return;
+                    if (next) {
+                      el.style.height = Math.min(Math.round(window.innerHeight * 0.45), 380) + "px";
+                    } else {
+                      resizeTextarea(el);
+                      el.scrollTop = 0;
+                      if (overlayInnerRef.current) overlayInnerRef.current.style.transform = "";
+                    }
+                  });
+                }}
+                title={promptExpanded ? "Collapse" : "Expand prompt"}
+                style={{
+                  position:   "absolute",
+                  top:        4,
+                  right:      0,
+                  width:      18,
+                  height:     18,
+                  padding:    0,
+                  border:     "none",
+                  background: "transparent",
+                  color:      "rgba(255,255,255,0.3)",
+                  cursor:     "pointer",
+                  display:    "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  transition: "color 140ms",
+                  lineHeight: 1,
+                  pointerEvents: "auto",
+                }}
+                onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = "rgba(255,255,255,0.7)"; }}
+                onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = "rgba(255,255,255,0.3)"; }}
+              >
+                {promptExpanded ? (
+                  /* Collapse: arrows pointing inward */
+                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M4 1V4H1" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
+                    <path d="M8 11V8H11" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
+                ) : (
+                  /* Expand: arrows pointing outward */
+                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M1 4V1H4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
+                    <path d="M11 8V11H8" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
+                )}
+              </button>
+            </div>
             {/* Controls group */}
             <div style={{ display: "flex", alignItems: "center", gap: "7px", flexWrap: "wrap" }}>
             {/* Count stepper (image only) — leftmost */}
@@ -833,7 +1368,7 @@ function GalleryInner() {
             </div>{/* end controls group */}
             </div>{/* end left column */}
 
-            {/* Generate button — stretches full height of the box */}
+            {/* Generate button */}
             <button
               onClick={generate}
               disabled={!canGenerate}
@@ -844,6 +1379,7 @@ function GalleryInner() {
                 justifyContent: "center",
                 gap:            "7px",
                 padding:        "0 26px",
+                height:         "40px",
                 borderRadius:   "14px",
                 border:         "none",
                 background:     "#77E544",
@@ -857,7 +1393,7 @@ function GalleryInner() {
                 flexShrink:     0,
                 letterSpacing:  "-0.02em",
                 whiteSpace:     "nowrap",
-                alignSelf:      "stretch",
+                alignSelf:      "flex-start",
               }}
               onMouseEnter={e => { if (canGenerate) e.currentTarget.style.background = "#8FEE60"; }}
               onMouseLeave={e => { e.currentTarget.style.background = "#77E544"; }}
@@ -881,8 +1417,140 @@ function GalleryInner() {
 
       <style>{GALLERY_CSS}</style>
 
+      {/* ── @ image picker menu ── */}
+      {atMenuOpen && promptBarRef.current && createPortal(
+        <div
+          data-at-menu=""
+          style={{
+            position:    "fixed",
+            left:        promptBarRef.current.getBoundingClientRect().left,
+            bottom:      window.innerHeight - promptBarRef.current.getBoundingClientRect().top + 6,
+            width:       promptBarRef.current.getBoundingClientRect().width,
+            background:  "#0E1012",
+            border:      "1px solid rgba(255,255,255,0.1)",
+            borderRadius: "14px",
+            boxShadow:   "0 8px 48px rgba(0,0,0,0.75), 0 2px 12px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.04)",
+            overflow:    "hidden",
+            zIndex:      9999,
+            animation:   "dropIn 130ms cubic-bezier(0.16,1,0.3,1)",
+          }}
+          onMouseDown={e => e.preventDefault()}
+        >
+          <div style={{ padding: "6px 12px 4px", borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
+            <span style={{ fontSize: "10px", color: "rgba(255,255,255,0.28)", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 500 }}>
+              Gallery images
+            </span>
+          </div>
+          <div style={{ maxHeight: "280px", overflowY: "auto", padding: "4px" }}>
+            {filteredMentions.map((ref, idx) => (
+              <button
+                key={ref.id}
+                onClick={() => insertMention(ref)}
+                onMouseEnter={() => setMentionSelIdx(idx)}
+                style={{
+                  display:    "flex",
+                  alignItems: "center",
+                  gap:        "10px",
+                  width:      "100%",
+                  padding:    "7px 10px",
+                  borderRadius: "9px",
+                  border:     "none",
+                  background: idx === mentionSelIdx ? "rgba(119,229,68,0.07)" : "transparent",
+                  color:      idx === mentionSelIdx ? "#77E544" : "rgba(255,255,255,0.65)",
+                  fontSize:   "13px",
+                  fontFamily: "inherit",
+                  cursor:     "pointer",
+                  textAlign:  "left",
+                  transition: "background 80ms",
+                  letterSpacing: "-0.01em",
+                }}
+              >
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={ref.objectUrl}
+                  alt=""
+                  style={{ width: "30px", height: "30px", borderRadius: "6px", objectFit: "cover", flexShrink: 0, background: "#1a1c1f" }}
+                />
+                <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  Image {idx + 1}
+                </span>
+                {idx === mentionSelIdx && (
+                  <span style={{ marginLeft: "auto", fontSize: "10px", color: "rgba(255,255,255,0.2)", flexShrink: 0 }}>↵</span>
+                )}
+              </button>
+            ))}
+          </div>
+        </div>,
+        document.body,
+      )}
+
+      {/* ── Chip hover preview ── */}
+      {chipPreview && createPortal(
+        /* Outer: positioning only — no animation so transform stays stable */
+        <div
+          style={{
+            position:      "fixed",
+            left:          chipPreview.rect.left + chipPreview.rect.width / 2,
+            bottom:        window.innerHeight - chipPreview.rect.top + 8,
+            transform:     "translateX(-50%)",
+            zIndex:        99999,
+            pointerEvents: "none",
+          }}
+        >
+          {/* Inner: animation only — no positioning transform */}
+          <div
+            style={{
+              borderRadius: "10px",
+              overflow:     "hidden",
+              boxShadow:    "0 8px 32px rgba(0,0,0,0.65), 0 2px 8px rgba(0,0,0,0.4)",
+              border:       "1px solid rgba(255,255,255,0.08)",
+              animation:    "dropIn 140ms cubic-bezier(0.16,1,0.3,1)",
+            }}
+          >
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={chipPreview.tag.url}
+              alt=""
+              style={{ display: "block", maxWidth: "200px", maxHeight: "160px", width: "auto", height: "auto", objectFit: "contain" }}
+            />
+          </div>
+        </div>,
+        document.body,
+      )}
+
       {lightboxItem && (
         <Lightbox item={lightboxItem} onClose={() => setLightboxItem(null)} />
+      )}
+
+      <DownloadToast downloads={downloads} onClear={() => setDownloads([])} />
+
+      {refError && (
+        <div style={{
+          position:             "fixed",
+          top:                  "64px",
+          right:                "16px",
+          zIndex:               9600,
+          display:              "flex",
+          alignItems:           "center",
+          gap:                  "8px",
+          padding:              "10px 14px",
+          borderRadius:         "12px",
+          background:           "rgba(16,18,20,0.97)",
+          backdropFilter:       "blur(20px)",
+          WebkitBackdropFilter: "blur(20px)",
+          border:               "1px solid rgba(248,113,113,0.25)",
+          boxShadow:            "0 8px 32px rgba(0,0,0,0.55)",
+          fontSize:             "13px",
+          color:                "#f87171",
+          fontFamily:           "inherit",
+          letterSpacing:        "-0.01em",
+          animation:            "dropIn 160ms cubic-bezier(0.16,1,0.3,1)",
+        }}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+            <circle cx="12" cy="12" r="10" /><path d="M12 8v4M12 16h.01" />
+          </svg>
+          {refError}
+        </div>
       )}
     </div>
   );
@@ -1154,7 +1822,21 @@ function AspectIcon() {
 
 // ── Gallery card ──────────────────────────────────────────────────────────────
 
-function GalleryCard({ item, onOpen }: { item: GalleryItem; onOpen?: () => void }) {
+function GalleryCard({
+  item,
+  onOpen,
+  onAddReference,
+  onCopyPrompt,
+  onDownload,
+  onDelete,
+}: {
+  item: GalleryItem;
+  onOpen?: () => void;
+  onAddReference?: (url: string) => void;
+  onCopyPrompt?: (prompt: string) => void;
+  onDownload?: (url: string, isVideo: boolean) => Promise<void>;
+  onDelete?: (id: string, source: "generation" | "upload") => Promise<void>;
+}) {
   const videoRef                        = useRef<HTMLVideoElement>(null);
   const cardRef                         = useRef<HTMLDivElement>(null);
   const preloaded                       = loadedImageUrls.has(item.url);
@@ -1162,6 +1844,9 @@ function GalleryCard({ item, onOpen }: { item: GalleryItem; onOpen?: () => void 
   const [failed, setFailed]             = useState(false);
   const [imgLoaded, setImgLoaded]       = useState(preloaded);
   const [shouldLoad, setShouldLoad]     = useState(preloaded);
+  const [copied, setCopied]             = useState(false);
+  const [downloading, setDownloading]   = useState(false);
+  const [deleting, setDeleting]         = useState(false);
   const isVideo                         = item.mediaType === "video";
 
   useEffect(() => {
@@ -1183,6 +1868,36 @@ function GalleryCard({ item, onOpen }: { item: GalleryItem; onOpen?: () => void 
     const [w, h] = ar.split(":");
     return w && h ? `${w} / ${h}` : null;
   })();
+
+  const handleDownload = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (downloading) return;
+    setDownloading(true);
+    try { await onDownload?.(item.url, isVideo); } finally { setDownloading(false); }
+  };
+
+  const handleCopy = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!item.prompt) return;
+    onCopyPrompt?.(item.prompt);
+    if (onAddReference && item.referenceImageUrls?.length) {
+      item.referenceImageUrls.forEach(url => onAddReference(url));
+    }
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
+
+  const handleAddRef = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    onAddReference?.(item.url);
+  };
+
+  const handleDelete = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (deleting) return;
+    setDeleting(true);
+    try { await onDelete?.(item.id, item.source); } finally { setDeleting(false); }
+  };
 
   if (failed) {
     return (
@@ -1224,6 +1939,8 @@ function GalleryCard({ item, onOpen }: { item: GalleryItem; onOpen?: () => void 
           />
         </>
       )}
+
+      {/* ── Gradient overlay + prompt ── */}
       <div className="gallery-overlay">
         {item.prompt && (
           <p style={{ fontSize: "11px", color: "rgba(255,255,255,0.85)", lineHeight: 1.45, overflow: "hidden", display: "-webkit-box", WebkitLineClamp: 3, WebkitBoxOrient: "vertical", marginBottom: "4px" }}>
@@ -1234,6 +1951,171 @@ function GalleryCard({ item, onOpen }: { item: GalleryItem; onOpen?: () => void 
           {[item.model, item.aspect_ratio].filter(Boolean).join(" · ") || (item.source === "upload" ? "Uploaded" : "")}
         </p>
       </div>
+
+      {/* ── Top-right icon buttons ── */}
+      <div className="gallery-actions-top">
+        {item.prompt && onCopyPrompt && (
+          <button className="gallery-action-btn" title={copied ? "Copied!" : "Copy prompt"} onClick={handleCopy}>
+            {copied ? (
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#77E544" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M20 6 9 17l-5-5" />
+              </svg>
+            ) : (
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="9" y="9" width="13" height="13" rx="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+              </svg>
+            )}
+          </button>
+        )}
+        <button
+          className="gallery-action-btn"
+          title={downloading ? "Downloading…" : "Download"}
+          onClick={handleDownload}
+          disabled={downloading}
+          style={{ opacity: downloading ? 0.65 : undefined }}
+        >
+          {downloading ? (
+            <div style={{ width: "11px", height: "11px", borderRadius: "50%", border: "2px solid rgba(255,255,255,0.2)", borderTopColor: "#fff", animation: "spin 0.75s linear infinite", flexShrink: 0 }} />
+          ) : (
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" />
+            </svg>
+          )}
+        </button>
+        {onDelete && (
+          <button
+            className="gallery-action-btn gallery-delete-btn"
+            title="Delete"
+            onClick={handleDelete}
+            disabled={deleting}
+            style={{ opacity: deleting ? 0.65 : undefined }}
+          >
+            {deleting ? (
+              <div style={{ width: "11px", height: "11px", borderRadius: "50%", border: "2px solid rgba(255,255,255,0.2)", borderTopColor: "#fff", animation: "spin 0.75s linear infinite", flexShrink: 0 }} />
+            ) : (
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="3 6 5 6 21 6" /><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" /><path d="M10 11v6M14 11v6" /><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+              </svg>
+            )}
+          </button>
+        )}
+      </div>
+
+      {/* ── Bottom-left Reference button (images only) ── */}
+      {!isVideo && onAddReference && (
+        <div className="gallery-actions-bottom">
+          <button className="gallery-ref-btn" onClick={handleAddRef}>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="3" y="3" width="18" height="18" rx="2" /><circle cx="8.5" cy="8.5" r="1.5" /><path d="m21 15-5-5L5 21" />
+            </svg>
+            Reference
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── DownloadToast ─────────────────────────────────────────────────────────────
+
+function DownloadToast({ downloads, onClear }: { downloads: DownloadTask[]; onClear: () => void }) {
+  const [collapsed, setCollapsed] = useState(false);
+
+  if (downloads.length === 0) return null;
+
+  const allDone     = downloads.every(d => d.status !== "preparing");
+  const title       = allDone ? "Download complete" : "Preparing download";
+
+  return (
+    <div style={{
+      position:             "fixed",
+      top:                  "64px",
+      right:                "16px",
+      width:                "300px",
+      background:           "rgba(16,18,20,0.97)",
+      backdropFilter:       "blur(24px)",
+      WebkitBackdropFilter: "blur(24px)",
+      borderRadius:         "18px",
+      border:               "1px solid rgba(255,255,255,0.07)",
+      boxShadow:            "0 12px 48px rgba(0,0,0,0.7), 0 2px 12px rgba(0,0,0,0.4)",
+      zIndex:               9500,
+      overflow:             "hidden",
+      fontFamily:           "inherit",
+    }}>
+      {/* Header */}
+      <div
+        onClick={() => setCollapsed(c => !c)}
+        style={{ display: "flex", alignItems: "center", gap: "10px", padding: "14px 14px 14px 14px", cursor: "pointer", userSelect: "none" }}
+      >
+        {/* Animated icon */}
+        <div style={{ position: "relative", width: "28px", height: "28px", flexShrink: 0 }}>
+          <svg width="28" height="28" viewBox="0 0 28 28" fill="none" style={{ position: "absolute", inset: 0 }}>
+            <circle cx="14" cy="14" r="12" stroke="rgba(119,229,68,0.2)" strokeWidth="2" />
+            <circle
+              cx="14" cy="14" r="12"
+              stroke="#77E544" strokeWidth="2"
+              strokeLinecap="round"
+              strokeDasharray={`${2 * Math.PI * 12}`}
+              strokeDashoffset={allDone ? 0 : `${2 * Math.PI * 12 * 0.25}`}
+              style={{ transformOrigin: "center", transform: "rotate(-90deg)", transition: "stroke-dashoffset 0.4s ease" }}
+              className={allDone ? undefined : "dl-ring-spin"}
+            />
+          </svg>
+          <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#77E544" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" />
+            </svg>
+          </div>
+        </div>
+        <span style={{ flex: 1, fontSize: "14px", fontWeight: 600, color: "#ffffff", letterSpacing: "-0.01em" }}>{title}</span>
+        <svg
+          width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.35)" strokeWidth="2.5" strokeLinecap="round"
+          style={{ flexShrink: 0, transition: "transform 200ms", transform: collapsed ? "rotate(180deg)" : "none" }}
+        >
+          <path d="M6 9l6 6 6-6" />
+        </svg>
+      </div>
+
+      {/* Items */}
+      {!collapsed && (
+        <div style={{ padding: "0 8px 8px" }}>
+          {downloads.map(task => (
+            <div key={task.id} style={{
+              display:       "flex",
+              alignItems:    "center",
+              gap:           "10px",
+              padding:       "9px 10px",
+              background:    "rgba(255,255,255,0.035)",
+              borderRadius:  "10px",
+              marginBottom:  "4px",
+            }}>
+              {/* File icon */}
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={task.status === "preparing" ? "rgba(255,255,255,0.25)" : "rgba(255,255,255,0.45)"} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                <path d="M3 6h18M3 12h18M3 18h18" />
+                <rect x="2" y="4" width="20" height="16" rx="2" />
+              </svg>
+              {/* Label */}
+              <span style={{ flex: 1, fontSize: "13px", color: task.status === "preparing" ? "rgba(255,255,255,0.35)" : "#ffffff", letterSpacing: "-0.01em" }}>
+                {task.status === "preparing" ? "Preparing…" : task.status === "error" ? "Failed" : "Ready"}
+              </span>
+              {/* Status indicator */}
+              {task.status === "preparing" ? (
+                <div style={{ width: "16px", height: "16px", borderRadius: "50%", border: "2px solid rgba(255,255,255,0.12)", borderTopColor: "rgba(255,255,255,0.45)", animation: "spin 0.9s linear infinite", flexShrink: 0 }} />
+              ) : task.status === "error" ? (
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#f87171" strokeWidth="2" strokeLinecap="round" style={{ flexShrink: 0 }}>
+                  <circle cx="12" cy="12" r="10" /><path d="M12 8v4M12 16h.01" />
+                </svg>
+              ) : (
+                <div style={{ width: "20px", height: "20px", borderRadius: "50%", background: "#77E544", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#060A06" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M20 6 9 17l-5-5" />
+                  </svg>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -1331,6 +2213,11 @@ function EmptyState({ tab }: { tab: Tab }) {
 
 const GALLERY_CSS = `
   @keyframes spin { to { transform: rotate(360deg); } }
+  @keyframes dlRingSpin {
+    from { stroke-dashoffset: 75.4; transform: rotate(-90deg); }
+    to   { stroke-dashoffset: 0;    transform: rotate(270deg); }
+  }
+  .dl-ring-spin { animation: dlRingSpin 1.4s linear infinite; transform-origin: center; }
   @keyframes dropIn {
     from { opacity: 0; transform: translateY(6px) scale(0.97); }
     to   { opacity: 1; transform: translateY(0)   scale(1);    }
@@ -1339,12 +2226,122 @@ const GALLERY_CSS = `
     0%   { background-position: -400px 0; }
     100% { background-position:  400px 0; }
   }
+  @keyframes refImgIn {
+    from { opacity: 0; transform: translateY(14px) scale(0.91); }
+    to   { opacity: 1; transform: translateY(0)    scale(1);    }
+  }
+  .gallery-zoom-slider {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 90px;
+    height: 3px;
+    border-radius: 2px;
+    background: rgba(255,255,255,0.14);
+    outline: none;
+    cursor: pointer;
+  }
+  .gallery-zoom-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 13px;
+    height: 13px;
+    border-radius: 50%;
+    background: #ffffff;
+    cursor: pointer;
+    transition: transform 120ms;
+  }
+  .gallery-zoom-slider::-webkit-slider-thumb:hover { transform: scale(1.2); }
+  .gallery-zoom-slider::-moz-range-thumb {
+    width: 13px;
+    height: 13px;
+    border-radius: 50%;
+    background: #ffffff;
+    cursor: pointer;
+    border: none;
+  }
   .gallery-item {
     position: relative;
     overflow: hidden;
     cursor: pointer;
     background: #111416;
     width: 100%;
+  }
+  .gallery-actions-top {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    opacity: 0;
+    transition: opacity 180ms ease;
+    z-index: 5;
+    pointer-events: none;
+  }
+  .gallery-item:hover .gallery-actions-top {
+    opacity: 1;
+    pointer-events: auto;
+  }
+  .gallery-action-btn {
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    border: 1px solid rgba(255,255,255,0.1);
+    background: rgba(0,0,0,0.62);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    color: rgba(255,255,255,0.8);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 120ms, color 120ms;
+    flex-shrink: 0;
+    padding: 0;
+  }
+  .gallery-action-btn:hover {
+    background: rgba(255,255,255,0.16);
+    color: #ffffff;
+  }
+  .gallery-delete-btn:hover {
+    background: rgba(255,255,255,0.16);
+    color: #ef4444 !important;
+  }
+  .gallery-actions-bottom {
+    position: absolute;
+    bottom: 10px;
+    left: 10px;
+    opacity: 0;
+    transition: opacity 180ms ease;
+    z-index: 5;
+    pointer-events: none;
+  }
+  .gallery-item:hover .gallery-actions-bottom {
+    opacity: 1;
+    pointer-events: auto;
+  }
+  .gallery-ref-btn {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 5px 11px 5px 9px;
+    border-radius: 20px;
+    border: 1px solid rgba(255,255,255,0.1);
+    background: rgba(0,0,0,0.62);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    color: #ffffff;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 120ms;
+    font-family: inherit;
+    letter-spacing: -0.01em;
+    white-space: nowrap;
+    padding: 5px 11px 5px 9px;
+  }
+  .gallery-ref-btn:hover {
+    background: rgba(255,255,255,0.16);
   }
   .gallery-shimmer {
     position: absolute; inset: 0;
@@ -1353,6 +2350,7 @@ const GALLERY_CSS = `
     animation: shimmer 1.6s infinite linear;
   }
   .gallery-item img, .gallery-item video { display: block; width: 100%; height: auto; }
+  [data-at-menu] { font-family: inherit; }
   .gallery-overlay {
     position: absolute; inset: 0;
     background: linear-gradient(to top, rgba(0,0,0,0.75) 0%, rgba(0,0,0,0) 55%);
