@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useRef, useState, Suspense } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { createPortal } from "react-dom";
 import { createClient } from "@/lib/supabase/client";
@@ -34,6 +34,8 @@ interface PendingGen {
   aspectRatio: string;
   prompt: string;
 }
+
+type MasonryItem = { kind: "pending"; pg: PendingGen } | { kind: "gallery"; item: GalleryItem };
 
 type Tab = "images" | "videos";
 
@@ -112,6 +114,7 @@ function GalleryInner() {
   const pageRef     = useRef(0);
   const tabRef      = useRef<Tab>(tab);
   const sentinelRef = useRef<HTMLDivElement>(null);
+  const [windowWidth, setWindowWidth] = useState(0);
 
   // Cleanup object URLs on unmount
   useEffect(() => {
@@ -229,6 +232,14 @@ function GalleryInner() {
   useEffect(() => {
     saveSettings(tab, { prompt, modelId, aspectRatio, quality, count, duration, mode });
   }, [tab, prompt, modelId, aspectRatio, quality, count, duration, mode]);
+
+  // Track window width for masonry column count
+  useEffect(() => {
+    setWindowWidth(window.innerWidth);
+    const handler = () => setWindowWidth(window.innerWidth);
+    window.addEventListener("resize", handler);
+    return () => window.removeEventListener("resize", handler);
+  }, []);
 
   // ── Image upload ──────────────────────────────────────────────────────────
 
@@ -402,6 +413,36 @@ function GalleryInner() {
 
   const canGenerate = submitting ? false : isVideo ? true : prompt.trim().length > 0;
 
+  const colCount = windowWidth >= 1400 ? 5 : windowWidth >= 900 ? 4 : windowWidth >= 640 ? 3 : 2;
+
+  const masonryColumns = useMemo<MasonryItem[][]>(() => {
+    const all: MasonryItem[] = [
+      ...pendingGens.map(pg   => ({ kind: "pending" as const, pg })),
+      ...items.map(item        => ({ kind: "gallery" as const, item })),
+    ];
+    const cols: MasonryItem[][] = Array.from({ length: colCount }, () => []);
+    const heights               = new Array<number>(colCount).fill(0);
+    for (const mi of all) {
+      const col = heights.indexOf(Math.min(...heights));
+      cols[col].push(mi);
+      let ar = 1;
+      if (mi.kind === "pending") {
+        const [ws, hs] = mi.pg.aspectRatio.split(":");
+        const w = parseFloat(ws), h = parseFloat(hs);
+        if (w && h) ar = h / w;
+      } else {
+        const arStr = mi.item.aspect_ratio;
+        if (arStr && arStr !== "auto") {
+          const [ws, hs] = arStr.split(":");
+          const w = parseFloat(ws), h = parseFloat(hs);
+          if (w && h) ar = h / w;
+        }
+      }
+      heights[col] += ar;
+    }
+    return cols;
+  }, [pendingGens, items, colCount]);
+
   // ── Render ────────────────────────────────────────────────────────────────
 
   if (!authLoaded) return <div style={{ flex: 1, background: "#080A0C" }} />;
@@ -419,44 +460,55 @@ function GalleryInner() {
 
       {/* ── Grid ── */}
       <div style={{ flex: 1, overflowY: "auto", paddingBottom: "160px" }}>
+        {/* ── Gallery grid ── */}
         {!loading && items.length === 0 && pendingGens.length === 0 ? (
           <EmptyState tab={tab} />
         ) : (
-          <div className="gallery-masonry">
-            {pendingGens.map(pg => {
-              const [w, h] = pg.aspectRatio.split(":").map(Number);
-              const cssRatio = (w && h) ? `${w} / ${h}` : "1 / 1";
-              return (
-                <div key={pg.id} className="gallery-item" style={{ aspectRatio: cssRatio, background: "#0D1012" }}>
-                  <div style={{
-                    position: "absolute", inset: 0,
-                    display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: "10px",
-                  }}>
-                    <div style={{
-                      width: "20px", height: "20px", borderRadius: "50%",
-                      border: "2px solid rgba(119,229,68,0.15)", borderTopColor: "#77E544",
-                      animation: "spin 0.9s linear infinite",
-                    }} />
-                    <span style={{ fontSize: "10px", color: "rgba(255,255,255,0.22)", letterSpacing: "0.08em", textTransform: "uppercase" }}>
-                      Generating
-                    </span>
-                  </div>
-                  {pg.prompt && (
-                    <div style={{
-                      position: "absolute", bottom: 0, left: 0, right: 0,
-                      padding: "24px 10px 10px",
-                      background: "linear-gradient(to top, rgba(0,0,0,0.6) 0%, transparent 100%)",
-                    }}>
-                      <p style={{ fontSize: "11px", color: "rgba(255,255,255,0.35)", overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis" }}>
-                        {pg.prompt}
-                      </p>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-            {items.map(item => (
-              <GalleryCard key={item.id} item={item} onOpen={item.mediaType === "image" ? () => setLightboxItem(item) : undefined} />
+          <div style={{ display: "flex", gap: "3px", padding: "3px" }}>
+            {masonryColumns.map((col, ci) => (
+              <div key={ci} style={{ flex: 1, display: "flex", flexDirection: "column", gap: "3px", minWidth: 0 }}>
+                {col.map(mi => {
+                  if (mi.kind === "pending") {
+                    const pg = mi.pg;
+                    const [ws, hs] = pg.aspectRatio.split(":");
+                    const w = parseFloat(ws), h = parseFloat(hs);
+                    return (
+                      <div key={pg.id} className="gallery-item" style={{
+                        aspectRatio: (w && h) ? `${w} / ${h}` : "1 / 1",
+                        background: "#0D1012",
+                      }}>
+                        <div style={{
+                          position: "absolute", inset: 0,
+                          display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: "10px",
+                        }}>
+                          <div style={{
+                            width: "20px", height: "20px", borderRadius: "50%",
+                            border: "2px solid rgba(119,229,68,0.15)", borderTopColor: "#77E544",
+                            animation: "spin 0.9s linear infinite",
+                          }} />
+                          <span style={{ fontSize: "10px", color: "rgba(255,255,255,0.22)", letterSpacing: "0.08em", textTransform: "uppercase" }}>
+                            Generating
+                          </span>
+                        </div>
+                        {pg.prompt && (
+                          <div style={{
+                            position: "absolute", bottom: 0, left: 0, right: 0,
+                            padding: "24px 10px 10px",
+                            background: "linear-gradient(to top, rgba(0,0,0,0.6) 0%, transparent 100%)",
+                          }}>
+                            <p style={{ fontSize: "11px", color: "rgba(255,255,255,0.35)", overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis" }}>
+                              {pg.prompt}
+                            </p>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  }
+                  return (
+                    <GalleryCard key={mi.item.id} item={mi.item} onOpen={mi.item.mediaType === "image" ? () => setLightboxItem(mi.item) : undefined} />
+                  );
+                })}
+              </div>
             ))}
           </div>
         )}
@@ -1287,24 +1339,13 @@ const GALLERY_CSS = `
     0%   { background-position: -400px 0; }
     100% { background-position:  400px 0; }
   }
-  .gallery-masonry {
-    columns: 2;
-    column-gap: 3px;
-    padding: 3px;
-  }
-  @media (min-width: 640px)  { .gallery-masonry { columns: 3; } }
-  @media (min-width: 900px)  { .gallery-masonry { columns: 4; } }
-  @media (min-width: 1400px) { .gallery-masonry { columns: 5; } }
   .gallery-item {
-    break-inside: avoid;
-    margin-bottom: 3px;
     position: relative;
     overflow: hidden;
     cursor: pointer;
     background: #111416;
-    display: block;
+    width: 100%;
   }
-  .gallery-item-pending { aspect-ratio: 16 / 9; }
   .gallery-shimmer {
     position: absolute; inset: 0;
     background: linear-gradient(90deg, #111416 25%, #1a1d20 50%, #111416 75%);
