@@ -154,9 +154,11 @@ interface WorkflowStore {
   /** The type being dragged during an active connection ("prompt" | "image" | "video" | null) */
   connectingHandleType: string | null;
   setConnectingHandleType: (type: string | null) => void;
-  authModalOpen:           boolean;
-  setAuthModalOpen:        (v: boolean) => void;
-  resetPasswordModalOpen:  boolean;
+  settingsOpen:              boolean;
+  setSettingsOpen:           (v: boolean) => void;
+  authModalOpen:             boolean;
+  setAuthModalOpen:          (v: boolean) => void;
+  resetPasswordModalOpen:    boolean;
   setResetPasswordModalOpen: (v: boolean) => void;
   saveViewport: (viewport: { x: number; y: number; zoom: number }) => void;
   loadSpacesFromDB: (spaces: Space[]) => void;
@@ -518,6 +520,8 @@ export const useWorkflowStore = create<WorkflowStore>()(
             };
           }),
 
+        settingsOpen:              false,
+        setSettingsOpen:           (v) => set({ settingsOpen: v }),
         authModalOpen:             false,
         setAuthModalOpen:          (v) => set({ authModalOpen: v }),
         resetPasswordModalOpen:    false,

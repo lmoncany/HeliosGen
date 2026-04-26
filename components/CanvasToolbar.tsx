@@ -309,16 +309,6 @@ export default function CanvasToolbar({
         <IconRedo />
       </Btn>
 
-      <Divider />
-
-      {/* Settings */}
-      <Btn
-        id="toolbar-settings"
-        title="Settings"
-        onClick={() => onOpenSettings?.()}
-      >
-        <IconSettings />
-      </Btn>
     </div>
   );
 }

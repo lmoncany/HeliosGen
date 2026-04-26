@@ -4,6 +4,7 @@ import { useSearchParams } from "next/navigation";
 import { createPortal } from "react-dom";
 import { createClient } from "@/lib/supabase/client";
 import { IMAGE_MODELS, VIDEO_MODELS } from "@/lib/modelConfig";
+import { useWorkflowStore } from "@/lib/store";
 import type { User } from "@supabase/supabase-js";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -26,6 +27,12 @@ interface RefImage {
   cdnUrl: string | null;
   uploading: boolean;
   error: boolean;
+}
+
+interface PendingGen {
+  id: string;
+  aspectRatio: string;
+  prompt: string;
 }
 
 type Tab = "images" | "videos";
@@ -93,9 +100,10 @@ function GalleryInner() {
   const [count, setCount]             = useState<number>(() => loadSettings(tab)?.count ?? 1);
   const [duration, setDuration]       = useState<number>(() => loadSettings(tab)?.duration ?? 5);
   const [mode, setMode]               = useState<string>(() => loadSettings(tab)?.mode ?? "");
-  const [generating, setGenerating]   = useState(false);
-  const [genMsg, setGenMsg]           = useState<string>("");
+  const [pendingGens, setPendingGens] = useState<PendingGen[]>([]);
+  const [submitting, setSubmitting]   = useState(false);
   const [genError, setGenError]       = useState<string>("");
+  const debugMode = useWorkflowStore((s) => s.debugMode);
 
   // Reference images
   const [refImages, setRefImages]     = useState<RefImage[]>([]);
@@ -319,24 +327,65 @@ function GalleryInner() {
   const generate = async () => {
     if (!prompt.trim() && !isVideo) return;
     if (refImages.some(r => r.uploading)) { setGenError("Images still uploading…"); setTimeout(() => setGenError(""), 3_000); return; }
-    const token = await getToken();
-    if (!token) { setGenError("Please sign in to generate."); return; }
-    setGenerating(true);
-    setGenMsg("Submitting…");
     setGenError("");
+
+    const n = isVideo ? 1 : count;
+    const newPendings: PendingGen[] = Array.from({ length: n }, () => ({
+      id: crypto.randomUUID(), aspectRatio, prompt,
+    }));
+    setPendingGens(prev => [...prev, ...newPendings]);
+
+    // ── Debug mode: log + simulate, no real API call ────────────────────────
+    if (debugMode) {
+      const imageUrls = refImages.filter(r => r.cdnUrl && !r.error).map(r => r.cdnUrl!);
+      console.log("[Gallery Debug] Generate request:", {
+        type: isVideo ? "video" : "image",
+        prompt, model: modelId, aspectRatio, quality,
+        ...(isVideo
+          ? { duration, mode }
+          : { imageUrls, count: n }),
+      });
+      setTimeout(() => {
+        setPendingGens(prev => prev.filter(p => !newPendings.some(np => np.id === p.id)));
+      }, 3_000);
+      return;
+    }
+
+    // ── Submit ────────────────────────────────────────────────────────────
+    const token = await getToken();
+    if (!token) {
+      setPendingGens(prev => prev.filter(p => !newPendings.some(np => np.id === p.id)));
+      setGenError("Please sign in to generate.");
+      return;
+    }
+
+    setSubmitting(true);
+    let taskIds: string[];
     try {
-      const taskIds = await Promise.all(Array.from({ length: count }, () => generateOne(token)));
-      setGenMsg("Generating…");
-      await Promise.all(taskIds.map(pollTask));
-      setGenMsg("");
-      await loadItems(tabRef.current, 0, true);
+      taskIds = await Promise.all(newPendings.map(() => generateOne(token)));
     } catch (e: unknown) {
+      setSubmitting(false);
+      setPendingGens(prev => prev.filter(p => !newPendings.some(np => np.id === p.id)));
       setGenError(e instanceof Error ? e.message : String(e));
       setTimeout(() => setGenError(""), 6_000);
-    } finally {
-      setGenerating(false);
-      setGenMsg("");
+      return;
     }
+    setSubmitting(false); // re-enable button — polling happens in background
+
+    // ── Poll each task independently ───────────────────────────────────────
+    taskIds.forEach(async (taskId, i) => {
+      const pending = newPendings[i];
+      try {
+        await pollTask(taskId);
+      } catch (e: unknown) {
+        setGenError(e instanceof Error ? e.message : String(e));
+        setTimeout(() => setGenError(""), 6_000);
+      } finally {
+        setPendingGens(prev => prev.filter(p => p.id !== pending.id));
+        await loadItems(tabRef.current, 0, true);
+        window.dispatchEvent(new Event("credits-refresh"));
+      }
+    });
   };
 
   // ── Derived ───────────────────────────────────────────────────────────────
@@ -351,11 +400,7 @@ function GalleryInner() {
   const hasRefImgs  = refImages.length > 0;
   const allUploaded = refImages.every(r => !r.uploading);
 
-  const canGenerate = generating
-    ? false
-    : isVideo
-    ? true
-    : prompt.trim().length > 0;
+  const canGenerate = submitting ? false : isVideo ? true : prompt.trim().length > 0;
 
   // ── Render ────────────────────────────────────────────────────────────────
 
@@ -374,19 +419,42 @@ function GalleryInner() {
 
       {/* ── Grid ── */}
       <div style={{ flex: 1, overflowY: "auto", paddingBottom: "160px" }}>
-        {!loading && items.length === 0 ? (
+        {!loading && items.length === 0 && pendingGens.length === 0 ? (
           <EmptyState tab={tab} />
         ) : (
           <div className="gallery-masonry">
-            {generating && (
-              <div className="gallery-item gallery-item-pending">
-                <div className="gallery-shimmer" />
-                <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", justifyContent: "flex-end", padding: "12px" }}>
-                  <p style={{ fontSize: "11px", color: "rgba(255,255,255,0.4)", marginBottom: "4px" }}>{genMsg || "Generating…"}</p>
-                  {prompt && <p style={{ fontSize: "11px", color: "rgba(255,255,255,0.25)", overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis" }}>{prompt}</p>}
+            {pendingGens.map(pg => {
+              const [w, h] = pg.aspectRatio.split(":").map(Number);
+              const cssRatio = (w && h) ? `${w} / ${h}` : "1 / 1";
+              return (
+                <div key={pg.id} className="gallery-item" style={{ aspectRatio: cssRatio, background: "#0D1012" }}>
+                  <div style={{
+                    position: "absolute", inset: 0,
+                    display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: "10px",
+                  }}>
+                    <div style={{
+                      width: "20px", height: "20px", borderRadius: "50%",
+                      border: "2px solid rgba(119,229,68,0.15)", borderTopColor: "#77E544",
+                      animation: "spin 0.9s linear infinite",
+                    }} />
+                    <span style={{ fontSize: "10px", color: "rgba(255,255,255,0.22)", letterSpacing: "0.08em", textTransform: "uppercase" }}>
+                      Generating
+                    </span>
+                  </div>
+                  {pg.prompt && (
+                    <div style={{
+                      position: "absolute", bottom: 0, left: 0, right: 0,
+                      padding: "24px 10px 10px",
+                      background: "linear-gradient(to top, rgba(0,0,0,0.6) 0%, transparent 100%)",
+                    }}>
+                      <p style={{ fontSize: "11px", color: "rgba(255,255,255,0.35)", overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis" }}>
+                        {pg.prompt}
+                      </p>
+                    </div>
+                  )}
                 </div>
-              </div>
-            )}
+              );
+            })}
             {items.map(item => (
               <GalleryCard key={item.id} item={item} onOpen={item.mediaType === "image" ? () => setLightboxItem(item) : undefined} />
             ))}
@@ -416,17 +484,17 @@ function GalleryInner() {
       }}>
 
         {/* Toast */}
-        {(genError || (genMsg && !generating)) && (
+        {genError && (
           <div style={{
             marginBottom: "8px",
             padding:      "8px 14px",
-            background:   genError ? "rgba(248,113,113,0.1)" : "rgba(119,229,68,0.08)",
-            border:       `1px solid ${genError ? "rgba(248,113,113,0.2)" : "rgba(119,229,68,0.15)"}`,
+            background:   "rgba(248,113,113,0.1)",
+            border:       "1px solid rgba(248,113,113,0.2)",
             borderRadius: "10px",
             fontSize:     "12px",
-            color:        genError ? "#f87171" : "#77E544",
+            color:        "#f87171",
           }}>
-            {genError || genMsg}
+            {genError}
           </div>
         )}
 
@@ -539,14 +607,14 @@ function GalleryInner() {
               {canAddImgs && (
                 <button
                   onClick={() => fileInputRef.current?.click()}
-                  disabled={generating}
+                  disabled={submitting}
                   style={{
                     width:          "88px",
                     height:         "80px",
                     borderRadius:   "10px",
                     border:         "1.5px dashed rgba(255,255,255,0.4)",
                     background:     "rgba(255,255,255,0.025)",
-                    cursor:         generating ? "not-allowed" : "pointer",
+                    cursor:         submitting ? "not-allowed" : "pointer",
                     display:        "flex",
                     flexDirection:  "column",
                     alignItems:     "center",
@@ -557,7 +625,7 @@ function GalleryInner() {
                     transition:     "border-color 140ms, background 140ms, color 140ms",
                   }}
                   onMouseEnter={e => {
-                    if (!generating) {
+                    if (!submitting) {
                       e.currentTarget.style.borderColor = "rgba(255,255,255,0.6)";
                       e.currentTarget.style.background  = "rgba(255,255,255,0.05)";
                       e.currentTarget.style.color       = "#ffffff";
@@ -595,9 +663,9 @@ function GalleryInner() {
             <input
               value={prompt}
               onChange={e => setPrompt(e.target.value)}
-              onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey && !generating) { e.preventDefault(); generate(); } }}
+              onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey && !submitting) { e.preventDefault(); generate(); } }}
               placeholder={isVideo ? "Describe the video you imagine…" : "Describe the scene you imagine…"}
-              disabled={generating}
+              disabled={submitting}
               style={{
                 flex:        "none",
                 background:  "transparent",
@@ -626,11 +694,11 @@ function GalleryInner() {
               }}>
                 <button
                   onClick={() => setCount(c => Math.max(1, c - 1))}
-                  disabled={generating || count <= 1}
+                  disabled={submitting || count <= 1}
                   style={{
                     width: "34px", height: "100%", border: "none", background: "transparent",
                     color: count <= 1 ? "rgba(255,255,255,0.18)" : "rgba(255,255,255,0.55)",
-                    cursor: generating || count <= 1 ? "not-allowed" : "pointer",
+                    cursor: submitting || count <= 1 ? "not-allowed" : "pointer",
                     display: "flex", alignItems: "center", justifyContent: "center",
                     fontSize: "16px", fontFamily: "inherit", transition: "color 140ms",
                   }}
@@ -644,11 +712,11 @@ function GalleryInner() {
                 </span>
                 <button
                   onClick={() => setCount(c => Math.min(4, c + 1))}
-                  disabled={generating || count >= 4}
+                  disabled={submitting || count >= 4}
                   style={{
                     width: "34px", height: "100%", border: "none", background: "transparent",
                     color: count >= 4 ? "rgba(255,255,255,0.18)" : "rgba(255,255,255,0.55)",
-                    cursor: generating || count >= 4 ? "not-allowed" : "pointer",
+                    cursor: submitting || count >= 4 ? "not-allowed" : "pointer",
                     display: "flex", alignItems: "center", justifyContent: "center",
                     fontSize: "16px", fontFamily: "inherit", transition: "color 140ms",
                   }}
@@ -660,7 +728,7 @@ function GalleryInner() {
             <CustomDropdown
               value={modelId}
               onChange={setModelId}
-              disabled={generating}
+              disabled={submitting}
               options={models.map(m => ({
                 value: m.id,
                 label: m.name,
@@ -674,7 +742,7 @@ function GalleryInner() {
               <CustomDropdown
                 value={quality}
                 onChange={setQuality}
-                disabled={generating}
+                disabled={submitting}
                 options={qualityOpts.map(q => ({ value: q, label: q.toUpperCase() }))}
                 icon={<DiamondIcon />}
               />
@@ -685,7 +753,7 @@ function GalleryInner() {
               <CustomDropdown
                 value={aspectRatio}
                 onChange={setAspectRatio}
-                disabled={generating}
+                disabled={submitting}
                 options={ratios.map(r => ({ value: r, label: r, preview: <RatioPreview ratio={r} /> }))}
                 icon={<AspectIcon />}
               />
@@ -696,7 +764,7 @@ function GalleryInner() {
               <CustomDropdown
                 value={String(duration)}
                 onChange={v => setDuration(Number(v))}
-                disabled={generating}
+                disabled={submitting}
                 options={durations.map(d => ({ value: String(d), label: `${d}s` }))}
               />
             )}
@@ -706,7 +774,7 @@ function GalleryInner() {
               <CustomDropdown
                 value={mode}
                 onChange={setMode}
-                disabled={generating}
+                disabled={submitting}
                 options={vidModes.map(m => ({ value: m.value, label: m.label }))}
               />
             )}
@@ -742,14 +810,14 @@ function GalleryInner() {
               onMouseEnter={e => { if (canGenerate) e.currentTarget.style.background = "#8FEE60"; }}
               onMouseLeave={e => { e.currentTarget.style.background = "#77E544"; }}
             >
-              {generating ? (
+              {submitting ? (
                 <>
                   <span style={{
                     width: "12px", height: "12px", borderRadius: "50%",
                     border: "2px solid rgba(6,10,6,0.25)", borderTopColor: "#060A06",
                     display: "inline-block", animation: "spin 0.75s linear infinite",
                   }} />
-                  {genMsg || "Generating"}
+                  Sending…
                 </>
               ) : (
                 <>Generate <svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor" stroke="none" style={{ display: "inline", verticalAlign: "middle" }}><path d="M11.8525 4.21651L11.7221 3.2387C11.6906 3.00226 11.4889 2.82568 11.2504 2.82568C11.0118 2.82568 10.8102 3.00226 10.7786 3.23869L10.6483 4.21651C10.2658 7.0847 8.00939 9.34115 5.14119 9.72358L4.16338 9.85396C3.92694 9.88549 3.75037 10.0872 3.75037 10.3257C3.75037 10.5642 3.92694 10.7659 4.16338 10.7974L5.14119 10.9278C8.00938 11.3102 10.2658 13.5667 10.6483 16.4349L10.7786 17.4127C10.8102 17.6491 11.0118 17.8257 11.2504 17.8257C11.4889 17.8257 11.6906 17.6491 11.7221 17.4127L11.8525 16.4349C12.2349 13.5667 14.4913 11.3102 17.3595 10.9278L18.3374 10.7974C18.5738 10.7659 18.7504 10.5642 18.7504 10.3257C18.7504 10.0872 18.5738 9.88549 18.3374 9.85396L17.3595 9.72358C14.4913 9.34115 12.2349 7.0847 11.8525 4.21651Z"/><path d="M4.6519 14.7568L4.82063 14.2084C4.84491 14.1295 4.91781 14.0757 5.00037 14.0757C5.08292 14.0757 5.15582 14.1295 5.1801 14.2084L5.34883 14.7568C5.56525 15.4602 6.11587 16.0108 6.81925 16.2272L7.36762 16.3959C7.44652 16.4202 7.50037 16.4931 7.50037 16.5757C7.50037 16.6582 7.44652 16.7311 7.36762 16.7554L6.81926 16.9241C6.11587 17.1406 5.56525 17.6912 5.34883 18.3946L5.1801 18.9429C5.15582 19.0218 5.08292 19.0757 5.00037 19.0757C4.91781 19.0757 4.84491 19.0218 4.82063 18.9429L4.65191 18.3946C4.43548 17.6912 3.88486 17.1406 3.18147 16.9241L2.63311 16.7554C2.55421 16.7311 2.50037 16.6582 2.50037 16.5757C2.50037 16.4931 2.55421 16.4202 2.63311 16.3959L3.18148 16.2272C3.88486 16.0108 4.43548 15.4602 4.6519 14.7568Z"/></svg></>

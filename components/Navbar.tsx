@@ -20,6 +20,9 @@ function NavbarInner() {
   const avatarRef = useRef<HTMLButtonElement>(null);
 
   const setAuthModalOpen = useWorkflowStore((s) => s.setAuthModalOpen);
+  const debugMode        = useWorkflowStore((s) => s.debugMode);
+  const toggleDebug      = useWorkflowStore((s) => s.toggleDebug);
+  const setSettingsOpen  = useWorkflowStore((s) => s.setSettingsOpen);
   const supabase         = createClient();
 
   // ── Auth ──────────────────────────────────────────────────────────────────
@@ -133,6 +136,20 @@ function NavbarInner() {
                   </div>
                 )}
                 <div className="tnav-dropdown-body">
+                  <DropdownItem
+                    icon={<DebugIcon active={debugMode} />}
+                    onClick={() => { toggleDebug(); setMenuOpen(false); }}
+                    active={debugMode}
+                  >
+                    Debug
+                  </DropdownItem>
+                  <DropdownItem
+                    icon={<GearIcon />}
+                    onClick={() => { setSettingsOpen(true); setMenuOpen(false); }}
+                  >
+                    Settings
+                  </DropdownItem>
+                  <div className="tnav-dropdown-sep" />
                   {user ? (
                     <DropdownItem icon={<SignOutIcon />} onClick={signOut} danger>
                       Sign out
@@ -191,16 +208,18 @@ function DropdownItem({
   children,
   onClick,
   danger = false,
+  active = false,
 }: {
   icon?: React.ReactNode;
   children: React.ReactNode;
   onClick: () => void;
   danger?: boolean;
+  active?: boolean;
 }) {
   return (
     <button
       onClick={onClick}
-      className={`tnav-dropdown-item${danger ? " tnav-dropdown-item--danger" : ""}`}
+      className={`tnav-dropdown-item${danger ? " tnav-dropdown-item--danger" : ""}${active ? " tnav-dropdown-item--active" : ""}`}
     >
       {icon}
       {children}
@@ -415,10 +434,21 @@ const NAV_CSS = `
     background: #141618;
     color: #d0d0d0;
   }
+  .tnav-dropdown-item--active {
+    color: #77E544;
+  }
+  .tnav-dropdown-item--active:hover {
+    color: #77E544;
+  }
   .tnav-dropdown-item--danger { color: #6B6B68; }
   .tnav-dropdown-item--danger:hover {
     background: #141618;
     color: #f87171;
+  }
+  .tnav-dropdown-sep {
+    height: 1px;
+    background: rgba(255,255,255,0.05);
+    margin: 4px 8px;
   }
 `;
 
@@ -477,6 +507,25 @@ function SignOutIcon() {
       <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
       <polyline points="16 17 21 12 16 7" />
       <line x1="21" y1="12" x2="9" y2="12" />
+    </svg>
+  );
+}
+
+function DebugIcon({ active }: { active: boolean }) {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"
+      style={{ color: active ? "#f59e0b" : undefined }}>
+      <path d="M12 22c4.97 0 9-4.48 9-10S16.97 2 12 2 3 6.48 3 12s4.03 10 9 10z" />
+      <path d="M12 8v4M12 16h.01" />
+    </svg>
+  );
+}
+
+function GearIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="3" />
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
     </svg>
   );
 }

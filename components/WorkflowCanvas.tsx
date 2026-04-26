@@ -36,7 +36,6 @@ import SelectionToolbar    from "./SelectionToolbar";
 import CanvasToolbar       from "./CanvasToolbar";
 import AddNodeMenu         from "./AddNodeMenu";
 import TopBar from "./TopBar";
-import SettingsModal from "./SettingsModal";
 
 async function getAccessToken(): Promise<string | undefined> {
   try {
@@ -770,8 +769,7 @@ export default function WorkflowCanvas() {
   // ── Add-node menu (+ button) ─────────────────────────────────────────
   const [addMenuAnchor, setAddMenuAnchor] = useState<DOMRect | null>(null);
 
-  // ── Settings modal ────────────────────────────────────────────────────
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  const setSettingsOpen = useWorkflowStore((s) => s.setSettingsOpen);
 
   // ── Alignment snap guides ─────────────────────────────────────────────────────
   const [snapGuides, setSnapGuides] = useState<SnapGuide[]>([]);
@@ -1260,9 +1258,6 @@ export default function WorkflowCanvas() {
         onRunAll={runAll}
         hasNodes={nodes.length > 0}
         onClear={clear}
-        debugMode={debugMode}
-        onToggleDebug={toggleDebug}
-        onOpenSettings={() => setSettingsOpen(true)}
       />
       <div
         ref={wrapperRef}
@@ -1384,8 +1379,6 @@ export default function WorkflowCanvas() {
         onOpenSettings={() => setSettingsOpen(true)}
       />
 
-      {/* ── Settings modal ───────────────────────────────────────────────── */}
-      {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
 
       {/* ── Alignment guide lines ────────────────────────────────────────────── */}
       {snapGuides.length > 0 && (
