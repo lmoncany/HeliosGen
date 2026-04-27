@@ -231,7 +231,7 @@ function DropdownItem({
 
 const NAV_CSS = `
   .tnav-skeleton {
-    height: 48px;
+    height: 52px;
     background: #080A0C;
     border-bottom: 1px solid rgba(255,255,255,0.05);
     flex-shrink: 0;
@@ -240,7 +240,7 @@ const NAV_CSS = `
   .tnav {
     display: flex;
     align-items: center;
-    height: 48px;
+    height: 52px;
     padding: 0 16px;
     background: #080A0C;
     border-bottom: 1px solid rgba(255,255,255,0.05);
@@ -288,33 +288,29 @@ const NAV_CSS = `
     display: flex;
     align-items: center;
     gap: 6px;
-    padding: 5px 10px;
-    border-radius: 6px;
-    font-size: 13px;
-    font-weight: 500;
-    color: rgba(255,255,255,0.32);
+    padding: 5px 12px;
+    border-radius: 8px;
+    font-size: 15px;
+    font-weight: 450;
+    color: rgba(255,255,255,0.45);
     text-decoration: none;
     transition: color 140ms, background 140ms;
     white-space: nowrap;
-    letter-spacing: -0.005em;
+    letter-spacing: -0.01em;
   }
   .tnav-tab:hover {
-    color: rgba(255,255,255,0.65);
-    background: rgba(255,255,255,0.04);
+    color: rgba(255,255,255,0.72);
+    background: rgba(255,255,255,0.05);
   }
   .tnav-tab--active {
     color: #ffffff;
+    background: rgba(255,255,255,0.09);
   }
   .tnav-tab--active:hover {
-    background: rgba(255,255,255,0.05);
+    background: rgba(255,255,255,0.11);
   }
   .tnav-tab-icon {
-    display: flex;
-    align-items: center;
-    opacity: 0.7;
-  }
-  .tnav-tab--active .tnav-tab-icon {
-    opacity: 1;
+    display: none;
   }
 
   /* ── Right ── */

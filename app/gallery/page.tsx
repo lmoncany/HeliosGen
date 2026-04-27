@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useMemo, useRef, useState, Suspense } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { createPortal } from "react-dom";
 import { createClient } from "@/lib/supabase/client";
@@ -210,7 +210,7 @@ function GalleryInner() {
   const [genError, setGenError]       = useState<string>("");
   const debugMode = useWorkflowStore((s) => s.debugMode);
   const [sourceFilter, setSourceFilter] = useState<"generated" | "uploaded">("generated");
-  const [zoom, setZoom]                 = useState(3);
+  const [zoom, setZoom]                 = useState(6);
   const [downloads, setDownloads]       = useState<DownloadTask[]>([]);
   const [refError, setRefError]         = useState("");
 
@@ -385,7 +385,7 @@ function GalleryInner() {
   useEffect(() => {
     const w = window.innerWidth;
     setWindowWidth(w);
-    setZoom(w >= 1400 ? 5 : w >= 900 ? 4 : w >= 640 ? 3 : 2);
+    setZoom(w >= 1400 ? 6 : w >= 900 ? 5 : w >= 640 ? 5 : 4);
     const handler = () => setWindowWidth(window.innerWidth);
     window.addEventListener("resize", handler);
     return () => window.removeEventListener("resize", handler);
@@ -819,9 +819,9 @@ function GalleryInner() {
           </svg>
           <input
             type="range"
-            min={1} max={6} step={1}
-            value={7 - zoom}
-            onChange={e => setZoom(7 - Number(e.target.value))}
+            min={4} max={8} step={1}
+            value={12 - zoom}
+            onChange={e => setZoom(12 - Number(e.target.value))}
             className="gallery-zoom-slider"
           />
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.35)" strokeWidth="2" strokeLinecap="round">
@@ -831,7 +831,7 @@ function GalleryInner() {
       </div>
 
       {/* ── Grid ── */}
-      <div style={{ flex: 1, overflowY: "auto", paddingBottom: "160px" }}>
+      <div style={{ flex: 1, overflowY: "auto", paddingBottom: "260px" }}>
         {/* ── Gallery grid ── */}
         {!loading && filteredItems.length === 0 && pendingGens.length === 0 ? (
           <EmptyState tab={tab} />
@@ -1334,7 +1334,7 @@ function GalleryInner() {
                 justifyContent: "center",
                 gap:            "7px",
                 padding:        "0 20px",
-                height:         "36px",
+                height:         "72px",
                 borderRadius:   "10px",
                 border:         "none",
                 background:     "#77E544",
@@ -2138,8 +2138,11 @@ function DownloadToast({ downloads, onClear }: { downloads: DownloadTask[]; onCl
 // ── Lightbox ──────────────────────────────────────────────────────────────────
 
 function Lightbox({ item, onClose }: { item: GalleryItem; onClose: () => void }) {
-  const [visible, setVisible]       = useState(false);
-  const [fullLoaded, setFullLoaded] = useState(false);
+  const [visible, setVisible]               = useState(false);
+  const [fullLoaded, setFullLoaded]         = useState(false);
+  const [promptExpanded, setPromptExpanded] = useState(false);
+  const [copied, setCopied]                 = useState(false);
+  const [downloading, setDownloading]       = useState(false);
 
   useEffect(() => { const id = requestAnimationFrame(() => setVisible(true)); return () => cancelAnimationFrame(id); }, []);
   useEffect(() => {
@@ -2150,29 +2153,86 @@ function Lightbox({ item, onClose }: { item: GalleryItem; onClose: () => void })
   }, []);
 
   const handleClose = () => { setVisible(false); setTimeout(onClose, 200); };
-  const meta = [item.model, item.aspect_ratio, item.quality?.toUpperCase()].filter(Boolean).join(" · ");
+
+  const copyPrompt = () => {
+    if (!item.prompt) return;
+    navigator.clipboard.writeText(item.prompt).catch(() => {});
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1800);
+  };
+
+  const download = async () => {
+    if (downloading) return;
+    setDownloading(true);
+    try {
+      const res  = await fetch(item.url);
+      const blob = await res.blob();
+      const ext  = blob.type.includes("png") ? "png" : blob.type.includes("webp") ? "webp" : "jpg";
+      const a    = document.createElement("a");
+      a.href     = URL.createObjectURL(blob);
+      a.download = `image-${item.id.slice(0, 8)}.${ext}`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    } finally {
+      setDownloading(false);
+    }
+  };
+
+  const formatDate = (iso: string) =>
+    new Date(iso).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
+
+  const infoRows = [
+    item.model        && { label: "Model",        value: item.model },
+    item.quality      && { label: "Quality",      value: item.quality.charAt(0).toUpperCase() + item.quality.slice(1) },
+    item.aspect_ratio && { label: "Aspect ratio", value: item.aspect_ratio },
+    item.source       && { label: "Source",       value: item.source === "generation" ? "Generated" : "Uploaded" },
+                         { label: "Created",      value: formatDate(item.created_at) },
+  ].filter(Boolean) as { label: string; value: string }[];
+
+  const panelStyle: React.CSSProperties = {
+    background: "#0D1012",
+    border: "1px solid rgba(255,255,255,0.07)",
+    borderRadius: "16px",
+    overflow: "hidden",
+  };
+
+  const sectionHeaderStyle: React.CSSProperties = {
+    display: "flex", alignItems: "center", gap: "8px",
+    padding: "14px 16px 12px",
+  };
+
+  const sectionLabelStyle: React.CSSProperties = {
+    fontSize: "10px", fontWeight: 700, letterSpacing: "0.1em",
+    color: "rgba(255,255,255,0.4)", textTransform: "uppercase",
+  };
 
   return createPortal(
     <div onClick={handleClose} style={{
       position: "fixed", inset: 0, zIndex: 9999,
-      display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
-      background: `rgba(0,0,0,${visible ? 0.88 : 0})`,
-      backdropFilter: visible ? "blur(12px)" : "none",
-      WebkitBackdropFilter: visible ? "blur(12px)" : "none",
+      display: "flex", alignItems: "flex-start", justifyContent: "center",
+      background: `rgba(0,0,0,${visible ? 0.55 : 0})`,
+      backdropFilter: visible ? "blur(16px)" : "none",
+      WebkitBackdropFilter: visible ? "blur(16px)" : "none",
       transition: "background 200ms ease, backdrop-filter 200ms ease",
-      padding: "24px",
+      padding: "24px", gap: "20px",
+      overflowY: "auto",
     }}>
+
+      {/* ── Image (vertically centered column) ── */}
+      <div style={{ flex: 1, minHeight: "calc(100vh - 48px)", display: "flex", alignItems: "center", justifyContent: "center" }}>
       <div onClick={e => e.stopPropagation()} style={{
-        position: "relative",
-        maxWidth: "min(1200px, calc(100vw - 48px))", maxHeight: "calc(100vh - 120px)",
+        position: "relative", flexShrink: 0,
+        maxWidth: "100%",
         transform: visible ? "scale(1)" : "scale(0.96)", transition: "transform 200ms ease",
-        borderRadius: "10px", overflow: "hidden", boxShadow: "0 32px 80px rgba(0,0,0,0.8)",
+        borderRadius: "12px", overflow: "hidden", boxShadow: "0 32px 80px rgba(0,0,0,0.6)",
       }}>
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img src={`/_next/image?url=${encodeURIComponent(item.url)}&w=828&q=75`} alt="" aria-hidden style={{
-          display: "block", maxWidth: "min(1200px, calc(100vw - 48px))", maxHeight: "calc(100vh - 120px)",
+          display: "block",
+          maxHeight: "calc(100vh - 48px)",
           width: "100%", height: "auto", objectFit: "contain",
-          filter: fullLoaded ? "none" : "blur(12px)", transform: fullLoaded ? "scale(1)" : "scale(1.04)",
+          filter: fullLoaded ? "none" : "blur(12px)",
+          transform: fullLoaded ? "scale(1)" : "scale(1.04)",
           transition: "filter 320ms ease, transform 320ms ease",
         }} />
         {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -2181,19 +2241,134 @@ function Lightbox({ item, onClose }: { item: GalleryItem; onClose: () => void })
           opacity: fullLoaded ? 1 : 0, transition: "opacity 320ms ease",
         }} />
       </div>
-      {(item.prompt || meta) && (
-        <div onClick={e => e.stopPropagation()} style={{
-          marginTop: "14px", maxWidth: "min(1200px, calc(100vw - 48px))", width: "100%",
-          opacity: visible ? 1 : 0, transition: "opacity 250ms ease 100ms",
-        }}>
-          {item.prompt && <p style={{ fontSize: "13px", color: "rgba(255,255,255,0.6)", lineHeight: 1.5, marginBottom: meta ? "5px" : 0, overflow: "hidden", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>{item.prompt}</p>}
-          {meta && <p style={{ fontSize: "11px", color: "rgba(255,255,255,0.25)" }}>{meta}</p>}
+      </div>
+
+      {/* ── Right panel ── */}
+      <div
+        onClick={e => e.stopPropagation()}
+        style={{
+          width: "300px", flexShrink: 0,
+          display: "flex", flexDirection: "column", gap: "12px",
+          opacity: visible ? 1 : 0,
+          transform: visible ? "translateX(0)" : "translateX(14px)",
+          transition: "opacity 220ms ease 80ms, transform 220ms ease 80ms",
+        }}
+      >
+        {/* Prompt section */}
+        {item.prompt && (
+          <div style={panelStyle}>
+            <div style={{ ...sectionHeaderStyle, justifyContent: "space-between" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "7px" }}>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.4)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M3 3h6l-1 5H3z" /><path d="M3 8h6M7 3v5" /><path d="M14 3h7" /><path d="M14 8h7" /><path d="M14 13h4" /><path d="M3 13h8" /><path d="M3 18h18" />
+                </svg>
+                <span style={sectionLabelStyle}>Prompt</span>
+              </div>
+              <button
+                onClick={copyPrompt}
+                style={{
+                  padding: "4px 12px", borderRadius: "8px",
+                  border: "1px solid rgba(255,255,255,0.1)",
+                  background: "rgba(255,255,255,0.05)",
+                  color: copied ? "#77E544" : "rgba(255,255,255,0.65)",
+                  fontSize: "12px", fontWeight: 600, cursor: "pointer", fontFamily: "inherit",
+                  transition: "background 140ms, color 140ms",
+                  borderColor: copied ? "rgba(119,229,68,0.3)" : "rgba(255,255,255,0.1)",
+                }}
+                onMouseEnter={e => { if (!copied) { e.currentTarget.style.background = "rgba(255,255,255,0.1)"; e.currentTarget.style.color = "#fff"; }}}
+                onMouseLeave={e => { if (!copied) { e.currentTarget.style.background = "rgba(255,255,255,0.05)"; e.currentTarget.style.color = "rgba(255,255,255,0.65)"; }}}
+              >
+                {copied ? "Copied!" : "Copy"}
+              </button>
+            </div>
+            <div style={{
+              padding: "0 16px",
+              fontSize: "13px", color: "rgba(255,255,255,0.72)", lineHeight: 1.65,
+              ...(promptExpanded ? {} : {
+                display: "-webkit-box" as "block",
+                WebkitBoxOrient: "vertical" as const,
+                WebkitLineClamp: 5,
+                overflow: "hidden",
+              }),
+            }}>
+              {item.prompt}
+            </div>
+            <button
+              onClick={() => setPromptExpanded(p => !p)}
+              style={{
+                display: "flex", alignItems: "center", justifyContent: "space-between",
+                width: "100%", padding: "10px 16px 14px",
+                background: "transparent", border: "none",
+                color: "rgba(255,255,255,0.3)",
+                fontSize: "13px", cursor: "pointer", fontFamily: "inherit",
+                transition: "color 140ms",
+              }}
+              onMouseEnter={e => { e.currentTarget.style.color = "rgba(255,255,255,0.6)"; }}
+              onMouseLeave={e => { e.currentTarget.style.color = "rgba(255,255,255,0.3)"; }}
+            >
+              {promptExpanded ? "Show less" : "See all"}
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"
+                style={{ transform: promptExpanded ? "rotate(180deg)" : "none", transition: "transform 200ms" }}>
+                <path d="m6 9 6 6 6-6" />
+              </svg>
+            </button>
+          </div>
+        )}
+
+        {/* Information section */}
+        <div style={panelStyle}>
+          <div style={sectionHeaderStyle}>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.4)" strokeWidth="2" strokeLinecap="round">
+              <circle cx="12" cy="12" r="10" /><path d="M12 16v-4M12 8h.01" />
+            </svg>
+            <span style={sectionLabelStyle}>Information</span>
+          </div>
+          {infoRows.map((row) => (
+            <div key={row.label} style={{
+              display: "flex", alignItems: "center", justifyContent: "space-between",
+              padding: "13px 16px",
+              borderTop: "1px solid rgba(255,255,255,0.05)",
+            }}>
+              <span style={{ fontSize: "13px", color: "rgba(255,255,255,0.35)" }}>{row.label}</span>
+              <span style={{ fontSize: "13px", color: "#ffffff", fontWeight: 600 }}>{row.value}</span>
+            </div>
+          ))}
         </div>
-      )}
+
+        {/* Download button */}
+        <button
+          onClick={download}
+          disabled={downloading}
+          style={{
+            display: "flex", alignItems: "center", justifyContent: "center", gap: "8px",
+            width: "100%", padding: "13px 16px",
+            borderRadius: "14px", border: "1px solid rgba(255,255,255,0.07)",
+            background: "#0D1012",
+            color: downloading ? "rgba(255,255,255,0.3)" : "rgba(255,255,255,0.75)",
+            fontSize: "13px", fontWeight: 600, cursor: downloading ? "default" : "pointer",
+            fontFamily: "inherit", transition: "background 140ms, color 140ms",
+          }}
+          onMouseEnter={e => { if (!downloading) { e.currentTarget.style.background = "rgba(255,255,255,0.06)"; e.currentTarget.style.color = "#fff"; }}}
+          onMouseLeave={e => { if (!downloading) { e.currentTarget.style.background = "#0D1012"; e.currentTarget.style.color = "rgba(255,255,255,0.75)"; }}}
+        >
+          {downloading ? (
+            <span style={{ width: 13, height: 13, borderRadius: "50%", border: "2px solid rgba(255,255,255,0.15)", borderTopColor: "rgba(255,255,255,0.5)", display: "inline-block", animation: "spin 0.75s linear infinite" }} />
+          ) : (
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 3v13M7 13l5 5 5-5" /><path d="M5 21h14" />
+            </svg>
+          )}
+          {downloading ? "Downloading…" : "Download"}
+        </button>
+      </div>
+
+      {/* ── Close button ── */}
       <button onClick={handleClose} style={{
-        position: "fixed", top: "16px", right: "16px", width: "34px", height: "34px", borderRadius: "50%",
-        border: "1px solid rgba(255,255,255,0.1)", background: "rgba(0,0,0,0.5)", color: "rgba(255,255,255,0.6)",
-        cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center",
+        position: "fixed", top: "16px", right: "16px",
+        width: "34px", height: "34px", borderRadius: "50%",
+        border: "1px solid rgba(255,255,255,0.1)", background: "rgba(0,0,0,0.5)",
+        color: "rgba(255,255,255,0.6)", cursor: "pointer",
+        display: "flex", alignItems: "center", justifyContent: "center",
         opacity: visible ? 1 : 0, transition: "opacity 200ms ease, background 150ms",
       }}
         onMouseEnter={e => { e.currentTarget.style.background = "rgba(255,255,255,0.1)"; }}
