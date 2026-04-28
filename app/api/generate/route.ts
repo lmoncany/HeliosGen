@@ -345,7 +345,7 @@ export async function POST(req: NextRequest) {
     if (apiInput.qualityKey) {
       input[apiInput.qualityKey] = apiInput.qualityMap
         ? (apiInput.qualityMap[quality] ?? quality)
-        : quality === "4k" ? "4K" : quality === "2k" ? "2K" : "1K";
+        : quality === "4k" ? "4K" : quality === "2k" ? "2K" : quality === "1k" ? "1K" : quality;
     }
     if (apiInput.extra) Object.assign(input, apiInput.extra);
 

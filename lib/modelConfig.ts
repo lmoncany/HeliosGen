@@ -45,7 +45,7 @@ export interface ImageModel {
      * Quality options shown in the dropdown (subset of "1k"|"2k"|"4k").
      * If omitted, all three are shown.
      */
-    qualityOptions?: Array<"1k" | "2k" | "4k">;
+    qualityOptions?: string[];
     /** Max prompt length accepted by the model */
     promptMaxLength: number;
     /** Fixed output format to always send (omit to skip the field) */
@@ -63,6 +63,8 @@ export interface ImageModel {
    * When set, overrides apiInput.promptMaxLength for the text-only (no images) variant.
    */
   textOnlyPromptMaxLength?: number;
+  /** Default quality value for this model (used when switching to the model). */
+  defaultQuality?: string;
   /**
    * When set and provider is "azure", these quality values are offered
    * instead of the standard 1k/2k/4k picker.
@@ -208,7 +210,7 @@ export const IMAGE_MODELS: ImageModel[] = [
     maxImages: 16,
     supportsQuality: true,
     // Azure-specific quality options (sent as the "quality" field)
-    azureQualityOptions: ["auto", "low", "medium", "high"],
+    azureQualityOptions: ["low", "medium", "high"],
     azureApiVersion: "2025-04-01-preview",
     azureSizeMap: {
       "auto": "auto",

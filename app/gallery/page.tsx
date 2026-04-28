@@ -35,6 +35,8 @@ interface PendingGen {
   id: string;
   aspectRatio: string;
   prompt: string;
+  referenceImageUrls?: string[];
+  error?: string;
 }
 
 type MasonryItem = { kind: "pending"; pg: PendingGen } | { kind: "gallery"; item: GalleryItem };
@@ -354,6 +356,17 @@ function GalleryInner() {
     setAspectRatio(("defaultRatio" in m ? m.defaultRatio : null) ?? m.ratios[0] ?? "1:1");
     if ("defaultDuration" in m) setDuration(m.defaultDuration ?? 5);
     if ("defaultMode" in m) setMode(m.defaultMode ?? "");
+    if (!isVideo) {
+      const im = m as { apiInput?: { qualityOptions?: string[] }; azureQualityOptions?: string[] };
+      const provider = (() => { try { return JSON.parse(localStorage.getItem("aiui-model-providers") ?? "{}")[m.id] ?? "kie"; } catch { return "kie"; } })();
+      const base     = (() => { try { return localStorage.getItem("aiui-azure-base-url") ?? ""; } catch { return ""; } })();
+      const deploy   = (() => { try { return JSON.parse(localStorage.getItem("aiui-azure-endpoints") ?? "{}")[m.id] ?? ""; } catch { return ""; } })();
+      const azure    = provider === "azure" && !!base && !!deploy && !!im.azureQualityOptions;
+      const validQ   = azure ? im.azureQualityOptions! : (im.apiInput?.qualityOptions ?? []);
+      if (validQ.length) {
+        setQuality(prev => validQ.includes(prev) ? prev : validQ[0]);
+      }
+    }
     if (!("supportsImages" in m) || !m.supportsImages) {
       setRefImages(prev => { prev.forEach(r => URL.revokeObjectURL(r.objectUrl)); return []; });
       setTaggedImages([]);
@@ -472,10 +485,20 @@ function GalleryInner() {
       const { resolvedPrompt, extraUrls } = resolveGalleryMentions(prompt, taggedImages);
       const refUrls = refImages.filter(r => r.cdnUrl && !r.error).map(r => r.cdnUrl!);
       const imageUrls = [...extraUrls, ...refUrls];
+
+      // Read provider settings from localStorage (same keys as GenerateNode)
+      const azureBaseUrl    = (() => { try { return localStorage.getItem("aiui-azure-base-url") ?? ""; } catch { return ""; } })();
+      const azureDeployment = (() => { try { return JSON.parse(localStorage.getItem("aiui-azure-endpoints") ?? "{}")[modelId] ?? ""; } catch { return ""; } })();
+      const providerForModel = (() => { try { return JSON.parse(localStorage.getItem("aiui-model-providers") ?? "{}")[modelId] ?? "kie"; } catch { return "kie"; } })();
+      const isAzure = !!(azureBaseUrl && azureDeployment && providerForModel === "azure");
+
       const res = await fetch("/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ prompt: resolvedPrompt, model: modelId, aspectRatio, quality, imageUrls }),
+        body: JSON.stringify({
+          prompt: resolvedPrompt, model: modelId, aspectRatio, quality, imageUrls,
+          ...(isAzure ? { azureBaseUrl, azureDeployment, azureQuality: quality } : {}),
+        }),
       });
       const d = await res.json() as { taskId?: string; error?: string };
       if (!res.ok) throw new Error(d.error ?? "Failed");
@@ -517,8 +540,9 @@ function GalleryInner() {
     setGenError("");
 
     const n = isVideo ? 1 : count;
+    const snapshotRefUrls = refImages.filter(r => r.cdnUrl && !r.error).map(r => r.cdnUrl!);
     const newPendings: PendingGen[] = Array.from({ length: n }, () => ({
-      id: crypto.randomUUID(), aspectRatio, prompt,
+      id: crypto.randomUUID(), aspectRatio, prompt, referenceImageUrls: snapshotRefUrls,
     }));
     setPendingGens(prev => [...prev, ...newPendings]);
 
@@ -526,9 +550,15 @@ function GalleryInner() {
     if (debugMode) {
       const { resolvedPrompt: dbgPrompt, extraUrls: dbgExtra } = resolveGalleryMentions(prompt, taggedImages);
       const dbgRefUrls = refImages.filter(r => r.cdnUrl && !r.error).map(r => r.cdnUrl!);
+      const dbgAzureBaseUrl    = (() => { try { return localStorage.getItem("aiui-azure-base-url") ?? ""; } catch { return ""; } })();
+      const dbgAzureDeployment = (() => { try { return JSON.parse(localStorage.getItem("aiui-azure-endpoints") ?? "{}")[modelId] ?? ""; } catch { return ""; } })();
+      const dbgProvider        = (() => { try { return JSON.parse(localStorage.getItem("aiui-model-providers") ?? "{}")[modelId] ?? "kie"; } catch { return "kie"; } })();
+      const dbgIsAzure = !!(dbgAzureBaseUrl && dbgAzureDeployment && dbgProvider === "azure");
       console.log("[Gallery Debug] Generate request:", {
         type: isVideo ? "video" : "image",
         prompt: dbgPrompt, model: modelId, aspectRatio, quality,
+        provider: dbgIsAzure ? "azure" : "kie",
+        ...(dbgIsAzure ? { azureBaseUrl: dbgAzureBaseUrl, azureDeployment: dbgAzureDeployment, azureQuality: "auto" } : {}),
         ...(isVideo
           ? { duration, mode }
           : { imageUrls: [...dbgExtra, ...dbgRefUrls], count: n }),
@@ -542,8 +572,9 @@ function GalleryInner() {
     // ── Submit ────────────────────────────────────────────────────────────
     const token = await getToken();
     if (!token) {
-      setPendingGens(prev => prev.filter(p => !newPendings.some(np => np.id === p.id)));
-      setGenError("Please sign in to generate.");
+      setPendingGens(prev => prev.map(p =>
+        newPendings.some(np => np.id === p.id) ? { ...p, error: "Please sign in to generate." } : p
+      ));
       return;
     }
 
@@ -553,9 +584,10 @@ function GalleryInner() {
       taskIds = await Promise.all(newPendings.map(() => generateOne(token)));
     } catch (e: unknown) {
       setSubmitting(false);
-      setPendingGens(prev => prev.filter(p => !newPendings.some(np => np.id === p.id)));
-      setGenError(e instanceof Error ? e.message : String(e));
-      setTimeout(() => setGenError(""), 6_000);
+      const msg = e instanceof Error ? e.message : String(e);
+      setPendingGens(prev => prev.map(p =>
+        newPendings.some(np => np.id === p.id) ? { ...p, error: msg } : p
+      ));
       return;
     }
     setSubmitting(false); // re-enable button — polling happens in background
@@ -565,13 +597,12 @@ function GalleryInner() {
       const pending = newPendings[i];
       try {
         await pollTask(taskId);
-      } catch (e: unknown) {
-        setGenError(e instanceof Error ? e.message : String(e));
-        setTimeout(() => setGenError(""), 6_000);
-      } finally {
         setPendingGens(prev => prev.filter(p => p.id !== pending.id));
         await loadItems(tabRef.current, 0, true);
         window.dispatchEvent(new Event("credits-refresh"));
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        setPendingGens(prev => prev.map(p => p.id === pending.id ? { ...p, error: msg } : p));
       }
     });
   };
@@ -645,7 +676,19 @@ function GalleryInner() {
   const vidModel = VIDEO_MODELS.find(m => m.id === modelId);
   const ratios = (isVideo ? vidModel?.ratios : imgModel?.ratios) ?? [];
   const supportsQ = !isVideo && !!imgModel?.supportsQuality;
-  const qualityOpts = imgModel?.apiInput.qualityOptions ?? ["2k", "4k"];
+
+  // Read provider from localStorage to pick the right quality option set
+  const isAzureProvider = !isVideo && !!imgModel && (() => {
+    try {
+      const provider = JSON.parse(localStorage.getItem("aiui-model-providers") ?? "{}")[modelId] ?? "kie";
+      const base      = localStorage.getItem("aiui-azure-base-url") ?? "";
+      const deploy    = JSON.parse(localStorage.getItem("aiui-azure-endpoints") ?? "{}")[modelId] ?? "";
+      return provider === "azure" && !!base && !!deploy && !!imgModel.azureQualityOptions;
+    } catch { return false; }
+  })();
+  const qualityOpts: string[] = isAzureProvider
+    ? (imgModel!.azureQualityOptions ?? [])
+    : (imgModel?.apiInput.qualityOptions ?? ["2k", "4k"]);
   const durations = vidModel?.durations ?? [];
   const vidModes = vidModel?.modes ?? [];
   const activeModel = models.find(m => m.id === modelId);
@@ -859,31 +902,147 @@ function GalleryInner() {
                     return (
                       <div key={pg.id} className="gallery-item" style={{
                         aspectRatio: (w && h) ? `${w} / ${h}` : "1 / 1",
-                        background: "#0D1012",
+                        background: pg.error ? "rgba(20,8,8,0.95)" : "#0D1012",
                       }}>
-                        <div style={{
-                          position: "absolute", inset: 0,
-                          display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: "10px",
-                        }}>
-                          <div style={{
-                            width: "20px", height: "20px", borderRadius: "50%",
-                            border: "2px solid rgba(119,229,68,0.15)", borderTopColor: "#ff3df5",
-                            animation: "spin 0.9s linear infinite",
-                          }} />
-                          <span style={{ fontSize: "10px", color: "rgba(255,255,255,0.22)", letterSpacing: "0.08em", textTransform: "uppercase" }}>
-                            Generating
-                          </span>
-                        </div>
-                        {pg.prompt && (
-                          <div style={{
-                            position: "absolute", bottom: 0, left: 0, right: 0,
-                            padding: "24px 10px 10px",
-                            background: "linear-gradient(to top, rgba(0,0,0,0.6) 0%, transparent 100%)",
-                          }}>
-                            <p style={{ fontSize: "11px", color: "rgba(255,255,255,0.35)", overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis" }}>
-                              {pg.prompt}
-                            </p>
-                          </div>
+                        {pg.error ? (
+                          <>
+                            {/* Error state */}
+                            <div style={{
+                              position: "absolute", inset: 0,
+                              display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+                              gap: "10px", padding: "16px 48px 16px 16px",
+                            }}>
+                              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#f87171" strokeWidth="1.8" strokeLinecap="round">
+                                <circle cx="12" cy="12" r="10" /><path d="M12 8v4M12 16h.01" />
+                              </svg>
+                              <p style={{
+                                fontSize: "11px", color: "#f87171", textAlign: "center",
+                                lineHeight: 1.45, wordBreak: "break-word",
+                                display: "-webkit-box", WebkitLineClamp: 4, WebkitBoxOrient: "vertical", overflow: "hidden",
+                              }}>
+                                {pg.error}
+                              </p>
+                            </div>
+                            {/* Top-right icon buttons */}
+                            <div style={{
+                              position: "absolute", top: 8, right: 8,
+                              display: "flex", flexDirection: "column", gap: 5, zIndex: 5,
+                            }}>
+                              {/* Paste prompt + ref images */}
+                              <button
+                                className="gallery-action-btn"
+                                title="Paste prompt & images"
+                                onClick={() => handleCopyPrompt(pg.prompt, pg.referenceImageUrls)}
+                              >
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                  <rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                                </svg>
+                              </button>
+                              {/* Retry */}
+                              <button
+                                className="gallery-action-btn"
+                                title="Retry"
+                                onClick={async () => {
+                                  const newId = crypto.randomUUID();
+                                  const newPending: PendingGen = {
+                                    id: newId,
+                                    aspectRatio: pg.aspectRatio,
+                                    prompt: pg.prompt,
+                                    referenceImageUrls: pg.referenceImageUrls,
+                                  };
+                                  setPendingGens(prev => [...prev.filter(p => p.id !== pg.id), newPending]);
+
+                                  const token = await getToken();
+                                  if (!token) {
+                                    setPendingGens(prev => prev.map(p => p.id === newId ? { ...p, error: "Please sign in." } : p));
+                                    return;
+                                  }
+
+                                  const storedRefs = pg.referenceImageUrls ?? [];
+                                  const syntheticTagged: TaggedImage[] = storedRefs.map((url, i) => ({ label: `img${i + 1}`, refId: url, url }));
+                                  const { resolvedPrompt, extraUrls } = resolveGalleryMentions(pg.prompt, syntheticTagged);
+                                  const dedupedExtra = new Set(extraUrls);
+                                  const imageUrls = [...extraUrls, ...storedRefs.filter(u => !dedupedExtra.has(u))];
+
+                                  const azureBaseUrl    = (() => { try { return localStorage.getItem("aiui-azure-base-url") ?? ""; } catch { return ""; } })();
+                                  const azureDeployment = (() => { try { return JSON.parse(localStorage.getItem("aiui-azure-endpoints") ?? "{}")[modelId] ?? ""; } catch { return ""; } })();
+                                  const providerForModel = (() => { try { return JSON.parse(localStorage.getItem("aiui-model-providers") ?? "{}")[modelId] ?? "kie"; } catch { return "kie"; } })();
+                                  const isAzure = !!(azureBaseUrl && azureDeployment && providerForModel === "azure");
+
+                                  let taskId: string;
+                                  try {
+                                    const res = await fetch("/api/generate", {
+                                      method: "POST",
+                                      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+                                      body: JSON.stringify({
+                                        prompt: resolvedPrompt, model: modelId, aspectRatio: pg.aspectRatio, quality, imageUrls,
+                                        ...(isAzure ? { azureBaseUrl, azureDeployment, azureQuality: quality } : {}),
+                                      }),
+                                    });
+                                    const d = await res.json() as { taskId?: string; error?: string };
+                                    if (!res.ok) throw new Error(d.error ?? "Failed");
+                                    taskId = d.taskId!;
+                                  } catch (e: unknown) {
+                                    const msg = e instanceof Error ? e.message : String(e);
+                                    setPendingGens(prev => prev.map(p => p.id === newId ? { ...p, error: msg } : p));
+                                    return;
+                                  }
+
+                                  try {
+                                    await pollTask(taskId);
+                                    setPendingGens(prev => prev.filter(p => p.id !== newId));
+                                    await loadItems(tabRef.current, 0, true);
+                                    window.dispatchEvent(new Event("credits-refresh"));
+                                  } catch (e: unknown) {
+                                    const msg = e instanceof Error ? e.message : String(e);
+                                    setPendingGens(prev => prev.map(p => p.id === newId ? { ...p, error: msg } : p));
+                                  }
+                                }}
+                              >
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                  <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/>
+                                </svg>
+                              </button>
+                              {/* Delete */}
+                              <button
+                                className="gallery-action-btn gallery-delete-btn"
+                                title="Dismiss"
+                                onClick={() => setPendingGens(prev => prev.filter(p => p.id !== pg.id))}
+                              >
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                  <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
+                                </svg>
+                              </button>
+                            </div>
+                          </>
+                        ) : (
+                          <>
+                            {/* Generating spinner */}
+                            <div style={{
+                              position: "absolute", inset: 0,
+                              display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: "10px",
+                            }}>
+                              <div style={{
+                                width: "20px", height: "20px", borderRadius: "50%",
+                                border: "2px solid rgba(119,229,68,0.15)", borderTopColor: "#ff3df5",
+                                animation: "spin 0.9s linear infinite",
+                              }} />
+                              <span style={{ fontSize: "10px", color: "rgba(255,255,255,0.22)", letterSpacing: "0.08em", textTransform: "uppercase" }}>
+                                Generating
+                              </span>
+                            </div>
+                            {pg.prompt && (
+                              <div style={{
+                                position: "absolute", bottom: 0, left: 0, right: 0,
+                                padding: "24px 10px 10px",
+                                background: "linear-gradient(to top, rgba(0,0,0,0.6) 0%, transparent 100%)",
+                              }}>
+                                <p style={{ fontSize: "11px", color: "rgba(255,255,255,0.35)", overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis" }}>
+                                  {pg.prompt}
+                                </p>
+                              </div>
+                            )}
+                          </>
                         )}
                       </div>
                     );
@@ -2246,6 +2405,49 @@ function DownloadToast({ downloads, onClear }: { downloads: DownloadTask[]; onCl
   );
 }
 
+// ── Lightbox helpers ──────────────────────────────────────────────────────────
+
+function renderLightboxPrompt(
+  text: string,
+  refUrls: string[] | undefined,
+): React.ReactNode {
+  if (!refUrls?.length) {
+    return <span style={{ color: "rgba(255,255,255,0.72)" }}>{text}</span>;
+  }
+  const parts: React.ReactNode[] = [];
+  let lastEnd = 0;
+  let key = 0;
+  const re = /<<<image (\d+)>>>/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    if (m.index > lastEnd) {
+      parts.push(<span key={key++} style={{ color: "rgba(255,255,255,0.72)" }}>{text.slice(lastEnd, m.index)}</span>);
+    }
+    const n = parseInt(m[1]);
+    const imgUrl = refUrls[n - 1];
+    parts.push(
+      <span key={key++} style={{
+        display: "inline-flex", alignItems: "center", gap: "4px",
+        background: "rgba(255,255,255,0.1)", borderRadius: "6px",
+        padding: "1px 7px 1px 2px", verticalAlign: "middle",
+        margin: "0 1px", fontSize: "12px", fontWeight: 600,
+        color: "#ffffff", lineHeight: "20px",
+      }}>
+        {imgUrl && (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={imgUrl} alt="" style={{ width: 20, height: 20, borderRadius: 4, objectFit: "cover", flexShrink: 0 }} />
+        )}
+        Image {n}
+      </span>
+    );
+    lastEnd = m.index + m[0].length;
+  }
+  if (lastEnd < text.length) {
+    parts.push(<span key={key++} style={{ color: "rgba(255,255,255,0.72)" }}>{text.slice(lastEnd)}</span>);
+  }
+  return <>{parts}</>;
+}
+
 // ── Lightbox ──────────────────────────────────────────────────────────────────
 
 function Lightbox({ item, onClose }: { item: GalleryItem; onClose: () => void }) {
@@ -2421,11 +2623,38 @@ function Lightbox({ item, onClose }: { item: GalleryItem; onClose: () => void })
           opacity: visible ? 1 : 0,
           transform: visible ? "translateX(0)" : "translateX(14px)",
           transition: "opacity 220ms ease 80ms, transform 220ms ease 80ms",
+          background: "rgba(10,12,14,0.85)",
+          backdropFilter: "blur(24px)",
+          WebkitBackdropFilter: "blur(24px)",
+          borderRadius: "20px",
+          border: "1px solid rgba(255,255,255,0.07)",
+          padding: "12px",
+          overflowY: "auto",
+          maxHeight: "calc(100vh - 48px)",
         }}
       >
         {/* Prompt section */}
         {item.prompt && (
           <div style={panelStyle}>
+            {/* Reference image thumbnails */}
+            {item.referenceImageUrls && item.referenceImageUrls.length > 0 && (
+              <div style={{ padding: "14px 16px 0", display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                {item.referenceImageUrls.map((url, i) => (
+                  <div key={i} style={{ position: "relative", width: 76, height: 68, borderRadius: 10, overflow: "hidden", border: "1px solid rgba(255,255,255,0.1)", flexShrink: 0 }}>
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={url} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
+                    <div style={{
+                      position: "absolute", bottom: 4, right: 4,
+                      background: "rgba(0,0,0,0.65)", borderRadius: 4,
+                      padding: "2px 5px", fontSize: 9, fontWeight: 700,
+                      color: "rgba(255,255,255,0.8)", lineHeight: 1,
+                    }}>
+                      {i + 1}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
             <div style={{ ...sectionHeaderStyle, justifyContent: "space-between" }}>
               <div style={{ display: "flex", alignItems: "center", gap: "7px" }}>
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.4)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -2452,7 +2681,7 @@ function Lightbox({ item, onClose }: { item: GalleryItem; onClose: () => void })
             </div>
             <div style={{
               padding: "0 16px",
-              fontSize: "13px", color: "rgba(255,255,255,0.72)", lineHeight: 1.65,
+              fontSize: "13px", lineHeight: 1.65,
               ...(promptExpanded ? {} : {
                 display: "-webkit-box" as "block",
                 WebkitBoxOrient: "vertical" as const,
@@ -2460,7 +2689,7 @@ function Lightbox({ item, onClose }: { item: GalleryItem; onClose: () => void })
                 overflow: "hidden",
               }),
             }}>
-              {item.prompt}
+              {renderLightboxPrompt(item.prompt, item.referenceImageUrls)}
             </div>
             <button
               onClick={() => setPromptExpanded(p => !p)}
