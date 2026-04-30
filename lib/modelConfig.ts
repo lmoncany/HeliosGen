@@ -339,6 +339,7 @@ export const VIDEO_MODELS: VideoModel[] = [
     modes: [
       { value: "std", label: "720p" },
       { value: "pro", label: "1080p" },
+      { value: "4K",  label: "4K"   },
     ],
     defaultMode: "pro",
     apiInput: {

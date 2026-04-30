@@ -11,6 +11,12 @@ interface Resource {
   label: string;
 }
 
+interface KlingElementInput {
+  name: string;
+  description: string;
+  imageUrls: string[];
+}
+
 async function getUserId(req: NextRequest): Promise<string | null> {
   const auth = req.headers.get("authorization") ?? "";
   const token = auth.startsWith("Bearer ") ? auth.slice(7) : null;
@@ -27,6 +33,7 @@ export async function POST(req: NextRequest) {
     endFrameUrl:    rawEndFrame,
     videoRefUrl:    rawVideoRef,
     resources       = [] as Resource[],
+    klingElements   = [] as KlingElementInput[],
     referenceImageUrls:  rawRefImages     = [] as string[],
     referenceVideoUrls:  rawRefVideoUrls  = [] as string[],
     referenceAudioUrls:  rawRefAudioUrls  = [] as string[],
@@ -124,15 +131,30 @@ export async function POST(req: NextRequest) {
 
   } else {
     // ── Start/end-frame + elements models (Kling) ─────────────────────────────
-    const [startFrameUrl, endFrameUrl, r2Resources] = await Promise.all([
+    const hasNewElements = (klingElements as KlingElementInput[]).length > 0;
+
+    const [startFrameUrl, endFrameUrl, r2Resources, uploadedElements] = await Promise.all([
       rawStartFrame ? ensureR2(rawStartFrame, "references") : Promise.resolve(undefined),
       rawEndFrame   ? ensureR2(rawEndFrame,   "references") : Promise.resolve(undefined),
-      Promise.all(
-        (resources as Resource[]).slice(0, 3).map(async (r) => ({
-          ...r,
-          url: await ensureR2(r.url, "references").catch(() => r.url),
-        }))
-      ),
+      hasNewElements
+        ? Promise.resolve([] as Resource[])
+        : Promise.all(
+            (resources as Resource[]).slice(0, 3).map(async (r) => ({
+              ...r,
+              url: await ensureR2(r.url, "references").catch(() => r.url),
+            }))
+          ),
+      hasNewElements
+        ? Promise.all(
+            (klingElements as KlingElementInput[]).slice(0, 3).map(async (el) => ({
+              name:        el.name,
+              description: el.description,
+              imageUrls:   await Promise.all(
+                el.imageUrls.map((u) => ensureR2(u, "references").catch(() => u))
+              ),
+            }))
+          )
+        : Promise.resolve([] as { name: string; description: string; imageUrls: string[] }[]),
     ]);
 
     input = {
@@ -153,10 +175,19 @@ export async function POST(req: NextRequest) {
     }
 
     if (apiInput.useKlingElements) {
-      const kling_elements = r2Resources.map((r) => {
-        const safeName = r.label.toLowerCase().replace(/\s+#/g, "_").replace(/[^a-z0-9_]/g, "") || "element";
-        return { name: safeName, description: r.label, element_input_urls: [r.url, r.url] };
-      });
+      let kling_elements: { name: string; description: string; element_input_urls: string[] }[] = [];
+      if (hasNewElements) {
+        kling_elements = uploadedElements.map((el) => ({
+          name:               el.name,
+          description:        el.description,
+          element_input_urls: el.imageUrls.length >= 2 ? el.imageUrls : [el.imageUrls[0], el.imageUrls[0]],
+        }));
+      } else {
+        kling_elements = r2Resources.map((r) => {
+          const safeName = r.label.toLowerCase().replace(/\s+#/g, "_").replace(/[^a-z0-9_]/g, "") || "element";
+          return { name: safeName, description: r.label, element_input_urls: [r.url, r.url] };
+        });
+      }
       if (kling_elements.length > 0) input.kling_elements = kling_elements;
     }
   }

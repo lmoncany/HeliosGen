@@ -2,6 +2,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { createPortal } from "react-dom";
+import NextImage from "next/image";
 import { createClient } from "@/lib/supabase/client";
 import { IMAGE_MODELS, VIDEO_MODELS } from "@/lib/modelConfig";
 import { useWorkflowStore } from "@/lib/store";
@@ -39,7 +40,6 @@ interface PendingGen {
   error?: string;
 }
 
-type MasonryItem = { kind: "pending"; pg: PendingGen } | { kind: "gallery"; item: GalleryItem };
 
 interface DownloadTask {
   id: string;
@@ -53,6 +53,13 @@ interface TaggedImage {
   label: string;
   refId: string;
   url: string;
+}
+
+interface KlingElement {
+  id: string;
+  name: string;
+  description: string;
+  imageUrls: string[];
 }
 
 function resolveGalleryMentions(
@@ -178,6 +185,7 @@ const loadedImageUrls = new Set<string>();
 interface SavedSettings {
   prompt: string; modelId: string; aspectRatio: string;
   quality: string; count: number; duration: number; mode: string;
+  sound?: boolean;
   refImageUrls?: string[];
 }
 
@@ -190,6 +198,16 @@ function loadSettings(tab: Tab): Partial<SavedSettings> | null {
 function saveSettings(tab: Tab, s: SavedSettings) {
   if (typeof window === "undefined") return;
   try { localStorage.setItem(`nf-gallery-${tab}`, JSON.stringify(s)); } catch { }
+}
+
+function loadKlingElements(): KlingElement[] {
+  if (typeof window === "undefined") return [];
+  try { const r = localStorage.getItem("nf-kling-elements"); return r ? (JSON.parse(r) as KlingElement[]) : []; } catch { return []; }
+}
+
+function saveKlingElements(elements: KlingElement[]) {
+  if (typeof window === "undefined") return;
+  try { localStorage.setItem("nf-kling-elements", JSON.stringify(elements)); } catch { }
 }
 
 // ── Inner page ────────────────────────────────────────────────────────────────
@@ -229,6 +247,12 @@ function GalleryInner() {
   const [count, setCount] = useState<number>(() => loadSettings(tab)?.count ?? 1);
   const [duration, setDuration] = useState<number>(() => loadSettings(tab)?.duration ?? 5);
   const [mode, setMode] = useState<string>(() => loadSettings(tab)?.mode ?? "");
+  const [sound, setSound] = useState<boolean>(() => loadSettings(tab)?.sound ?? false);
+  const [durPickerOpen, setDurPickerOpen] = useState(false);
+  const [durPickerClosing, setDurPickerClosing] = useState(false);
+  const [durPickerPos, setDurPickerPos] = useState<{ left: number; bottom: number } | null>(null);
+  const durPillRef = useRef<HTMLButtonElement>(null);
+  const durCloseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [pendingGens, setPendingGens] = useState<PendingGen[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [genError, setGenError] = useState<string>("");
@@ -240,6 +264,11 @@ function GalleryInner() {
 
   const [removingIds, setRemovingIds] = useState<Set<string>>(new Set());
   const [videoMuted, setVideoMuted] = useState(true);
+
+  // Media picker
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [pickerTarget, setPickerTarget] = useState<"refImage" | "startFrame" | "endFrame" | "resource" | "videoRef" | "referenceVideo" | null>(null);
+  const [pickerUploadKind, setPickerUploadKind] = useState<"image" | "video">("image");
 
   // Reference images — restored from localStorage on mount
   const [refImages, setRefImages] = useState<RefImage[]>(() => {
@@ -257,6 +286,8 @@ function GalleryInner() {
   const [vidVideoRef, setVidVideoRef]     = useState<RefImage | null>(null);
   const [vidRefVideos, setVidRefVideos]   = useState<RefImage[]>([]);
   const [vidRefAudios, setVidRefAudios]   = useState<RefImage[]>([]);
+  const [vidElements, setVidElements]     = useState<KlingElement[]>([]);
+  const [elementPickerOpen, setElementPickerOpen] = useState(false);
   const vidImgInputRef   = useRef<HTMLInputElement>(null);
   const vidVideoInputRef = useRef<HTMLInputElement>(null);
   const vidAudioInputRef = useRef<HTMLInputElement>(null);
@@ -345,6 +376,24 @@ function GalleryInner() {
     }
   }, []);
 
+  // Fetches page 0 and returns only brand-new items (not already in the list).
+  // Returns data without touching state so callers can batch it with other updates.
+  const fetchNewItems = useCallback(async (currentTab: Tab): Promise<GalleryItem[]> => {
+    const token = await getToken();
+    if (!token) return [];
+    try {
+      const genType = currentTab === "videos" ? "video" : "image";
+      const res = await fetch(`/api/gallery?type=${genType}&page=0`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) return [];
+      const { items: fresh } = await res.json() as { items: GalleryItem[]; hasMore: boolean };
+      return fresh;
+    } catch {
+      return [];
+    }
+  }, []);
+
   useEffect(() => {
     if (authLoaded && user) loadItems(tab, 0, true);
     if (authLoaded && !user) setLoading(false);
@@ -370,6 +419,7 @@ function GalleryInner() {
     setCount(saved?.count ?? 1);
     if ("defaultDuration" in model) setDuration(saved?.duration ?? (model as { defaultDuration: number }).defaultDuration ?? 5);
     if ("defaultMode" in model) setMode(saved?.mode ?? (model as { defaultMode: string }).defaultMode ?? "");
+    setSound(saved?.sound ?? false);
     const savedUrls = saved?.refImageUrls ?? [];
     const savedPrompt = saved?.prompt ?? "";
     setRefImages(prev => {
@@ -384,6 +434,7 @@ function GalleryInner() {
     );
     setVidStartFrame(null); setVidEndFrame(null); setVidResources([]);
     setVidVideoRef(null); setVidRefVideos([]); setVidRefAudios([]);
+    setVidElements([]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab]);
 
@@ -412,6 +463,7 @@ function GalleryInner() {
     if (isVideo) {
       setVidStartFrame(null); setVidEndFrame(null); setVidResources([]);
       setVidVideoRef(null); setVidRefVideos([]); setVidRefAudios([]);
+      setVidElements([]);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [modelId]);
@@ -434,8 +486,8 @@ function GalleryInner() {
     const refImageUrls = refImages
       .filter(r => r.cdnUrl && !r.uploading && !r.error)
       .map(r => r.cdnUrl!);
-    saveSettings(tab, { prompt, modelId, aspectRatio, quality, count, duration, mode, refImageUrls });
-  }, [tab, prompt, modelId, aspectRatio, quality, count, duration, mode, refImages]);
+    saveSettings(tab, { prompt, modelId, aspectRatio, quality, count, duration, mode, sound, refImageUrls });
+  }, [tab, prompt, modelId, aspectRatio, quality, count, duration, mode, sound, refImages]);
 
   // Track window width; set initial zoom from breakpoints
   useEffect(() => {
@@ -607,6 +659,51 @@ function GalleryInner() {
     else                              setVidRefAudios(prev => prev.filter(r => r.id !== id));
   };
 
+  // ── Media picker ──────────────────────────────────────────────────────────
+
+  const openPicker = (target: NonNullable<typeof pickerTarget>, uploadKind: "image" | "video") => {
+    setPickerTarget(target);
+    setPickerUploadKind(uploadKind);
+    setPickerOpen(true);
+  };
+
+  const handlePickerSelect = (url: string) => {
+    setPickerOpen(false);
+    if (!pickerTarget) return;
+    if (pickerTarget === "refImage") {
+      handleAddReference(url);
+      return;
+    }
+    const isDup = (slots: RefImage[]) => slots.some(r => r.cdnUrl === url || r.objectUrl === url);
+    const showDup = () => { setRefError("Already attached."); setTimeout(() => setRefError(""), 3000); };
+
+    if (pickerTarget === "resource") {
+      if (isDup(vidResources)) { showDup(); return; }
+      setVidResources(prev => [...prev, { id: crypto.randomUUID(), objectUrl: url, cdnUrl: url, uploading: false, error: false }]);
+      return;
+    }
+    if (pickerTarget === "referenceVideo") {
+      if (isDup(vidRefVideos)) { showDup(); return; }
+      setVidRefVideos(prev => [...prev, { id: crypto.randomUUID(), objectUrl: url, cdnUrl: url, uploading: false, error: false }]);
+      return;
+    }
+    const entry: RefImage = { id: crypto.randomUUID(), objectUrl: url, cdnUrl: url, uploading: false, error: false };
+    if (pickerTarget === "startFrame")    setVidStartFrame(entry);
+    else if (pickerTarget === "endFrame") setVidEndFrame(entry);
+    else if (pickerTarget === "videoRef") setVidVideoRef(entry);
+  };
+
+  const handlePickerUpload = () => {
+    setPickerOpen(false);
+    if (pickerTarget === "refImage") {
+      fileInputRef.current?.click();
+    } else if (pickerTarget) {
+      vidPickTarget.current = pickerTarget as "startFrame" | "endFrame" | "resource" | "videoRef" | "referenceVideo";
+      if (pickerUploadKind === "image") vidImgInputRef.current?.click();
+      else vidVideoInputRef.current?.click();
+    }
+  };
+
   // ── Generate ──────────────────────────────────────────────────────────────
 
   const generateOne = async (token: string): Promise<string> => {
@@ -640,14 +737,18 @@ function GalleryInner() {
       const endFrameUrl   = handles.includes("endFrame")   && vidEndFrame?.cdnUrl   ? vidEndFrame.cdnUrl   : undefined;
       const videoRefUrl   = handles.includes("videoRef")   && vidVideoRef?.cdnUrl   ? vidVideoRef.cdnUrl   : undefined;
 
-      // Kling uses {url, label} resource objects; all others use referenceImageUrls
-      const resourceUrls = handles.includes("resource")
+      const useElements = !!(vm?.apiInput.useKlingElements);
+
+      // Non-kling resource models send referenceImageUrls
+      const resourceUrls = handles.includes("resource") && !useElements
         ? vidResources.filter(r => r.cdnUrl && !r.error).map(r => r.cdnUrl!)
         : [];
-      const resources = vm?.apiInput.useKlingElements
-        ? resourceUrls.map((url, i) => ({ url, label: `Element ${i + 1}` }))
+      const referenceImageUrls = !useElements && resourceUrls.length ? resourceUrls : undefined;
+
+      // Kling: send structured elements
+      const klingElements = useElements && handles.includes("resource") && vidElements.length > 0
+        ? vidElements.map(el => ({ name: el.name, description: el.description, imageUrls: el.imageUrls }))
         : undefined;
-      const referenceImageUrls = !vm?.apiInput.useKlingElements && resourceUrls.length ? resourceUrls : undefined;
 
       const referenceVideoUrls = handles.includes("referenceVideo")
         ? vidRefVideos.filter(r => r.cdnUrl && !r.error).map(r => r.cdnUrl!)
@@ -664,15 +765,16 @@ function GalleryInner() {
           prompt,
           aspectRatio,
           duration,
+          sound: vm?.sound ? sound : false,
           mode: mode || vm?.defaultMode || "pro",
           resolution: vm && "defaultResolution" in vm ? vm.defaultResolution : undefined,
-          ...(startFrameUrl        ? { startFrameUrl }        : {}),
-          ...(endFrameUrl          ? { endFrameUrl }          : {}),
-          ...(videoRefUrl          ? { videoRefUrl }          : {}),
-          ...(resources?.length    ? { resources }            : {}),
-          ...(referenceImageUrls?.length ? { referenceImageUrls } : {}),
-          ...(referenceVideoUrls?.length ? { referenceVideoUrls } : {}),
-          ...(referenceAudioUrls?.length ? { referenceAudioUrls } : {}),
+          ...(startFrameUrl               ? { startFrameUrl }               : {}),
+          ...(endFrameUrl                 ? { endFrameUrl }                 : {}),
+          ...(videoRefUrl                 ? { videoRefUrl }                 : {}),
+          ...(klingElements?.length       ? { klingElements }               : {}),
+          ...(referenceImageUrls?.length  ? { referenceImageUrls }          : {}),
+          ...(referenceVideoUrls?.length  ? { referenceVideoUrls }          : {}),
+          ...(referenceAudioUrls?.length  ? { referenceAudioUrls }          : {}),
         }),
       });
       const d = await res.json() as { taskId?: string; error?: string };
@@ -758,8 +860,19 @@ function GalleryInner() {
       const pending = newPendings[i];
       try {
         await pollTask(taskId);
+        // Fetch fresh items before touching state so both updates land in one render.
+        const fresh = await fetchNewItems(tabRef.current);
         setPendingGens(prev => prev.filter(p => p.id !== pending.id));
-        await loadItems(tabRef.current, 0, true);
+        if (fresh.length > 0) {
+          setItems(prev => {
+            const existingIds = new Set(prev.map(i => i.id));
+            const brandNew = fresh.filter(i => !existingIds.has(i.id));
+            if (brandNew.length === 0) return prev;
+            const merged = [...brandNew, ...prev];
+            galleryCache.set(tabRef.current, { items: merged, hasMore: true });
+            return merged;
+          });
+        }
         window.dispatchEvent(new Event("credits-refresh"));
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : String(e);
@@ -793,6 +906,30 @@ function GalleryInner() {
     if (overlayInnerRef.current) overlayInnerRef.current.style.transform = "";
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [prompt]);
+
+  const openDurPicker = useCallback(() => {
+    const r = durPillRef.current?.getBoundingClientRect();
+    if (!r) return;
+    setDurPickerPos({ left: r.left, bottom: window.innerHeight - r.top + 6 });
+    setDurPickerOpen(true);
+  }, []);
+
+  const closeDurPicker = useCallback(() => {
+    if (durCloseTimer.current) clearTimeout(durCloseTimer.current);
+    setDurPickerOpen(false);
+    setDurPickerClosing(true);
+    durCloseTimer.current = setTimeout(() => setDurPickerClosing(false), 180);
+  }, []);
+
+  // Close duration picker on outside click
+  useEffect(() => {
+    if (!durPickerOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (!durPillRef.current?.contains(e.target as Node)) closeDurPicker();
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [durPickerOpen, closeDurPicker]);
 
   // Close @ menu on outside click
   useEffect(() => {
@@ -856,9 +993,10 @@ function GalleryInner() {
   const hasRefImgs = refImages.length > 0;
   const allUploaded = refImages.every(r => !r.uploading);
   const vidRefHandles = (vidModel?.handles ?? []).filter(h => h !== "prompt");
-  const hasVidRefs = isVideo && (!!vidStartFrame || !!vidEndFrame || !!vidVideoRef || vidResources.length > 0 || vidRefVideos.length > 0 || vidRefAudios.length > 0);
+  const hasVidRefs = isVideo && (!!vidStartFrame || !!vidEndFrame || !!vidVideoRef || vidResources.length > 0 || vidElements.length > 0 || vidRefVideos.length > 0 || vidRefAudios.length > 0);
 
-  const canGenerate = submitting ? false : promptOverLimit ? false : isVideo ? true : prompt.trim().length > 0;
+  const vidRequiresPrompt = isVideo && !!(vidModel?.apiInput.promptMaxLength);
+  const canGenerate = submitting ? false : promptOverLimit ? false : (vidRequiresPrompt || !isVideo) ? prompt.trim().length > 0 : true;
 
   const handleAddReference = useCallback((url: string) => {
     if (refImages.some(r => r.cdnUrl === url || r.objectUrl === url)) {
@@ -938,33 +1076,6 @@ function GalleryInner() {
       : items.filter(item => item.source === "upload"),
     [items, sourceFilter]);
 
-  const masonryColumns = useMemo<MasonryItem[][]>(() => {
-    const all: MasonryItem[] = [
-      ...pendingGens.map(pg => ({ kind: "pending" as const, pg })),
-      ...filteredItems.map(item => ({ kind: "gallery" as const, item })),
-    ];
-    const cols: MasonryItem[][] = Array.from({ length: colCount }, () => []);
-    const heights = new Array<number>(colCount).fill(0);
-    for (const mi of all) {
-      const col = heights.indexOf(Math.min(...heights));
-      cols[col].push(mi);
-      let ar = 1;
-      if (mi.kind === "pending") {
-        const [ws, hs] = mi.pg.aspectRatio.split(":");
-        const w = parseFloat(ws), h = parseFloat(hs);
-        if (w && h) ar = h / w;
-      } else {
-        const arStr = mi.item.aspect_ratio;
-        if (arStr && arStr !== "auto") {
-          const [ws, hs] = arStr.split(":");
-          const w = parseFloat(ws), h = parseFloat(hs);
-          if (w && h) ar = h / w;
-        }
-      }
-      heights[col] += ar;
-    }
-    return cols;
-  }, [pendingGens, filteredItems, colCount]);
 
   // ── Render ────────────────────────────────────────────────────────────────
 
@@ -1054,15 +1165,16 @@ function GalleryInner() {
         {!loading && filteredItems.length === 0 && pendingGens.length === 0 ? (
           <EmptyState tab={tab} />
         ) : (
-          <div style={{ display: "flex", gap: "3px", padding: "3px" }}>
-            {masonryColumns.map((col, ci) => (
-              <div key={ci} style={{ flex: 1, display: "flex", flexDirection: "column", gap: "3px", minWidth: 0 }}>
-                {col.map(mi => {
-                  if (mi.kind === "pending") {
-                    const pg = mi.pg;
-                    const [ws, hs] = pg.aspectRatio.split(":");
-                    const w = parseFloat(ws), h = parseFloat(hs);
-                    return (
+          <div style={{ columns: colCount, columnGap: "3px", padding: "3px" }}>
+            {[
+              ...pendingGens.map(pg => ({ kind: "pending" as const, pg })),
+              ...filteredItems.map(item => ({ kind: "gallery" as const, item })),
+            ].map(mi => {
+              if (mi.kind === "pending") {
+                const pg = mi.pg;
+                const [ws, hs] = pg.aspectRatio.split(":");
+                const w = parseFloat(ws), h = parseFloat(hs);
+                return (
                       <div key={pg.id} className="gallery-item" style={{
                         aspectRatio: (w && h) ? `${w} / ${h}` : "1 / 1",
                         background: pg.error ? "rgba(20,8,8,0.95)" : "#0D1012",
@@ -1153,8 +1265,18 @@ function GalleryInner() {
 
                                   try {
                                     await pollTask(taskId);
+                                    const fresh = await fetchNewItems(tabRef.current);
                                     setPendingGens(prev => prev.filter(p => p.id !== newId));
-                                    await loadItems(tabRef.current, 0, true);
+                                    if (fresh.length > 0) {
+                                      setItems(prev => {
+                                        const existingIds = new Set(prev.map(i => i.id));
+                                        const brandNew = fresh.filter(i => !existingIds.has(i.id));
+                                        if (brandNew.length === 0) return prev;
+                                        const merged = [...brandNew, ...prev];
+                                        galleryCache.set(tabRef.current, { items: merged, hasMore: true });
+                                        return merged;
+                                      });
+                                    }
                                     window.dispatchEvent(new Event("credits-refresh"));
                                   } catch (e: unknown) {
                                     const msg = e instanceof Error ? e.message : String(e);
@@ -1222,10 +1344,8 @@ function GalleryInner() {
                       videoMuted={videoMuted}
                       onToggleMute={() => setVideoMuted(m => !m)}
                     />
-                  );
-                })}
-              </div>
-            ))}
+                );
+              })}
           </div>
         )}
         <div ref={sentinelRef} style={{ height: "1px" }} />
@@ -1394,7 +1514,7 @@ function GalleryInner() {
               {/* Add-more button */}
               {canAddImgs && (
                 <button
-                  onClick={() => fileInputRef.current?.click()}
+                  onClick={() => openPicker("refImage", "image")}
                   disabled={submitting}
                   style={{
                     width: "88px",
@@ -1441,39 +1561,107 @@ function GalleryInner() {
 
           {/* ── Video reference slots ── */}
           {isVideo && vidRefHandles.length > 0 && (() => {
-            // Build a flat list of slots: filled items + one add-button per handle
             type VidSlot =
-              | { kind: "filled"; target: "startFrame"|"endFrame"|"resource"|"videoRef"|"referenceVideo"|"audioRef"; mediaKind: "image"|"video"|"audio"; color: string; label: string; ref: RefImage }
-              | { kind: "add";    target: "startFrame"|"endFrame"|"resource"|"videoRef"|"referenceVideo"|"audioRef"; mediaKind: "image"|"video"|"audio"; color: string; label: string };
+              | { kind: "filled"; target: "startFrame"|"endFrame"|"resource"|"videoRef"|"referenceVideo"|"audioRef"; mediaKind: "image"|"video"|"audio"; label: string; ref: RefImage }
+              | { kind: "add";    target: "startFrame"|"endFrame"|"resource"|"videoRef"|"referenceVideo"|"audioRef"; mediaKind: "image"|"video"|"audio"; label: string }
+              | { kind: "element-filled"; element: KlingElement }
+              | { kind: "element-add" };
             const slots: VidSlot[] = [];
+            const useElems = !!(vidModel?.apiInput.useKlingElements);
             for (const h of vidRefHandles) {
               if (h === "startFrame") {
-                if (vidStartFrame) slots.push({ kind: "filled", target: h, mediaKind: "image", color: "#60a5fa", label: "Start Frame", ref: vidStartFrame });
-                else               slots.push({ kind: "add",    target: h, mediaKind: "image", color: "#60a5fa", label: "Start Frame" });
+                if (vidStartFrame) slots.push({ kind: "filled", target: h, mediaKind: "image", label: "Start Frame", ref: vidStartFrame });
+                else               slots.push({ kind: "add",    target: h, mediaKind: "image", label: "Start Frame" });
               } else if (h === "endFrame") {
-                if (vidEndFrame)   slots.push({ kind: "filled", target: h, mediaKind: "image", color: "#a78bfa", label: "End Frame", ref: vidEndFrame });
-                else               slots.push({ kind: "add",    target: h, mediaKind: "image", color: "#a78bfa", label: "End Frame" });
+                if (vidEndFrame)   slots.push({ kind: "filled", target: h, mediaKind: "image", label: "End Frame", ref: vidEndFrame });
+                else               slots.push({ kind: "add",    target: h, mediaKind: "image", label: "End Frame" });
               } else if (h === "videoRef") {
-                if (vidVideoRef)   slots.push({ kind: "filled", target: h, mediaKind: "video", color: "#fb923c", label: "Ref Video", ref: vidVideoRef });
-                else               slots.push({ kind: "add",    target: h, mediaKind: "video", color: "#fb923c", label: "Ref Video" });
+                if (vidVideoRef)   slots.push({ kind: "filled", target: h, mediaKind: "video", label: "Ref Video", ref: vidVideoRef });
+                else               slots.push({ kind: "add",    target: h, mediaKind: "video", label: "Ref Video" });
               } else if (h === "resource") {
-                vidResources.forEach(r => slots.push({ kind: "filled", target: h, mediaKind: "image", color: "#34d399", label: "Resource", ref: r }));
-                if (vidResources.length < (vidModel?.maxResources ?? 3))
-                  slots.push({ kind: "add", target: h, mediaKind: "image", color: "#34d399", label: "Resource" });
+                if (useElems) {
+                  vidElements.forEach(el => slots.push({ kind: "element-filled", element: el }));
+                  if (vidElements.length < 3) slots.push({ kind: "element-add" });
+                } else {
+                  vidResources.forEach(r => slots.push({ kind: "filled", target: h, mediaKind: "image", label: "Resource", ref: r }));
+                  if (vidResources.length < (vidModel?.maxResources ?? 3))
+                    slots.push({ kind: "add", target: h, mediaKind: "image", label: "Resource" });
+                }
               } else if (h === "referenceVideo") {
-                vidRefVideos.forEach(r => slots.push({ kind: "filled", target: h, mediaKind: "video", color: "#fb923c", label: "Ref Video", ref: r }));
+                vidRefVideos.forEach(r => slots.push({ kind: "filled", target: h, mediaKind: "video", label: "Ref Video", ref: r }));
                 if (vidRefVideos.length < (vidModel?.maxReferenceVideos ?? 3))
-                  slots.push({ kind: "add", target: h, mediaKind: "video", color: "#fb923c", label: "Ref Video" });
+                  slots.push({ kind: "add", target: h, mediaKind: "video", label: "Ref Video" });
               } else if (h === "audioRef") {
-                vidRefAudios.forEach(r => slots.push({ kind: "filled", target: h, mediaKind: "audio", color: "#f472b6", label: "Audio", ref: r }));
+                vidRefAudios.forEach(r => slots.push({ kind: "filled", target: h, mediaKind: "audio", label: "Audio", ref: r }));
                 if (vidRefAudios.length < (vidModel?.maxReferenceAudios ?? 3))
-                  slots.push({ kind: "add", target: h, mediaKind: "audio", color: "#f472b6", label: "Audio" });
+                  slots.push({ kind: "add", target: h, mediaKind: "audio", label: "Audio" });
               }
             }
             return (
               <div style={{ padding: "14px 16px 0", display: "flex", gap: "10px", flexWrap: "wrap", alignItems: "flex-start" }}>
                 {slots.map((slot, idx) => {
-                  const { target, mediaKind, color, label } = slot;
+                  // ── Element-filled slot ──────────────────────────────────────
+                  if (slot.kind === "element-filled") {
+                    const el = slot.element;
+                    const thumb = el.imageUrls[0];
+                    return (
+                      <div key={el.id} style={{
+                        position: "relative", width: "88px", height: "80px",
+                        borderRadius: "10px", overflow: "hidden", flexShrink: 0,
+                        background: "#1a1c1f", border: "1px solid rgba(255,255,255,0.12)",
+                      }}>
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img src={thumb} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
+                        {el.imageUrls.length > 1 && (
+                          <div style={{ position: "absolute", top: "5px", left: "5px", background: "rgba(0,0,0,0.65)", borderRadius: "4px", padding: "1px 5px", fontSize: "9px", fontWeight: 700, color: "rgba(255,255,255,0.85)", letterSpacing: "0.04em" }}>
+                            {el.imageUrls.length}
+                          </div>
+                        )}
+                        <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, padding: "12px 5px 4px", background: "linear-gradient(to top, rgba(0,0,0,0.8) 0%, transparent 100%)", textAlign: "center" }}>
+                          <span style={{ fontSize: "9px", fontWeight: 700, letterSpacing: "0.04em", color: "rgba(255,255,255,0.85)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", display: "block", padding: "0 4px" }}>{el.name}</span>
+                        </div>
+                        <button onClick={() => setVidElements(prev => prev.filter(e => e.id !== el.id))} style={{
+                          position: "absolute", top: "5px", right: "5px", width: "20px", height: "20px",
+                          borderRadius: "50%", background: "rgba(0,0,0,0.7)", border: "1px solid rgba(255,255,255,0.15)",
+                          color: "rgba(255,255,255,0.85)", cursor: "pointer",
+                          display: "flex", alignItems: "center", justifyContent: "center", padding: 0, transition: "background 120ms",
+                        }}
+                          onMouseEnter={e => { e.currentTarget.style.background = "rgba(0,0,0,0.9)"; }}
+                          onMouseLeave={e => { e.currentTarget.style.background = "rgba(0,0,0,0.7)"; }}>
+                          <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+                        </button>
+                      </div>
+                    );
+                  }
+
+                  // ── Element-add slot ─────────────────────────────────────────
+                  if (slot.kind === "element-add") {
+                    return (
+                      <button key={`element-add-${idx}`}
+                        onClick={() => setElementPickerOpen(true)}
+                        disabled={submitting}
+                        style={{
+                          width: "88px", height: "80px", borderRadius: "10px", flexShrink: 0,
+                          border: "1.5px dashed rgba(255,255,255,0.2)", background: "rgba(255,255,255,0.03)",
+                          cursor: submitting ? "not-allowed" : "pointer",
+                          display: "flex", flexDirection: "column", alignItems: "center",
+                          justifyContent: "center", gap: "5px", color: "rgba(255,255,255,0.4)",
+                          transition: "border-color 140ms, background 140ms, color 140ms",
+                        }}
+                        onMouseEnter={e => { if (!submitting) { e.currentTarget.style.borderColor = "rgba(255,255,255,0.4)"; e.currentTarget.style.background = "rgba(255,255,255,0.06)"; e.currentTarget.style.color = "rgba(255,255,255,0.8)"; } }}
+                        onMouseLeave={e => { e.currentTarget.style.borderColor = "rgba(255,255,255,0.2)"; e.currentTarget.style.background = "rgba(255,255,255,0.03)"; e.currentTarget.style.color = "rgba(255,255,255,0.4)"; }}
+                      >
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/>
+                          <path d="M20 3v4M22 5h-4"/>
+                        </svg>
+                        <span style={{ fontSize: "10px", fontWeight: 600, letterSpacing: "0.04em", textTransform: "uppercase" as const }}>Element</span>
+                      </button>
+                    );
+                  }
+
+                  // ── Regular filled / add slots ───────────────────────────────
+                  const { target, mediaKind, label } = slot;
                   const MediaIcon = () => mediaKind === "image" ? (
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
                       <rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/>
@@ -1484,7 +1672,8 @@ function GalleryInner() {
                     </svg>
                   ) : (
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                      <polygon points="5 3 19 12 5 21 5 3"/>
+                      <rect x="2" y="5" width="15" height="14" rx="2"/>
+                      <path d="m17 8 5-3v14l-5-3V8Z"/>
                     </svg>
                   );
 
@@ -1492,36 +1681,41 @@ function GalleryInner() {
                     const r = slot.ref;
                     return (
                       <div key={r.id} style={{
-                        position: "relative", width: "88px", height: "80px",
-                        borderRadius: "10px", overflow: "hidden", flexShrink: 0,
-                        background: "#1a1c1f",
-                        border: r.error ? "1px solid rgba(248,113,113,0.4)" : `1px solid ${color}44`,
-                      }}>
+                          position: "relative", width: "88px", height: "80px",
+                          borderRadius: "10px", overflow: "hidden", flexShrink: 0,
+                          background: "#1a1c1f",
+                          border: r.error ? "1px solid rgba(248,113,113,0.4)" : "1px solid rgba(255,255,255,0.12)",
+                        }}>
                         {mediaKind === "image" ? (
                           // eslint-disable-next-line @next/next/no-img-element
                           <img src={r.objectUrl} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
+                        ) : mediaKind === "video" ? (
+                          <video
+                            src={r.objectUrl}
+                            autoPlay
+                            muted
+                            loop
+                            playsInline
+                            style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+                          />
                         ) : (
-                          <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", background: `${color}11` }}>
-                            <span style={{ color }}><MediaIcon /></span>
+                          <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(255,255,255,0.04)", color: "rgba(255,255,255,0.5)" }}>
+                            <MediaIcon />
                           </div>
                         )}
-                        {/* Label bar */}
                         <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, padding: "12px 5px 4px", background: "linear-gradient(to top, rgba(0,0,0,0.75) 0%, transparent 100%)", textAlign: "center" }}>
-                          <span style={{ fontSize: "9px", fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase" as const, color }}>{label}</span>
+                          <span style={{ fontSize: "9px", fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase" as const, color: "rgba(255,255,255,0.7)" }}>{label}</span>
                         </div>
-                        {/* Uploading overlay */}
                         {r.uploading && (
                           <div style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,0.55)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                            <span style={{ width: "16px", height: "16px", borderRadius: "50%", border: `2px solid ${color}33`, borderTopColor: color, display: "inline-block", animation: "spin 0.75s linear infinite" }} />
+                            <span style={{ width: "16px", height: "16px", borderRadius: "50%", border: "2px solid rgba(255,255,255,0.15)", borderTopColor: "rgba(255,255,255,0.8)", display: "inline-block", animation: "spin 0.75s linear infinite" }} />
                           </div>
                         )}
-                        {/* Error overlay */}
                         {r.error && (
                           <div style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,0.55)", display: "flex", alignItems: "center", justifyContent: "center" }}>
                             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#f87171" strokeWidth="2" strokeLinecap="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
                           </div>
                         )}
-                        {/* X button */}
                         <button onClick={() => removeVidRef(r.id, target)} style={{
                           position: "absolute", top: "5px", right: "5px", width: "20px", height: "20px",
                           borderRadius: "50%", background: "rgba(0,0,0,0.7)", border: "1px solid rgba(255,255,255,0.15)",
@@ -1536,26 +1730,27 @@ function GalleryInner() {
                     );
                   }
 
-                  // Add button
                   return (
                     <button key={`${target}-add-${idx}`}
                       onClick={() => {
-                        vidPickTarget.current = target;
-                        if (mediaKind === "image") vidImgInputRef.current?.click();
-                        else if (mediaKind === "audio") vidAudioInputRef.current?.click();
-                        else vidVideoInputRef.current?.click();
+                        if (mediaKind === "audio") {
+                          vidPickTarget.current = target;
+                          vidAudioInputRef.current?.click();
+                        } else {
+                          openPicker(target as "startFrame" | "endFrame" | "resource" | "videoRef" | "referenceVideo", mediaKind);
+                        }
                       }}
                       disabled={submitting}
                       style={{
                         width: "88px", height: "80px", borderRadius: "10px", flexShrink: 0,
-                        border: `1.5px dashed ${color}55`, background: `${color}08`,
+                        border: "1.5px dashed rgba(255,255,255,0.2)", background: "rgba(255,255,255,0.03)",
                         cursor: submitting ? "not-allowed" : "pointer",
                         display: "flex", flexDirection: "column", alignItems: "center",
-                        justifyContent: "center", gap: "5px", color: `${color}99`,
+                        justifyContent: "center", gap: "5px", color: "rgba(255,255,255,0.4)",
                         transition: "border-color 140ms, background 140ms, color 140ms",
                       }}
-                      onMouseEnter={e => { if (!submitting) { e.currentTarget.style.borderColor = `${color}bb`; e.currentTarget.style.background = `${color}12`; e.currentTarget.style.color = color; } }}
-                      onMouseLeave={e => { e.currentTarget.style.borderColor = `${color}55`; e.currentTarget.style.background = `${color}08`; e.currentTarget.style.color = `${color}99`; }}
+                      onMouseEnter={e => { if (!submitting) { e.currentTarget.style.borderColor = "rgba(255,255,255,0.4)"; e.currentTarget.style.background = "rgba(255,255,255,0.06)"; e.currentTarget.style.color = "rgba(255,255,255,0.8)"; } }}
+                      onMouseLeave={e => { e.currentTarget.style.borderColor = "rgba(255,255,255,0.2)"; e.currentTarget.style.background = "rgba(255,255,255,0.03)"; e.currentTarget.style.color = "rgba(255,255,255,0.4)"; }}
                     >
                       <MediaIcon />
                       <span style={{ fontSize: "10px", fontWeight: 600, letterSpacing: "0.04em", textTransform: "uppercase" as const }}>{label}</span>
@@ -1745,14 +1940,28 @@ function GalleryInner() {
                   />
                 )}
 
-                {/* Duration (video) */}
+                {/* Duration (video) — slider pill */}
                 {isVideo && durations.length > 0 && (
-                  <CustomDropdown
-                    value={String(duration)}
-                    onChange={v => setDuration(Number(v))}
+                  <button
+                    ref={durPillRef}
+                    onClick={() => durPickerOpen ? closeDurPicker() : openDurPicker()}
                     disabled={submitting}
-                    options={durations.map(d => ({ value: String(d), label: `${d}s` }))}
-                  />
+                    style={{
+                      display: "flex", alignItems: "center", gap: "5px",
+                      height: "36px", padding: "0 11px",
+                      borderRadius: "8px",
+                      border: durPickerOpen ? "1px solid rgba(255,255,255,0.18)" : "1px solid rgba(255,255,255,0.1)",
+                      background: durPickerOpen ? "rgba(255,255,255,0.08)" : "rgba(255,255,255,0.05)",
+                      color: "#fff", fontSize: "13px", fontFamily: "inherit",
+                      cursor: submitting ? "not-allowed" : "pointer",
+                      transition: "border-color 140ms, background 140ms",
+                      flexShrink: 0,
+                    }}>
+                    <span style={{ fontVariantNumeric: "tabular-nums", display: "inline-block", width: "2ch", textAlign: "right" }}>{duration}</span><span>s</span>
+                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.45)" strokeWidth="2.5" strokeLinecap="round" style={{ transition: "transform 180ms cubic-bezier(0.16,1,0.3,1)", transform: durPickerOpen ? "rotate(180deg)" : "rotate(0deg)" }}>
+                      <polyline points="6 9 12 15 18 9"/>
+                    </svg>
+                  </button>
                 )}
 
                 {/* Mode (video) */}
@@ -1763,6 +1972,42 @@ function GalleryInner() {
                     disabled={submitting}
                     options={vidModes.map(m => ({ value: m.value, label: m.label }))}
                   />
+                )}
+
+                {/* Sound toggle (video) */}
+                {isVideo && vidModel?.sound && (
+                  <button
+                    onClick={() => setSound(s => !s)}
+                    disabled={submitting}
+                    style={{
+                      display: "flex", alignItems: "center", gap: "7px",
+                      height: "36px", padding: "0 12px",
+                      borderRadius: "8px",
+                      border: "1px solid rgba(255,255,255,0.1)",
+                      background: sound ? "rgba(167,139,250,0.12)" : "rgba(255,255,255,0.05)",
+                      color: sound ? "#a78bfa" : "rgba(255,255,255,0.55)",
+                      fontSize: "13px", fontFamily: "inherit",
+                      cursor: submitting ? "not-allowed" : "pointer",
+                      transition: "background 150ms, color 150ms, border-color 150ms",
+                      flexShrink: 0,
+                    }}>
+                    {/* Toggle pill */}
+                    <span style={{
+                      width: "28px", height: "16px", borderRadius: "8px",
+                      background: sound ? "#a78bfa" : "rgba(255,255,255,0.18)",
+                      position: "relative", flexShrink: 0,
+                      transition: "background 150ms",
+                    }}>
+                      <span style={{
+                        position: "absolute", top: "2px",
+                        left: sound ? "14px" : "2px",
+                        width: "12px", height: "12px", borderRadius: "50%",
+                        background: sound ? "#1e1040" : "#ffffff",
+                        transition: "left 150ms",
+                      }} />
+                    </span>
+                    Sound
+                  </button>
                 )}
 
                 {/* Count stepper (image only) — last control */}
@@ -1990,6 +2235,61 @@ function GalleryInner() {
         <Lightbox item={lightboxItem} onClose={() => setLightboxItem(null)} />
       )}
 
+      {/* Duration picker popover — portal so it escapes overflow/transform ancestors */}
+      {(durPickerOpen || durPickerClosing) && durPickerPos && createPortal(
+        <div
+          onMouseDown={e => e.stopPropagation()}
+          className={durPickerClosing ? "dur-picker-out" : "dur-picker-in"}
+          style={{
+            position: "fixed",
+            left: durPickerPos.left,
+            bottom: durPickerPos.bottom,
+            zIndex: 9200,
+            background: "rgba(18,20,22,0.98)",
+            border: "1px solid rgba(255,255,255,0.1)",
+            borderRadius: "12px",
+            padding: "12px 14px",
+            boxShadow: "0 12px 40px rgba(0,0,0,0.7)",
+            minWidth: "220px",
+            transformOrigin: "bottom left",
+          }}>
+          <p style={{ margin: "0 0 10px", fontSize: "12px", fontWeight: 600, color: "#fff" }}>Duration</p>
+          <div style={{ display: "flex", alignItems: "center", gap: "10px", padding: "8px 12px", borderRadius: "8px", background: "#161A1E" }}>
+            <span style={{ fontSize: "11px", color: "rgba(255,255,255,0.6)", fontVariantNumeric: "tabular-nums", minWidth: "24px" }}>{duration}s</span>
+            <div style={{ width: "1px", height: "14px", background: "#2A2A2A", flexShrink: 0 }} />
+            <input
+              type="range"
+              min={0}
+              max={durations.length - 1}
+              step={1}
+              value={Math.max(0, durations.indexOf(duration))}
+              onChange={e => setDuration(durations[parseInt(e.target.value)])}
+              className="dur-slider"
+              style={{ flex: 1 }}
+            />
+          </div>
+        </div>,
+        document.body,
+      )}
+
+      <MediaPickerModal
+        open={pickerOpen}
+        mediaKind={pickerUploadKind}
+        onClose={() => setPickerOpen(false)}
+        onPickUrl={handlePickerSelect}
+        onUpload={handlePickerUpload}
+      />
+
+      <ElementPickerModal
+        open={elementPickerOpen}
+        attached={vidElements}
+        onClose={() => setElementPickerOpen(false)}
+        onAttach={el => {
+          setVidElements(prev => prev.some(e => e.id === el.id) ? prev : [...prev, el]);
+          setElementPickerOpen(false);
+        }}
+      />
+
       <DownloadToast downloads={downloads} onClear={() => setDownloads([])} />
 
       {refError && (
@@ -2040,6 +2340,530 @@ interface DropOption {
   group?: string;
   preview?: React.ReactNode;
   providerIcon?: React.ReactNode;
+}
+
+// ── Media picker modal ───────────────────────────────────────────────────────
+
+function MediaPickerModal({
+  open, mediaKind, onClose, onPickUrl, onUpload,
+}: {
+  open: boolean;
+  mediaKind: "image" | "video";
+  onClose: () => void;
+  onPickUrl: (url: string) => void;
+  onUpload: () => void;
+}) {
+  const genTab = mediaKind === "image" ? "image-gen" : "video-gen";
+  const [activeTab, setActiveTab] = useState<"gen" | "uploads">("gen");
+  const [sourceItems, setSourceItems] = useState<GalleryItem[]>(
+    () => galleryCache.get(mediaKind === "image" ? "images" : "videos")?.items ?? [],
+  );
+  const [fetching, setFetching] = useState(false);
+
+  // Reset tab and load fresh data each time the picker opens
+  useEffect(() => {
+    if (!open) return;
+    setActiveTab("gen");
+    const cacheKey = mediaKind === "image" ? "images" : "videos";
+    setSourceItems(galleryCache.get(cacheKey)?.items ?? []);
+    setFetching(true);
+    (async () => {
+      const token = await getToken();
+      if (!token) { setFetching(false); return; }
+      const res = await fetch(`/api/gallery?type=${mediaKind === "image" ? "image" : "video"}&page=0`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) setSourceItems((await res.json() as { items: GalleryItem[] }).items);
+      setFetching(false);
+    })();
+  }, [open, mediaKind]);
+
+  const displayItems = useMemo(() =>
+    activeTab === "uploads"
+      ? sourceItems.filter(i => i.source === "upload")
+      : sourceItems.filter(i => i.source === "generation"),
+  [activeTab, sourceItems]);
+
+  if (!open) return null;
+
+  const tabs = [
+    { id: "gen" as const,     label: mediaKind === "image" ? "Image Generations" : "Video Generations" },
+    { id: "uploads" as const, label: "Uploads" },
+  ];
+
+  return createPortal(
+    <div
+      style={{ position: "fixed", inset: 0, zIndex: 9000, display: "flex", alignItems: "center", justifyContent: "center", pointerEvents: "none" }}
+    >
+      <div
+        onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}
+        style={{ position: "absolute", inset: 0, pointerEvents: "auto" }}
+      />
+      <div
+        style={{
+          position: "relative",
+          width: "min(660px, calc(100vw - 32px))",
+          height: "520px",
+          background: "rgba(14,16,18,0.98)",
+          border: "1px solid rgba(255,255,255,0.09)",
+          borderRadius: "18px",
+          display: "flex",
+          flexDirection: "column",
+          overflow: "hidden",
+          boxShadow: "0 32px 80px rgba(0,0,0,0.9), 0 0 0 1px rgba(255,255,255,0.04)",
+          pointerEvents: "auto",
+        }}
+      >
+        {/* Tab bar */}
+        <div style={{
+          padding: "14px 18px 0", display: "flex", alignItems: "center", gap: "4px",
+          flexShrink: 0, borderBottom: "1px solid rgba(255,255,255,0.06)", paddingBottom: "12px",
+        }}>
+          {tabs.map(t => {
+            const active = activeTab === t.id;
+            return (
+              <button key={t.id} onClick={() => setActiveTab(t.id)} style={{
+                padding: "6px 16px", borderRadius: "100px", border: "none", cursor: "pointer",
+                fontSize: "13px", fontWeight: active ? 600 : 400,
+                background: active ? "#ffffff" : "transparent",
+                color: active ? "#000000" : "rgba(255,255,255,0.5)",
+                transition: "background 150ms, color 150ms",
+              }}>
+                {t.label}
+              </button>
+            );
+          })}
+          <button onClick={onClose} style={{
+            marginLeft: "auto", width: "28px", height: "28px", borderRadius: "50%", flexShrink: 0,
+            background: "rgba(255,255,255,0.07)", border: "none",
+            color: "rgba(255,255,255,0.6)", cursor: "pointer",
+            display: "flex", alignItems: "center", justifyContent: "center", transition: "background 120ms",
+          }}
+            onMouseEnter={e => { e.currentTarget.style.background = "rgba(255,255,255,0.13)"; }}
+            onMouseLeave={e => { e.currentTarget.style.background = "rgba(255,255,255,0.07)"; }}>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+              <path d="M18 6 6 18M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+
+        {/* Scrollable grid */}
+        <div className="picker-scroll" style={{ flex: 1, overflowY: "auto", overflowX: "hidden", padding: "14px 18px 18px" }}>
+          {fetching && displayItems.length === 0 ? (
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "200px" }}>
+              <span style={{ width: "24px", height: "24px", borderRadius: "50%", border: "2px solid rgba(255,255,255,0.1)", borderTopColor: "#ff3df5", display: "inline-block", animation: "spin 0.75s linear infinite" }} />
+            </div>
+          ) : (
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: "6px" }}>
+              {/* Upload card — same size as gallery items */}
+              <button
+                onClick={onUpload}
+                style={{
+                  aspectRatio: "1",
+                  borderRadius: "8px",
+                  border: "1.5px dashed rgba(255,255,255,0.16)",
+                  background: "rgba(255,255,255,0.025)",
+                  cursor: "pointer",
+                  display: "flex", flexDirection: "column",
+                  alignItems: "center", justifyContent: "center", gap: "8px",
+                  color: "rgba(255,255,255,0.5)",
+                  transition: "background 150ms, border-color 150ms, color 150ms",
+                  padding: 0,
+                }}
+                onMouseEnter={e => { e.currentTarget.style.background = "rgba(255,255,255,0.055)"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.3)"; e.currentTarget.style.color = "rgba(255,255,255,0.85)"; }}
+                onMouseLeave={e => { e.currentTarget.style.background = "rgba(255,255,255,0.025)"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.16)"; e.currentTarget.style.color = "rgba(255,255,255,0.5)"; }}
+              >
+                <div style={{ width: "30px", height: "30px", borderRadius: "50%", background: "rgba(255,255,255,0.09)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M12 5v14M5 12h14" />
+                  </svg>
+                </div>
+                <span style={{ fontSize: "10px", fontWeight: 500 }}>Upload</span>
+              </button>
+
+              {/* Gallery items */}
+              {displayItems.map(item => (
+                <button
+                  key={item.id}
+                  onClick={() => onPickUrl(item.url)}
+                  style={{
+                    position: "relative", aspectRatio: "1", borderRadius: "8px", overflow: "hidden",
+                    background: "#1a1c1f", border: "2px solid transparent",
+                    cursor: "pointer", padding: 0,
+                    transition: "border-color 110ms, transform 110ms",
+                  }}
+                  onMouseEnter={e => {
+                    e.currentTarget.style.borderColor = "rgba(255,255,255,0.5)";
+                    e.currentTarget.style.transform = "scale(1.04)";
+                    const v = e.currentTarget.querySelector("video");
+                    if (v) v.play().catch(() => {});
+                    const overlay = e.currentTarget.querySelector<HTMLElement>(".picker-play-icon");
+                    if (overlay) overlay.style.opacity = "0";
+                  }}
+                  onMouseLeave={e => {
+                    e.currentTarget.style.borderColor = "transparent";
+                    e.currentTarget.style.transform = "scale(1)";
+                    const v = e.currentTarget.querySelector("video");
+                    if (v) { v.pause(); v.currentTime = 0; }
+                    const overlay = e.currentTarget.querySelector<HTMLElement>(".picker-play-icon");
+                    if (overlay) overlay.style.opacity = "1";
+                  }}
+                >
+                  {item.mediaType === "video" ? (
+                    <video
+                      src={item.url}
+                      muted
+                      playsInline
+                      preload="metadata"
+                      style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+                      onLoadedMetadata={e => { (e.target as HTMLVideoElement).currentTime = 0.001; }}
+                    />
+                  ) : (
+                    <NextImage
+                      src={item.url}
+                      alt=""
+                      fill
+                      sizes="120px"
+                      style={{ objectFit: "cover" }}
+                    />
+                  )}
+                  {item.mediaType === "video" && (
+                    <div className="picker-play-icon" style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", pointerEvents: "none", transition: "opacity 120ms" }}>
+                      <div style={{ width: "26px", height: "26px", borderRadius: "50%", background: "rgba(0,0,0,0.55)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                        <svg width="9" height="9" viewBox="0 0 24 24" fill="white">
+                          <polygon points="5 3 19 12 5 21 5 3" />
+                        </svg>
+                      </div>
+                    </div>
+                  )}
+                </button>
+              ))}
+
+              {displayItems.length === 0 && !fetching && (
+                <div style={{ gridColumn: "1 / -1", padding: "48px 0", textAlign: "center", color: "rgba(255,255,255,0.22)", fontSize: "13px" }}>
+                  Nothing here yet
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+  void genTab; // suppress unused var
+}
+
+// ── Element picker modal ─────────────────────────────────────────────────────
+
+function ElementPickerModal({
+  open,
+  attached,
+  onClose,
+  onAttach,
+}: {
+  open: boolean;
+  attached: KlingElement[];
+  onClose: () => void;
+  onAttach: (el: KlingElement) => void;
+}) {
+  const [view, setView] = useState<"browse" | "create">("browse");
+  const [elements, setElements] = useState<KlingElement[]>([]);
+
+  // Create form state
+  const [createName, setCreateName] = useState("");
+  const [createDesc, setCreateDesc] = useState("");
+  const [createImages, setCreateImages] = useState<{ id: string; objectUrl: string; cdnUrl: string | null; uploading: boolean; error: boolean }[]>([]);
+  const [creating, setCreating] = useState(false);
+  const createFileRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    setView("browse");
+    setElements(loadKlingElements());
+    setCreateName("");
+    setCreateDesc("");
+    setCreateImages([]);
+    setCreating(false);
+  }, [open]);
+
+  if (!open) return null;
+
+  const handleDeleteElement = (id: string) => {
+    const updated = elements.filter(e => e.id !== id);
+    setElements(updated);
+    saveKlingElements(updated);
+  };
+
+  const handleCreateImages = async (files: FileList) => {
+    const remaining = 4 - createImages.length;
+    const toAdd = Array.from(files).slice(0, remaining).filter(
+      f => (f.type === "image/jpeg" || f.type === "image/png") && f.size <= 10 * 1024 * 1024
+    );
+    if (!toAdd.length) return;
+    const newEntries = toAdd.map(f => ({
+      id: crypto.randomUUID(),
+      objectUrl: URL.createObjectURL(f),
+      cdnUrl: null as string | null,
+      uploading: true,
+      error: false,
+    }));
+    setCreateImages(prev => [...prev, ...newEntries]);
+    const token = await getToken();
+    await Promise.all(toAdd.map(async (file, i) => {
+      const entry = newEntries[i];
+      try {
+        const res = await fetch("/api/upload-asset", {
+          method: "POST",
+          headers: { "Content-Type": file.type, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+          body: file,
+        });
+        const data = await res.json() as { cdnUrl?: string; error?: string };
+        if (!res.ok || !data.cdnUrl) throw new Error(data.error ?? "Upload failed");
+        setCreateImages(prev => prev.map(e => e.id === entry.id ? { ...e, cdnUrl: data.cdnUrl!, uploading: false } : e));
+      } catch {
+        setCreateImages(prev => prev.map(e => e.id === entry.id ? { ...e, uploading: false, error: true } : e));
+      }
+    }));
+  };
+
+  const readyImages = createImages.filter(e => e.cdnUrl && !e.error);
+  const canCreate = createName.trim().length > 0
+    && readyImages.length >= 2
+    && !createImages.some(e => e.uploading)
+    && !creating;
+
+  const handleCreate = () => {
+    if (!canCreate) return;
+    setCreating(true);
+    const newEl: KlingElement = {
+      id: crypto.randomUUID(),
+      name: createName.trim(),
+      description: createDesc.trim(),
+      imageUrls: readyImages.map(e => e.cdnUrl!),
+    };
+    const updated = [...loadKlingElements(), newEl];
+    saveKlingElements(updated);
+    createImages.forEach(e => URL.revokeObjectURL(e.objectUrl));
+    onAttach(newEl);
+  };
+
+  return createPortal(
+    <div style={{ position: "fixed", inset: 0, zIndex: 9100, display: "flex", alignItems: "center", justifyContent: "center", pointerEvents: "none" }}>
+      <div onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }} style={{ position: "absolute", inset: 0, pointerEvents: "auto" }} />
+      <div style={{
+        position: "relative",
+        width: "min(520px, calc(100vw - 32px))",
+        maxHeight: "80vh",
+        background: "rgba(14,16,18,0.98)",
+        border: "1px solid rgba(255,255,255,0.09)",
+        borderRadius: "18px",
+        display: "flex",
+        flexDirection: "column",
+        overflow: "hidden",
+        boxShadow: "0 32px 80px rgba(0,0,0,0.9), 0 0 0 1px rgba(255,255,255,0.04)",
+        pointerEvents: "auto",
+      }}>
+        {/* Header */}
+        <div style={{ padding: "16px 18px 14px", display: "flex", alignItems: "center", gap: "10px", borderBottom: "1px solid rgba(255,255,255,0.06)", flexShrink: 0 }}>
+          {view === "create" && (
+            <button onClick={() => setView("browse")} style={{ width: "28px", height: "28px", borderRadius: "50%", background: "rgba(255,255,255,0.07)", border: "none", color: "rgba(255,255,255,0.6)", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, transition: "background 120ms" }}
+              onMouseEnter={e => { e.currentTarget.style.background = "rgba(255,255,255,0.13)"; }}
+              onMouseLeave={e => { e.currentTarget.style.background = "rgba(255,255,255,0.07)"; }}>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M15 18l-6-6 6-6"/></svg>
+            </button>
+          )}
+          <span style={{ fontSize: "14px", fontWeight: 600, color: "#fff", letterSpacing: "-0.01em" }}>
+            {view === "browse" ? "Elements" : "New Element"}
+          </span>
+          <button onClick={onClose} style={{ marginLeft: "auto", width: "28px", height: "28px", borderRadius: "50%", background: "rgba(255,255,255,0.07)", border: "none", color: "rgba(255,255,255,0.6)", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, transition: "background 120ms" }}
+            onMouseEnter={e => { e.currentTarget.style.background = "rgba(255,255,255,0.13)"; }}
+            onMouseLeave={e => { e.currentTarget.style.background = "rgba(255,255,255,0.07)"; }}>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+          </button>
+        </div>
+
+        {view === "browse" ? (
+          /* ── Browse view ── */
+          <div className="picker-scroll" style={{ flex: 1, overflowY: "auto", padding: "16px 18px 18px" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "10px" }}>
+              {/* Create new card */}
+              <button onClick={() => setView("create")} style={{
+                aspectRatio: "1", borderRadius: "10px", border: "1.5px dashed rgba(255,255,255,0.16)",
+                background: "rgba(255,255,255,0.025)", cursor: "pointer",
+                display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: "8px",
+                color: "rgba(255,255,255,0.5)", transition: "background 150ms, border-color 150ms, color 150ms", padding: 0,
+              }}
+                onMouseEnter={e => { e.currentTarget.style.background = "rgba(255,255,255,0.055)"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.3)"; e.currentTarget.style.color = "rgba(255,255,255,0.85)"; }}
+                onMouseLeave={e => { e.currentTarget.style.background = "rgba(255,255,255,0.025)"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.16)"; e.currentTarget.style.color = "rgba(255,255,255,0.5)"; }}>
+                <div style={{ width: "32px", height: "32px", borderRadius: "50%", background: "rgba(255,255,255,0.09)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M12 5v14M5 12h14"/></svg>
+                </div>
+                <span style={{ fontSize: "11px", fontWeight: 500 }}>New element</span>
+              </button>
+
+              {/* Element cards */}
+              {elements.map(el => {
+                const isAttached = attached.some(a => a.id === el.id);
+                const atMax = attached.length >= 3 && !isAttached;
+                return (
+                  <div key={el.id} style={{ position: "relative", aspectRatio: "1" }}>
+                    <button
+                      onClick={() => { if (!isAttached && !atMax) onAttach(el); }}
+                      disabled={isAttached || atMax}
+                      style={{
+                        width: "100%", height: "100%", borderRadius: "10px", overflow: "hidden",
+                        border: isAttached ? "2px solid #77e544" : "2px solid transparent",
+                        background: "#1a1c1f", cursor: isAttached || atMax ? "default" : "pointer",
+                        padding: 0, display: "block", position: "relative",
+                        transition: "border-color 110ms, opacity 110ms",
+                        opacity: atMax ? 0.4 : 1,
+                      }}
+                      onMouseEnter={e => { if (!isAttached && !atMax) e.currentTarget.style.borderColor = "rgba(255,255,255,0.5)"; }}
+                      onMouseLeave={e => { if (!isAttached) e.currentTarget.style.borderColor = "transparent"; }}>
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={el.imageUrls[0]} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
+                      {el.imageUrls.length > 1 && (
+                        <div style={{ position: "absolute", top: "5px", left: "5px", background: "rgba(0,0,0,0.65)", borderRadius: "4px", padding: "1px 5px", fontSize: "9px", fontWeight: 700, color: "rgba(255,255,255,0.85)" }}>
+                          {el.imageUrls.length}
+                        </div>
+                      )}
+                      <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, padding: "14px 6px 5px", background: "linear-gradient(to top, rgba(0,0,0,0.8) 0%, transparent 100%)" }}>
+                        <span style={{ fontSize: "10px", fontWeight: 600, color: "rgba(255,255,255,0.9)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", display: "block" }}>{el.name}</span>
+                      </div>
+                      {isAttached && (
+                        <div style={{ position: "absolute", top: "5px", right: "5px", width: "18px", height: "18px", borderRadius: "50%", background: "#77e544", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                          <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="#000" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                        </div>
+                      )}
+                    </button>
+                    {/* Delete button */}
+                    <button onClick={e => { e.stopPropagation(); handleDeleteElement(el.id); }} style={{
+                      position: "absolute", bottom: "5px", right: "5px", width: "20px", height: "20px",
+                      borderRadius: "50%", background: "rgba(0,0,0,0.7)", border: "1px solid rgba(255,255,255,0.15)",
+                      color: "rgba(255,255,255,0.7)", cursor: "pointer",
+                      display: "flex", alignItems: "center", justifyContent: "center", padding: 0, transition: "background 120ms, color 120ms",
+                      zIndex: 2,
+                    }}
+                      onMouseEnter={e => { e.currentTarget.style.background = "rgba(220,40,40,0.85)"; e.currentTarget.style.color = "#fff"; }}
+                      onMouseLeave={e => { e.currentTarget.style.background = "rgba(0,0,0,0.7)"; e.currentTarget.style.color = "rgba(255,255,255,0.7)"; }}>
+                      <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+                    </button>
+                  </div>
+                );
+              })}
+
+              {elements.length === 0 && (
+                <div style={{ gridColumn: "1 / -1", padding: "32px 0", textAlign: "center", color: "rgba(255,255,255,0.22)", fontSize: "13px" }}>
+                  No elements yet — create your first one
+                </div>
+              )}
+            </div>
+          </div>
+        ) : (
+          /* ── Create view ── */
+          <div className="picker-scroll" style={{ flex: 1, overflowY: "auto", padding: "16px 18px 18px", display: "flex", flexDirection: "column", gap: "16px" }}>
+            {/* Images */}
+            <div>
+              <div style={{ fontSize: "11px", fontWeight: 600, letterSpacing: "0.05em", textTransform: "uppercase" as const, color: "rgba(255,255,255,0.4)", marginBottom: "8px" }}>Images (2–4 · JPG/PNG · max 10 MB each)</div>
+              <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" as const }}>
+                {createImages.map((img, i) => (
+                  <div key={img.id} style={{ position: "relative", width: "72px", height: "72px", borderRadius: "8px", overflow: "hidden", border: img.error ? "1px solid rgba(248,113,113,0.4)" : "1px solid rgba(255,255,255,0.12)", background: "#1a1c1f", flexShrink: 0 }}>
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={img.objectUrl} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
+                    {img.uploading && (
+                      <div style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,0.55)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                        <span style={{ width: "14px", height: "14px", borderRadius: "50%", border: "2px solid rgba(255,255,255,0.15)", borderTopColor: "rgba(255,255,255,0.8)", display: "inline-block", animation: "spin 0.75s linear infinite" }} />
+                      </div>
+                    )}
+                    {img.error && (
+                      <div style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,0.55)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#f87171" strokeWidth="2" strokeLinecap="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
+                      </div>
+                    )}
+                    <button onClick={() => setCreateImages(prev => { URL.revokeObjectURL(img.objectUrl); return prev.filter((_, j) => j !== i); })} style={{
+                      position: "absolute", top: "3px", right: "3px", width: "16px", height: "16px",
+                      borderRadius: "50%", background: "rgba(0,0,0,0.7)", border: "none",
+                      color: "rgba(255,255,255,0.85)", cursor: "pointer",
+                      display: "flex", alignItems: "center", justifyContent: "center", padding: 0,
+                    }}>
+                      <svg width="7" height="7" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+                    </button>
+                  </div>
+                ))}
+                {createImages.length < 4 && (
+                  <button onClick={() => createFileRef.current?.click()} style={{
+                    width: "72px", height: "72px", borderRadius: "8px", flexShrink: 0,
+                    border: "1.5px dashed rgba(255,255,255,0.18)", background: "rgba(255,255,255,0.025)",
+                    cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: "4px",
+                    color: "rgba(255,255,255,0.4)", transition: "background 140ms, border-color 140ms, color 140ms",
+                  }}
+                    onMouseEnter={e => { e.currentTarget.style.background = "rgba(255,255,255,0.055)"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.3)"; e.currentTarget.style.color = "rgba(255,255,255,0.8)"; }}
+                    onMouseLeave={e => { e.currentTarget.style.background = "rgba(255,255,255,0.025)"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.18)"; e.currentTarget.style.color = "rgba(255,255,255,0.4)"; }}>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M12 5v14M5 12h14"/></svg>
+                    <span style={{ fontSize: "9px", fontWeight: 600, letterSpacing: "0.04em" }}>ADD</span>
+                  </button>
+                )}
+              </div>
+              <input ref={createFileRef} type="file" accept="image/jpeg,image/png" multiple style={{ display: "none" }}
+                onChange={e => { if (e.target.files) { handleCreateImages(e.target.files); e.target.value = ""; } }} />
+            </div>
+
+            {/* Name */}
+            <div>
+              <div style={{ fontSize: "11px", fontWeight: 600, letterSpacing: "0.05em", textTransform: "uppercase" as const, color: "rgba(255,255,255,0.4)", marginBottom: "8px" }}>Name</div>
+              <input
+                value={createName}
+                onChange={e => setCreateName(e.target.value)}
+                placeholder="Element name"
+                maxLength={50}
+                style={{
+                  width: "100%", padding: "9px 12px", borderRadius: "8px",
+                  background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)",
+                  color: "#fff", fontSize: "13.5px", fontFamily: "inherit", outline: "none",
+                  boxSizing: "border-box" as const,
+                }}
+              />
+            </div>
+
+            {/* Description */}
+            <div>
+              <div style={{ fontSize: "11px", fontWeight: 600, letterSpacing: "0.05em", textTransform: "uppercase" as const, color: "rgba(255,255,255,0.4)", marginBottom: "8px" }}>Description</div>
+              <textarea
+                value={createDesc}
+                onChange={e => setCreateDesc(e.target.value)}
+                placeholder="Describe this element…"
+                rows={3}
+                maxLength={500}
+                style={{
+                  width: "100%", padding: "9px 12px", borderRadius: "8px",
+                  background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)",
+                  color: "#fff", fontSize: "13.5px", fontFamily: "inherit", outline: "none",
+                  resize: "none", boxSizing: "border-box" as const,
+                }}
+              />
+            </div>
+
+            {/* Create button */}
+            <button
+              onClick={handleCreate}
+              disabled={!canCreate}
+              style={{
+                padding: "10px 24px", borderRadius: "10px", border: "none",
+                background: canCreate ? "#77e544" : "rgba(255,255,255,0.08)",
+                color: canCreate ? "#000" : "rgba(255,255,255,0.3)",
+                fontSize: "13.5px", fontWeight: 600, fontFamily: "inherit",
+                cursor: canCreate ? "pointer" : "not-allowed", transition: "background 150ms, color 150ms",
+                alignSelf: "flex-start" as const,
+              }}>
+              {creating ? "Creating…" : "Create element"}
+            </button>
+          </div>
+        )}
+      </div>
+    </div>,
+    document.body,
+  );
 }
 
 function CustomDropdown({
@@ -3163,6 +3987,8 @@ function EmptyState({ tab }: { tab: Tab }) {
 // ── CSS ───────────────────────────────────────────────────────────────────────
 
 const GALLERY_CSS = `
+  .picker-scroll { scrollbar-width: none; }
+  .picker-scroll::-webkit-scrollbar { display: none; }
   @keyframes spin { to { transform: rotate(360deg); } }
   @keyframes dlRingSpin {
     from { stroke-dashoffset: 75.4; transform: rotate(-90deg); }
@@ -3210,12 +4036,52 @@ const GALLERY_CSS = `
     cursor: pointer;
     border: none;
   }
+  @keyframes durPickerIn {
+    from { opacity: 0; transform: translateY(6px) scale(0.95); }
+    to   { opacity: 1; transform: translateY(0)   scale(1);    }
+  }
+  @keyframes durPickerOut {
+    from { opacity: 1; transform: translateY(0)   scale(1);    }
+    to   { opacity: 0; transform: translateY(6px) scale(0.95); }
+  }
+  .dur-picker-in  { animation: durPickerIn  170ms cubic-bezier(0.16,1,0.3,1) both; }
+  .dur-picker-out { animation: durPickerOut 160ms cubic-bezier(0.4,0,1,1)    both; }
+  .dur-slider {
+    -webkit-appearance: none;
+    appearance: none;
+    height: 3px;
+    border-radius: 2px;
+    background: rgba(255,255,255,0.18);
+    outline: none;
+    cursor: pointer;
+  }
+  .dur-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: #ffffff;
+    cursor: pointer;
+    transition: transform 100ms;
+  }
+  .dur-slider::-webkit-slider-thumb:hover { transform: scale(1.15); }
+  .dur-slider::-moz-range-thumb {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: #ffffff;
+    cursor: pointer;
+    border: none;
+  }
   .gallery-item {
     position: relative;
     overflow: hidden;
     cursor: pointer;
     background: #111416;
     width: 100%;
+    break-inside: avoid;
+    margin-bottom: 3px;
   }
   .gallery-actions-top {
     position: absolute;
