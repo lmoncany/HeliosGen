@@ -149,9 +149,30 @@ async function getToken(): Promise<string | undefined> {
   return data.session?.access_token;
 }
 
-// ── Module-level cache ────────────────────────────────────────────────────────
+// ── Module-level cache (memory + localStorage) ───────────────────────────────
 
-const galleryCache = new Map<string, { items: GalleryItem[]; hasMore: boolean }>();
+const _galleryCacheMem = new Map<string, { items: GalleryItem[]; hasMore: boolean }>();
+
+const galleryCache = {
+  get(tab: string): { items: GalleryItem[]; hasMore: boolean } | undefined {
+    const mem = _galleryCacheMem.get(tab);
+    if (mem) return mem;
+    try {
+      const raw = typeof window !== "undefined" ? localStorage.getItem(`nf-gallery-cache-${tab}`) : null;
+      if (!raw) return undefined;
+      const data = JSON.parse(raw) as { items: GalleryItem[]; hasMore: boolean };
+      _galleryCacheMem.set(tab, data);
+      return data;
+    } catch { return undefined; }
+  },
+  set(tab: string, data: { items: GalleryItem[]; hasMore: boolean }) {
+    _galleryCacheMem.set(tab, data);
+    try {
+      if (typeof window !== "undefined") localStorage.setItem(`nf-gallery-cache-${tab}`, JSON.stringify(data));
+    } catch { }
+  },
+};
+
 const loadedImageUrls = new Set<string>();
 
 interface SavedSettings {
@@ -181,10 +202,10 @@ function GalleryInner() {
   const [user, setUser] = useState<User | null>(null);
   const [authLoaded, setAuthLoaded] = useState(false);
 
-  const [items, setItems] = useState<GalleryItem[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [items, setItems] = useState<GalleryItem[]>(() => galleryCache.get(tab)?.items ?? []);
+  const [loading, setLoading] = useState(() => galleryCache.get(tab) === undefined);
   const [loadingMore, setLoadingMore] = useState(false);
-  const [hasMore, setHasMore] = useState(true);
+  const [hasMore, setHasMore] = useState(() => galleryCache.get(tab)?.hasMore ?? true);
   const [lightboxItem, setLightboxItem] = useState<GalleryItem | null>(null);
 
   const isVideo = tab === "videos";
@@ -218,6 +239,7 @@ function GalleryInner() {
   const [refError, setRefError] = useState("");
 
   const [removingIds, setRemovingIds] = useState<Set<string>>(new Set());
+  const [videoMuted, setVideoMuted] = useState(true);
 
   // Reference images — restored from localStorage on mount
   const [refImages, setRefImages] = useState<RefImage[]>(() => {
@@ -227,6 +249,18 @@ function GalleryInner() {
     }));
   });
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Video reference state
+  const [vidStartFrame, setVidStartFrame] = useState<RefImage | null>(null);
+  const [vidEndFrame, setVidEndFrame]     = useState<RefImage | null>(null);
+  const [vidResources, setVidResources]   = useState<RefImage[]>([]);
+  const [vidVideoRef, setVidVideoRef]     = useState<RefImage | null>(null);
+  const [vidRefVideos, setVidRefVideos]   = useState<RefImage[]>([]);
+  const [vidRefAudios, setVidRefAudios]   = useState<RefImage[]>([]);
+  const vidImgInputRef   = useRef<HTMLInputElement>(null);
+  const vidVideoInputRef = useRef<HTMLInputElement>(null);
+  const vidAudioInputRef = useRef<HTMLInputElement>(null);
+  const vidPickTarget = useRef<"startFrame" | "endFrame" | "resource" | "videoRef" | "referenceVideo" | "audioRef" | null>(null);
 
   // Prompt expansion
 
@@ -275,8 +309,8 @@ function GalleryInner() {
   // ── Load items ────────────────────────────────────────────────────────────
 
   const loadItems = useCallback(async (currentTab: Tab, page: number, replace = false) => {
-    const token = await getToken();
-    if (!token) return;
+    // Apply cache / loading state synchronously before any await so the UI
+    // updates in the very next render rather than after the token promise.
     if (replace) {
       const cached = galleryCache.get(currentTab);
       if (cached) { setItems(cached.items); setHasMore(cached.hasMore); }
@@ -284,6 +318,8 @@ function GalleryInner() {
     } else {
       setLoadingMore(true);
     }
+    const token = await getToken();
+    if (!token) { setLoading(false); setLoadingMore(false); return; }
     try {
       const genType = currentTab === "videos" ? "video" : "image";
       const res = await fetch(`/api/gallery?type=${genType}&page=${page}`, {
@@ -346,6 +382,8 @@ function GalleryInner() {
         return savedPrompt.includes(`@${label}`) ? [{ label, refId: url, url }] : [];
       })
     );
+    setVidStartFrame(null); setVidEndFrame(null); setVidResources([]);
+    setVidVideoRef(null); setVidRefVideos([]); setVidRefAudios([]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab]);
 
@@ -370,6 +408,10 @@ function GalleryInner() {
     if (!("supportsImages" in m) || !m.supportsImages) {
       setRefImages(prev => { prev.forEach(r => URL.revokeObjectURL(r.objectUrl)); return []; });
       setTaggedImages([]);
+    }
+    if (isVideo) {
+      setVidStartFrame(null); setVidEndFrame(null); setVidResources([]);
+      setVidVideoRef(null); setVidRefVideos([]); setVidRefAudios([]);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [modelId]);
@@ -478,6 +520,93 @@ function GalleryInner() {
     }, 190);
   };
 
+  // ── Video reference upload ────────────────────────────────────────────────
+
+  const handleVidFilePick = async (
+    files: FileList | null,
+    target: "startFrame" | "endFrame" | "resource" | "videoRef" | "referenceVideo" | "audioRef",
+  ) => {
+    if (!files || files.length === 0) return;
+    const vm = VIDEO_MODELS.find(m => m.id === modelId);
+    const isSingle = target === "startFrame" || target === "endFrame" || target === "videoRef";
+
+    const maxCount = isSingle ? 1 : (
+      target === "resource"        ? (vm?.maxResources      ?? 3) :
+      target === "referenceVideo"  ? (vm?.maxReferenceVideos ?? 3) :
+                                     (vm?.maxReferenceAudios ?? 3)
+    );
+    const currentCount = isSingle ? 0 : (
+      target === "resource"        ? vidResources.length :
+      target === "referenceVideo"  ? vidRefVideos.length :
+                                     vidRefAudios.length
+    );
+    const toAdd = Array.from(files).slice(0, maxCount - currentCount);
+    if (toAdd.length === 0) return;
+
+    const newEntries: RefImage[] = toAdd.map(f => ({
+      id: crypto.randomUUID(),
+      objectUrl: URL.createObjectURL(f),
+      cdnUrl: null,
+      uploading: true,
+      error: false,
+    }));
+
+    if (isSingle) {
+      const [entry] = newEntries;
+      if (target === "startFrame") setVidStartFrame(entry);
+      else if (target === "endFrame") setVidEndFrame(entry);
+      else setVidVideoRef(entry);
+    } else {
+      if (target === "resource")       setVidResources(prev => [...prev, ...newEntries]);
+      else if (target === "referenceVideo") setVidRefVideos(prev => [...prev, ...newEntries]);
+      else                             setVidRefAudios(prev => [...prev, ...newEntries]);
+    }
+
+    const token = await getToken();
+    await Promise.all(toAdd.map(async (file, i) => {
+      const entry = newEntries[i];
+      try {
+        const res = await fetch("/api/upload-asset", {
+          method: "POST",
+          headers: { "Content-Type": file.type, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+          body: file,
+        });
+        const data = await res.json() as { cdnUrl?: string; error?: string };
+        if (!res.ok || !data.cdnUrl) throw new Error(data.error ?? "Upload failed");
+        const ok = (r: RefImage) => r.id === entry.id ? { ...r, cdnUrl: data.cdnUrl!, uploading: false } : r;
+        if (isSingle) {
+          if (target === "startFrame") setVidStartFrame(p => p?.id === entry.id ? { ...p, cdnUrl: data.cdnUrl!, uploading: false } : p);
+          else if (target === "endFrame") setVidEndFrame(p => p?.id === entry.id ? { ...p, cdnUrl: data.cdnUrl!, uploading: false } : p);
+          else setVidVideoRef(p => p?.id === entry.id ? { ...p, cdnUrl: data.cdnUrl!, uploading: false } : p);
+        } else {
+          if (target === "resource")       setVidResources(prev => prev.map(ok));
+          else if (target === "referenceVideo") setVidRefVideos(prev => prev.map(ok));
+          else                             setVidRefAudios(prev => prev.map(ok));
+        }
+      } catch {
+        const err = (r: RefImage) => r.id === entry.id ? { ...r, uploading: false, error: true } : r;
+        if (isSingle) {
+          if (target === "startFrame") setVidStartFrame(p => p?.id === entry.id ? { ...p, uploading: false, error: true } : p);
+          else if (target === "endFrame") setVidEndFrame(p => p?.id === entry.id ? { ...p, uploading: false, error: true } : p);
+          else setVidVideoRef(p => p?.id === entry.id ? { ...p, uploading: false, error: true } : p);
+        } else {
+          if (target === "resource")       setVidResources(prev => prev.map(err));
+          else if (target === "referenceVideo") setVidRefVideos(prev => prev.map(err));
+          else                             setVidRefAudios(prev => prev.map(err));
+        }
+      }
+    }));
+  };
+
+  const removeVidRef = (id: string, target: "startFrame" | "endFrame" | "resource" | "videoRef" | "referenceVideo" | "audioRef") => {
+    if (target === "startFrame")      setVidStartFrame(null);
+    else if (target === "endFrame")   setVidEndFrame(null);
+    else if (target === "videoRef")   setVidVideoRef(null);
+    else if (target === "resource")   setVidResources(prev => prev.filter(r => r.id !== id));
+    else if (target === "referenceVideo") setVidRefVideos(prev => prev.filter(r => r.id !== id));
+    else                              setVidRefAudios(prev => prev.filter(r => r.id !== id));
+  };
+
   // ── Generate ──────────────────────────────────────────────────────────────
 
   const generateOne = async (token: string): Promise<string> => {
@@ -505,6 +634,28 @@ function GalleryInner() {
       return d.taskId!;
     } else {
       const vm = VIDEO_MODELS.find(m => m.id === modelId);
+      const handles = vm?.handles ?? [];
+
+      const startFrameUrl = handles.includes("startFrame") && vidStartFrame?.cdnUrl ? vidStartFrame.cdnUrl : undefined;
+      const endFrameUrl   = handles.includes("endFrame")   && vidEndFrame?.cdnUrl   ? vidEndFrame.cdnUrl   : undefined;
+      const videoRefUrl   = handles.includes("videoRef")   && vidVideoRef?.cdnUrl   ? vidVideoRef.cdnUrl   : undefined;
+
+      // Kling uses {url, label} resource objects; all others use referenceImageUrls
+      const resourceUrls = handles.includes("resource")
+        ? vidResources.filter(r => r.cdnUrl && !r.error).map(r => r.cdnUrl!)
+        : [];
+      const resources = vm?.apiInput.useKlingElements
+        ? resourceUrls.map((url, i) => ({ url, label: `Element ${i + 1}` }))
+        : undefined;
+      const referenceImageUrls = !vm?.apiInput.useKlingElements && resourceUrls.length ? resourceUrls : undefined;
+
+      const referenceVideoUrls = handles.includes("referenceVideo")
+        ? vidRefVideos.filter(r => r.cdnUrl && !r.error).map(r => r.cdnUrl!)
+        : undefined;
+      const referenceAudioUrls = handles.includes("audioRef")
+        ? vidRefAudios.filter(r => r.cdnUrl && !r.error).map(r => r.cdnUrl!)
+        : undefined;
+
       const res = await fetch("/api/generate-video", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
@@ -515,6 +666,13 @@ function GalleryInner() {
           duration,
           mode: mode || vm?.defaultMode || "pro",
           resolution: vm && "defaultResolution" in vm ? vm.defaultResolution : undefined,
+          ...(startFrameUrl        ? { startFrameUrl }        : {}),
+          ...(endFrameUrl          ? { endFrameUrl }          : {}),
+          ...(videoRefUrl          ? { videoRefUrl }          : {}),
+          ...(resources?.length    ? { resources }            : {}),
+          ...(referenceImageUrls?.length ? { referenceImageUrls } : {}),
+          ...(referenceVideoUrls?.length ? { referenceVideoUrls } : {}),
+          ...(referenceAudioUrls?.length ? { referenceAudioUrls } : {}),
         }),
       });
       const d = await res.json() as { taskId?: string; error?: string };
@@ -537,6 +695,9 @@ function GalleryInner() {
   const generate = async () => {
     if (!prompt.trim() && !isVideo) return;
     if (refImages.some(r => r.uploading)) { setGenError("Images still uploading…"); setTimeout(() => setGenError(""), 3_000); return; }
+    if (isVideo && [vidStartFrame, vidEndFrame, vidVideoRef, ...vidResources, ...vidRefVideos, ...vidRefAudios].some(r => r?.uploading)) {
+      setGenError("References still uploading…"); setTimeout(() => setGenError(""), 3_000); return;
+    }
     setGenError("");
 
     const n = isVideo ? 1 : count;
@@ -694,6 +855,8 @@ function GalleryInner() {
   const activeModel = models.find(m => m.id === modelId);
   const hasRefImgs = refImages.length > 0;
   const allUploaded = refImages.every(r => !r.uploading);
+  const vidRefHandles = (vidModel?.handles ?? []).filter(h => h !== "prompt");
+  const hasVidRefs = isVideo && (!!vidStartFrame || !!vidEndFrame || !!vidVideoRef || vidResources.length > 0 || vidRefVideos.length > 0 || vidRefAudios.length > 0);
 
   const canGenerate = submitting ? false : promptOverLimit ? false : isVideo ? true : prompt.trim().length > 0;
 
@@ -1051,11 +1214,13 @@ function GalleryInner() {
                     <GalleryCard
                       key={mi.item.id}
                       item={mi.item}
-                      onOpen={mi.item.mediaType === "image" ? () => setLightboxItem(mi.item) : undefined}
+                      onOpen={() => setLightboxItem(mi.item)}
                       onAddReference={mi.item.mediaType === "image" && canAddImgs ? handleAddReference : undefined}
                       onCopyPrompt={handleCopyPrompt}
                       onDownload={handleDownload}
                       onDelete={handleDelete}
+                      videoMuted={videoMuted}
+                      onToggleMute={() => setVideoMuted(m => !m)}
                     />
                   );
                 })}
@@ -1075,6 +1240,12 @@ function GalleryInner() {
         style={{ display: "none" }}
         onChange={e => { if (e.target.files) { handleFilePick(e.target.files); e.target.value = ""; } }}
       />
+      <input ref={vidImgInputRef}   type="file" accept="image/*" multiple style={{ display: "none" }}
+        onChange={e => { if (e.target.files && vidPickTarget.current) { handleVidFilePick(e.target.files, vidPickTarget.current); e.target.value = ""; } }} />
+      <input ref={vidVideoInputRef} type="file" accept="video/*" multiple style={{ display: "none" }}
+        onChange={e => { if (e.target.files && vidPickTarget.current) { handleVidFilePick(e.target.files, vidPickTarget.current); e.target.value = ""; } }} />
+      <input ref={vidAudioInputRef} type="file" accept="audio/*" multiple style={{ display: "none" }}
+        onChange={e => { if (e.target.files && vidPickTarget.current) { handleVidFilePick(e.target.files, vidPickTarget.current); e.target.value = ""; } }} />
 
       {/* ── Prompt bar ── */}
       <div
@@ -1268,9 +1439,136 @@ function GalleryInner() {
             </div>
           )}
 
+          {/* ── Video reference slots ── */}
+          {isVideo && vidRefHandles.length > 0 && (() => {
+            // Build a flat list of slots: filled items + one add-button per handle
+            type VidSlot =
+              | { kind: "filled"; target: "startFrame"|"endFrame"|"resource"|"videoRef"|"referenceVideo"|"audioRef"; mediaKind: "image"|"video"|"audio"; color: string; label: string; ref: RefImage }
+              | { kind: "add";    target: "startFrame"|"endFrame"|"resource"|"videoRef"|"referenceVideo"|"audioRef"; mediaKind: "image"|"video"|"audio"; color: string; label: string };
+            const slots: VidSlot[] = [];
+            for (const h of vidRefHandles) {
+              if (h === "startFrame") {
+                if (vidStartFrame) slots.push({ kind: "filled", target: h, mediaKind: "image", color: "#60a5fa", label: "Start Frame", ref: vidStartFrame });
+                else               slots.push({ kind: "add",    target: h, mediaKind: "image", color: "#60a5fa", label: "Start Frame" });
+              } else if (h === "endFrame") {
+                if (vidEndFrame)   slots.push({ kind: "filled", target: h, mediaKind: "image", color: "#a78bfa", label: "End Frame", ref: vidEndFrame });
+                else               slots.push({ kind: "add",    target: h, mediaKind: "image", color: "#a78bfa", label: "End Frame" });
+              } else if (h === "videoRef") {
+                if (vidVideoRef)   slots.push({ kind: "filled", target: h, mediaKind: "video", color: "#fb923c", label: "Ref Video", ref: vidVideoRef });
+                else               slots.push({ kind: "add",    target: h, mediaKind: "video", color: "#fb923c", label: "Ref Video" });
+              } else if (h === "resource") {
+                vidResources.forEach(r => slots.push({ kind: "filled", target: h, mediaKind: "image", color: "#34d399", label: "Resource", ref: r }));
+                if (vidResources.length < (vidModel?.maxResources ?? 3))
+                  slots.push({ kind: "add", target: h, mediaKind: "image", color: "#34d399", label: "Resource" });
+              } else if (h === "referenceVideo") {
+                vidRefVideos.forEach(r => slots.push({ kind: "filled", target: h, mediaKind: "video", color: "#fb923c", label: "Ref Video", ref: r }));
+                if (vidRefVideos.length < (vidModel?.maxReferenceVideos ?? 3))
+                  slots.push({ kind: "add", target: h, mediaKind: "video", color: "#fb923c", label: "Ref Video" });
+              } else if (h === "audioRef") {
+                vidRefAudios.forEach(r => slots.push({ kind: "filled", target: h, mediaKind: "audio", color: "#f472b6", label: "Audio", ref: r }));
+                if (vidRefAudios.length < (vidModel?.maxReferenceAudios ?? 3))
+                  slots.push({ kind: "add", target: h, mediaKind: "audio", color: "#f472b6", label: "Audio" });
+              }
+            }
+            return (
+              <div style={{ padding: "14px 16px 0", display: "flex", gap: "10px", flexWrap: "wrap", alignItems: "flex-start" }}>
+                {slots.map((slot, idx) => {
+                  const { target, mediaKind, color, label } = slot;
+                  const MediaIcon = () => mediaKind === "image" ? (
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                      <rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/>
+                    </svg>
+                  ) : mediaKind === "audio" ? (
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>
+                    </svg>
+                  ) : (
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                      <polygon points="5 3 19 12 5 21 5 3"/>
+                    </svg>
+                  );
+
+                  if (slot.kind === "filled") {
+                    const r = slot.ref;
+                    return (
+                      <div key={r.id} style={{
+                        position: "relative", width: "88px", height: "80px",
+                        borderRadius: "10px", overflow: "hidden", flexShrink: 0,
+                        background: "#1a1c1f",
+                        border: r.error ? "1px solid rgba(248,113,113,0.4)" : `1px solid ${color}44`,
+                      }}>
+                        {mediaKind === "image" ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img src={r.objectUrl} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
+                        ) : (
+                          <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", background: `${color}11` }}>
+                            <span style={{ color }}><MediaIcon /></span>
+                          </div>
+                        )}
+                        {/* Label bar */}
+                        <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, padding: "12px 5px 4px", background: "linear-gradient(to top, rgba(0,0,0,0.75) 0%, transparent 100%)", textAlign: "center" }}>
+                          <span style={{ fontSize: "9px", fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase" as const, color }}>{label}</span>
+                        </div>
+                        {/* Uploading overlay */}
+                        {r.uploading && (
+                          <div style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,0.55)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                            <span style={{ width: "16px", height: "16px", borderRadius: "50%", border: `2px solid ${color}33`, borderTopColor: color, display: "inline-block", animation: "spin 0.75s linear infinite" }} />
+                          </div>
+                        )}
+                        {/* Error overlay */}
+                        {r.error && (
+                          <div style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,0.55)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#f87171" strokeWidth="2" strokeLinecap="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
+                          </div>
+                        )}
+                        {/* X button */}
+                        <button onClick={() => removeVidRef(r.id, target)} style={{
+                          position: "absolute", top: "5px", right: "5px", width: "20px", height: "20px",
+                          borderRadius: "50%", background: "rgba(0,0,0,0.7)", border: "1px solid rgba(255,255,255,0.15)",
+                          color: "rgba(255,255,255,0.85)", cursor: "pointer",
+                          display: "flex", alignItems: "center", justifyContent: "center", padding: 0, transition: "background 120ms",
+                        }}
+                          onMouseEnter={e => { e.currentTarget.style.background = "rgba(0,0,0,0.9)"; }}
+                          onMouseLeave={e => { e.currentTarget.style.background = "rgba(0,0,0,0.7)"; }}>
+                          <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+                        </button>
+                      </div>
+                    );
+                  }
+
+                  // Add button
+                  return (
+                    <button key={`${target}-add-${idx}`}
+                      onClick={() => {
+                        vidPickTarget.current = target;
+                        if (mediaKind === "image") vidImgInputRef.current?.click();
+                        else if (mediaKind === "audio") vidAudioInputRef.current?.click();
+                        else vidVideoInputRef.current?.click();
+                      }}
+                      disabled={submitting}
+                      style={{
+                        width: "88px", height: "80px", borderRadius: "10px", flexShrink: 0,
+                        border: `1.5px dashed ${color}55`, background: `${color}08`,
+                        cursor: submitting ? "not-allowed" : "pointer",
+                        display: "flex", flexDirection: "column", alignItems: "center",
+                        justifyContent: "center", gap: "5px", color: `${color}99`,
+                        transition: "border-color 140ms, background 140ms, color 140ms",
+                      }}
+                      onMouseEnter={e => { if (!submitting) { e.currentTarget.style.borderColor = `${color}bb`; e.currentTarget.style.background = `${color}12`; e.currentTarget.style.color = color; } }}
+                      onMouseLeave={e => { e.currentTarget.style.borderColor = `${color}55`; e.currentTarget.style.background = `${color}08`; e.currentTarget.style.color = `${color}99`; }}
+                    >
+                      <MediaIcon />
+                      <span style={{ fontSize: "10px", fontWeight: 600, letterSpacing: "0.04em", textTransform: "uppercase" as const }}>{label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            );
+          })()}
+
           {/* ── Input + Controls + Generate ── */}
           <div style={{
-            padding: hasRefImgs ? "12px 14px 14px 16px" : "16px 14px 14px 16px",
+            padding: (hasRefImgs || (isVideo && vidRefHandles.length > 0)) ? "12px 14px 14px 16px" : "16px 14px 14px 16px",
             display: "flex",
             flexDirection: "column",
             gap: "10px",
@@ -1835,7 +2133,7 @@ function CustomDropdown({
         }}
       >
         {triggerIcon && (
-          <span style={{ display: "flex", alignItems: "center", color: "white", flexShrink: 0 }}>
+          <span style={{ display: "flex", alignItems: "center", color: selectedOpt?.providerIcon ? "#a855f7" : "white", flexShrink: 0 }}>
             {triggerIcon}
           </span>
         )}
@@ -1951,7 +2249,7 @@ function DropItem({ label, active, onClick, preview, providerIcon }: { label: st
       }}
     >
       {providerIcon && (
-        <span style={{ display: "flex", alignItems: "center", color: "white", flexShrink: 0, opacity: active ? 1 : 0.7 }}>
+        <span style={{ display: "flex", alignItems: "center", color: "#a855f7", flexShrink: 0, opacity: active ? 1 : 0.7 }}>
           {providerIcon}
         </span>
       )}
@@ -2020,6 +2318,28 @@ function ProviderIcon({ provider }: { provider: string }) {
           <path d="M7.65167 7.33217C5.24368 9.81392 4.75711 14.1176 7.57924 16.8984L7.57713 16.9005L0.0792788 23.8097C0.0528384 23.834 0.0162235 23.8015 0.0377551 23.7728C0.487937 23.1707 1.01883 22.595 1.54932 22.0198L1.57777 21.9889C3.28214 20.1411 4.97141 18.3097 3.93926 15.7216C2.55615 12.2552 3.36158 8.19287 5.9228 5.55089C8.58547 2.80639 12.507 2.1144 15.7826 3.5048C16.5072 3.78245 17.1388 4.17758 17.6315 4.54493L14.8964 5.84777C12.3497 4.7457 9.43229 5.49537 7.65167 7.33217Z" />
         </svg>
       );
+    case "Kling":
+      return (
+        <svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor">
+          <path fillRule="evenodd" clipRule="evenodd" d="M16.7522 2.86984L16.818 2.93745L16.8199 2.93552C18.087 4.25441 17.7236 6.90443 15.8863 9.90864L19.5 13.6567L19.3447 13.9703C18.7372 15.1986 17.9147 16.2992 16.9193 17.216C15.608 18.43 14.0251 19.2853 12.3143 19.7044L12.2522 19.7198L12.1634 19.7417L12.0994 19.7565L11.9584 19.7887L11.8416 19.8126L11.754 19.8299C11.6609 19.8493 11.5634 19.8673 11.4683 19.884L11.3888 19.8963L11.3286 19.904C11.2429 19.916 11.1576 19.9272 11.0727 19.9375C9.64831 20.1036 8.20616 19.9376 6.8516 19.4517C5.49703 18.9658 4.2643 18.1723 3.24348 17.1291L3.18385 17.0692C1.91429 15.7503 2.27391 13.0983 4.11366 10.0922L0.5 6.34416L0.65528 6.03054C1.26118 4.80131 2.0846 3.70115 3.08261 2.78741C4.10242 1.8473 5.28649 1.11848 6.57081 0.640344C6.86894 0.528933 7.18075 0.431691 7.48696 0.34926C7.73931 0.279139 7.9944 0.220054 8.25155 0.172163C8.33851 0.154131 8.43665 0.135456 8.53168 0.118712C10.0139 -0.12084 11.5297 0.00325476 12.9574 0.481036C14.385 0.958817 15.6847 1.77698 16.7522 2.86984ZM15.5304 3.03083H15.5267L15.5304 3.03276C14.3025 2.63864 12.354 3.27555 10.2944 4.68267C11.8615 4.22994 13.377 4.46435 14.3565 5.48057C15.2845 6.44462 15.5385 7.90777 15.187 9.44497C15.1704 9.52697 15.1497 9.61005 15.1248 9.69419C16.8062 7.05706 17.3441 4.58993 16.2795 3.48807C16.262 3.4682 16.2433 3.44949 16.2236 3.43204L16.2155 3.42431L16.2037 3.41336L16.1683 3.38503C16.153 3.37215 16.1371 3.3597 16.1205 3.34768L16.0944 3.32836C15.9242 3.19657 15.7334 3.09594 15.5304 3.03083ZM14.6876 8.95876C14.4708 10.2995 13.7559 11.6545 12.672 12.777C11.5913 13.9001 10.282 14.642 8.98696 14.8687C7.77516 15.0812 6.72981 14.8043 6.04472 14.0959C5.36149 13.3868 5.09441 12.3069 5.29938 11.044C5.51615 9.7045 6.22919 8.3489 7.30807 7.22771C7.30807 7.22771 7.30994 7.22771 7.31429 7.22127L7.31801 7.21483C8.40062 6.09944 9.70497 5.3595 10.9969 5.13539C12.2087 4.92287 13.2516 5.1985 13.9391 5.90818C14.6224 6.61657 14.8894 7.69847 14.6845 8.9594H14.6882L14.6876 8.95876ZM3.70621 3.51061C2.88113 4.26712 2.1865 5.16395 1.65217 6.16255L1.64596 6.16449L4.78137 9.40762C5.04127 9.02837 5.31475 8.65932 5.60124 8.30124C5.70311 8.17567 5.80807 8.04558 5.91553 7.91614L5.95652 7.86784L6.10559 7.69525C6.10994 7.69139 6.11429 7.68301 6.11429 7.68301L6.14161 7.65082L6.1559 7.63343L6.23292 7.54456C6.27226 7.49819 6.31284 7.45247 6.35466 7.40739C6.35466 7.40288 6.36087 7.39644 6.36087 7.39644L6.42795 7.32045L6.47578 7.26893C6.47785 7.26592 6.4795 7.26507 6.4795 7.26507C6.48385 7.26249 6.48385 7.25863 6.48385 7.25863C6.48675 7.25562 6.48965 7.25176 6.49255 7.24703L6.50124 7.23609C6.50882 7.23006 6.51569 7.22314 6.52174 7.21548L6.53354 7.2026C6.55901 7.17619 6.58944 7.14528 6.61677 7.11437C6.63126 7.09591 6.64783 7.07745 6.66646 7.05899L6.69193 7.03194C6.69627 7.0255 6.70807 7.01326 6.70807 7.01326L6.7559 6.96432L6.84907 6.86901L6.88012 6.83488L6.91491 6.79688C7.5863 6.09838 8.30377 5.44917 9.06211 4.85397L9.16149 4.77862H9.16211V4.77798L9.16335 4.77733L9.26273 4.70134C9.37371 4.61505 9.48551 4.53068 9.59814 4.44825C9.71822 4.36325 9.8383 4.27953 9.95838 4.1971C11.587 3.0714 13.182 2.39586 14.4839 2.26191C12.7422 1.17239 10.6864 0.752921 8.6764 1.07697C8.58944 1.09114 8.50621 1.10595 8.41677 1.12462C8.36025 1.13493 8.31118 1.14523 8.26149 1.15554L8.23168 1.16198C7.77515 1.25942 7.3258 1.39004 6.88696 1.55288C5.71551 1.9877 4.63519 2.65238 3.70621 3.51061ZM3.87888 16.6531C4.05279 16.7905 4.25093 16.8949 4.47329 16.9661H4.46894C5.70497 17.3577 7.64596 16.7188 9.69814 15.3156C8.13292 15.7664 6.6205 15.532 5.64099 14.5157C4.71739 13.5562 4.46335 12.0885 4.81304 10.5513C4.83043 10.4693 4.85093 10.3863 4.87453 10.3021C3.19379 12.9399 2.65714 15.4064 3.7205 16.5089C3.77062 16.56 3.8235 16.6082 3.87888 16.6531ZM18.346 13.8389V13.8402C17.8108 14.8373 17.1168 15.7333 16.2932 16.4902C15.0606 17.625 13.5707 18.4173 11.9627 18.7931L11.9429 18.7983L11.8894 18.8112C11.8291 18.8281 11.7679 18.8418 11.7062 18.8524C11.666 18.8614 11.6251 18.8693 11.5832 18.8762C11.4967 18.8936 11.4097 18.9087 11.3224 18.9213L11.2497 18.9342L11.1671 18.9451C11.1008 18.9545 11.0329 18.9631 10.9634 18.9709C9.06697 19.1922 7.15308 18.7592 5.51801 17.7389C6.77143 17.6108 8.29752 16.9764 9.86273 15.9274L9.95217 15.8668L10.0416 15.8057L10.1634 15.7206H10.164L10.3994 15.5545C10.5128 15.4721 10.6246 15.3877 10.7348 15.3014C10.8035 15.2503 10.871 15.1994 10.9373 15.1488C11.6946 14.5518 12.4122 13.9025 13.0851 13.2052C13.1012 13.1881 13.1164 13.1713 13.1304 13.155L13.1491 13.1331C13.1822 13.1009 13.2133 13.0693 13.2422 13.0384L13.2894 12.9895C13.2894 12.9895 13.3019 12.9766 13.3037 12.9702L13.3217 12.9521L13.3292 12.9438L13.3832 12.8884L13.4248 12.8433C13.4389 12.8296 13.4528 12.815 13.4665 12.7995L13.4776 12.7866C13.4837 12.7792 13.4906 12.7725 13.4981 12.7667L13.5075 12.7551L13.5161 12.7441C13.5161 12.7441 13.5224 12.7377 13.5261 12.7358L13.5429 12.7171L13.5596 12.6984L13.5758 12.6823C13.5584 12.7012 13.5418 12.7209 13.5261 12.7416L13.5646 12.6997L13.5652 12.6984C13.5921 12.6684 13.6188 12.6396 13.6453 12.6121C13.6453 12.6121 13.6453 12.6057 13.6516 12.6057C13.688 12.5653 13.7234 12.5245 13.7578 12.4833L13.828 12.4022C13.8372 12.396 13.8447 12.3873 13.8497 12.3771L13.8894 12.3275L13.8994 12.3152C13.9478 12.2616 13.9952 12.2073 14.0416 12.1523L14.0901 12.0943C14.1679 12.0003 14.2453 11.9057 14.3224 11.8103L14.4155 11.6951L14.4447 11.6577C14.482 11.6092 14.5188 11.562 14.5553 11.516C14.5863 11.4774 14.6168 11.4379 14.6466 11.3975C14.8451 11.1367 15.0377 10.8711 15.2242 10.6009L18.346 13.8389ZM18.346 13.8389C18.346 13.8368 18.3472 13.835 18.3497 13.8338V13.8441L18.346 13.8402H18.3472L18.346 13.8389Z" />
+        </svg>
+      );
+    case "Bytedance":
+      return (
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+          <g clipPath="url(#seedance-clip)">
+            <path d="M3.1544 12.1539L0.533203 12.8092V1.19824L3.1544 1.85354V12.1539Z" />
+            <path d="M15.8225 12.8333L13.1963 13.4886V0.518555L15.8225 1.169V12.8333Z" />
+            <path d="M7.31261 12.5083L4.69141 13.1636V6.32422L7.31261 6.97947V12.5083Z" />
+            <path d="M9.02539 5.3096L11.6516 4.6543V11.4937L9.02539 10.8384V5.3096Z" />
+          </g>
+          <defs>
+            <clipPath id="seedance-clip">
+              <rect width="16" height="14" fill="white" />
+            </clipPath>
+          </defs>
+        </svg>
+      );
     default:
       return null;
   }
@@ -2069,6 +2389,8 @@ function GalleryCard({
   onCopyPrompt,
   onDownload,
   onDelete,
+  videoMuted,
+  onToggleMute,
 }: {
   item: GalleryItem;
   onOpen?: () => void;
@@ -2076,6 +2398,8 @@ function GalleryCard({
   onCopyPrompt?: (prompt: string, refUrls?: string[]) => void;
   onDownload?: (url: string, isVideo: boolean) => Promise<void>;
   onDelete?: (id: string, source: "generation" | "upload") => Promise<void>;
+  videoMuted?: boolean;
+  onToggleMute?: () => void;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const cardRef = useRef<HTMLDivElement>(null);
@@ -2153,17 +2477,33 @@ function GalleryCard({
       className="gallery-item"
       style={cssRatio ? { aspectRatio: cssRatio } : undefined}
       onMouseEnter={() => { if (isVideo) videoRef.current?.play().then(() => setPlaying(true)).catch(() => { }); }}
-      onMouseLeave={() => { if (isVideo && videoRef.current) { videoRef.current.pause(); videoRef.current.currentTime = 0; setPlaying(false); } }}
+      onMouseLeave={() => { if (isVideo && videoRef.current) { videoRef.current.pause(); setPlaying(false); } }}
       onClick={onOpen}
     >
       {isVideo ? (
         <>
-          <video ref={videoRef} src={item.url} muted loop playsInline preload="metadata" onError={() => setFailed(true)} />
+          <video ref={videoRef} src={item.url} muted={videoMuted} loop playsInline preload="metadata" onError={() => setFailed(true)} />
           {!playing && (
             <div className="gallery-play-icon">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="#fff" stroke="none"><polygon points="5 3 19 12 5 21 5 3" /></svg>
             </div>
           )}
+          {/* Mute toggle — top-left, visible on hover, global state */}
+          <button
+            className="gallery-mute-btn gallery-action-btn"
+            onClick={e => { e.stopPropagation(); onToggleMute?.(); }}
+            title={videoMuted ? "Unmute" : "Mute"}
+          >
+            {videoMuted ? (
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/>
+              </svg>
+            ) : (
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>
+              </svg>
+            )}
+          </button>
         </>
       ) : (
         <>
@@ -2481,16 +2821,20 @@ function Lightbox({ item, onClose }: { item: GalleryItem; onClose: () => void })
     setTimeout(() => setCopied(false), 1800);
   };
 
+  const isVideo = item.mediaType === "video";
+
   const download = async () => {
     if (downloading) return;
     setDownloading(true);
     try {
-      const res = await fetch(lightboxUrl);
+      const ext = isVideo ? "mp4" : "jpg";
+      const filename = `${isVideo ? "video" : "image"}-${item.id.slice(0, 8)}.${ext}`;
+      const res = await fetch(`/api/download?url=${encodeURIComponent(lightboxUrl)}&filename=${filename}`);
+      if (!res.ok) throw new Error("Download failed");
       const blob = await res.blob();
-      const ext = blob.type.includes("png") ? "png" : blob.type.includes("webp") ? "webp" : "jpg";
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
-      a.download = `image-${item.id.slice(0, 8)}.${ext}`;
+      a.download = filename;
       a.click();
       URL.revokeObjectURL(a.href);
     } finally {
@@ -2538,11 +2882,11 @@ function Lightbox({ item, onClose }: { item: GalleryItem; onClose: () => void })
       overflowY: "auto",
     }}>
 
-      {/* ── Image (vertically centered column) ── */}
+      {/* ── Media (vertically centered column) ── */}
       <div style={{ flex: 1, minHeight: "calc(100vh - 48px)", display: "flex", alignItems: "center", justifyContent: "center", position: "relative" }}>
 
-        {/* Prev button */}
-        {allUrls.length > 1 && (
+        {/* Prev button — images only */}
+        {!isVideo && allUrls.length > 1 && (
           <button
             onClick={e => { e.stopPropagation(); setFullLoaded(false); setImgIdx(i => Math.max(0, i - 1)); }}
             disabled={imgIdx === 0}
@@ -2564,40 +2908,59 @@ function Lightbox({ item, onClose }: { item: GalleryItem; onClose: () => void })
           transform: visible ? "scale(1)" : "scale(0.96)", transition: "transform 200ms ease",
           borderRadius: "12px", overflow: "hidden", boxShadow: "0 32px 80px rgba(0,0,0,0.6)",
         }}>
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img key={`blur-${lightboxUrl}`} src={`/_next/image?url=${encodeURIComponent(lightboxUrl)}&w=828&q=75`} alt="" aria-hidden style={{
-            display: "block",
-            maxHeight: "calc(100vh - 48px)",
-            width: "100%", height: "auto", objectFit: "contain",
-            filter: fullLoaded ? "none" : "blur(12px)",
-            transform: fullLoaded ? "scale(1)" : "scale(1.04)",
-            transition: "filter 320ms ease, transform 320ms ease",
-          }} />
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img key={`full-${lightboxUrl}`} src={lightboxUrl} alt={item.prompt ?? ""} onLoad={() => setFullLoaded(true)} style={{
-            position: "absolute", inset: 0, display: "block", width: "100%", height: "100%", objectFit: "contain",
-            opacity: fullLoaded ? 1 : 0, transition: "opacity 320ms ease",
-          }} />
-          {/* Dot indicators */}
-          {allUrls.length > 1 && (
-            <div style={{ position: "absolute", bottom: 12, left: "50%", transform: "translateX(-50%)", display: "flex", gap: 5, zIndex: 5 }}>
-              {allUrls.map((_, idx) => (
-                <button
-                  key={idx}
-                  onClick={e => { e.stopPropagation(); setFullLoaded(false); setImgIdx(idx); }}
-                  style={{
-                    width: idx === imgIdx ? 16 : 8, height: 8, borderRadius: 4,
-                    background: idx === imgIdx ? "#fff" : "rgba(255,255,255,0.4)",
-                    border: "none", cursor: "pointer", padding: 0, transition: "all 150ms",
-                  }}
-                />
-              ))}
-            </div>
+          {isVideo ? (
+            <video
+              key={lightboxUrl}
+              src={lightboxUrl}
+              autoPlay
+              loop
+              playsInline
+              controls
+              style={{
+                display: "block",
+                maxHeight: "calc(100vh - 48px)",
+                maxWidth: "100%",
+                borderRadius: "12px",
+              }}
+            />
+          ) : (
+            <>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img key={`blur-${lightboxUrl}`} src={`/_next/image?url=${encodeURIComponent(lightboxUrl)}&w=828&q=75`} alt="" aria-hidden style={{
+                display: "block",
+                maxHeight: "calc(100vh - 48px)",
+                width: "100%", height: "auto", objectFit: "contain",
+                filter: fullLoaded ? "none" : "blur(12px)",
+                transform: fullLoaded ? "scale(1)" : "scale(1.04)",
+                transition: "filter 320ms ease, transform 320ms ease",
+              }} />
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img key={`full-${lightboxUrl}`} src={lightboxUrl} alt={item.prompt ?? ""} onLoad={() => setFullLoaded(true)} style={{
+                position: "absolute", inset: 0, display: "block", width: "100%", height: "100%", objectFit: "contain",
+                opacity: fullLoaded ? 1 : 0, transition: "opacity 320ms ease",
+              }} />
+              {/* Dot indicators */}
+              {allUrls.length > 1 && (
+                <div style={{ position: "absolute", bottom: 12, left: "50%", transform: "translateX(-50%)", display: "flex", gap: 5, zIndex: 5 }}>
+                  {allUrls.map((_, idx) => (
+                    <button
+                      key={idx}
+                      onClick={e => { e.stopPropagation(); setFullLoaded(false); setImgIdx(idx); }}
+                      style={{
+                        width: idx === imgIdx ? 16 : 8, height: 8, borderRadius: 4,
+                        background: idx === imgIdx ? "#fff" : "rgba(255,255,255,0.4)",
+                        border: "none", cursor: "pointer", padding: 0, transition: "all 150ms",
+                      }}
+                    />
+                  ))}
+                </div>
+              )}
+            </>
           )}
         </div>
 
-        {/* Next button */}
-        {allUrls.length > 1 && (
+        {/* Next button — images only */}
+        {!isVideo && allUrls.length > 1 && (
           <button
             onClick={e => { e.stopPropagation(); setFullLoaded(false); setImgIdx(i => Math.min(allUrls.length - 1, i + 1)); }}
             disabled={imgIdx === allUrls.length - 1}
@@ -2955,4 +3318,13 @@ const GALLERY_CSS = `
     opacity: 0; transition: opacity 180ms ease; pointer-events: none;
   }
   .gallery-item:hover .gallery-play-icon { opacity: 1; }
+  .gallery-mute-btn {
+    position: absolute; top: 8px; left: 8px;
+    opacity: 0; transition: opacity 180ms ease;
+    pointer-events: none; z-index: 5;
+  }
+  .gallery-item:hover .gallery-mute-btn {
+    opacity: 1;
+    pointer-events: auto;
+  }
 `;

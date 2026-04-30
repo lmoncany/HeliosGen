@@ -324,12 +324,12 @@ export interface VideoModel {
 }
 
 export const VIDEO_MODELS: VideoModel[] = [
-  // ── X-AI ────────────────────────────────────────────────────────────────────
+  // ── Kling ───────────────────────────────────────────────────────────────────
   {
     id: "kling-3.0",
     apiId: "kling-3.0/video",
     name: "Kling 3.0",
-    provider: "X-AI",
+    provider: "Kling",
     ratios: ["16:9", "9:16", "1:1"],
     durations: [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
     defaultDuration: 5,
