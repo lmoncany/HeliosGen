@@ -23,6 +23,7 @@ function NavbarInner() {
   const debugMode = useWorkflowStore((s) => s.debugMode);
   const toggleDebug = useWorkflowStore((s) => s.toggleDebug);
   const setSettingsOpen = useWorkflowStore((s) => s.setSettingsOpen);
+  const setShowDashboard = useWorkflowStore((s) => s.setShowDashboard);
   const supabase = createClient();
 
   // ── Preload heavy route chunks in background ──────────────────────────────
@@ -112,7 +113,7 @@ function NavbarInner() {
           <NavTab href="/gallery?tab=videos" active={isVideos} icon={<VideosIcon />}>
             Videos
           </NavTab>
-          <NavTab href="/" active={isWorkflow} icon={<WorkflowIcon />}>
+          <NavTab href="/" active={isWorkflow} icon={<WorkflowIcon />} onClick={() => setShowDashboard(true)}>
             Workflow
           </NavTab>
         </div>
@@ -203,14 +204,16 @@ function NavTab({
   active,
   icon,
   children,
+  onClick,
 }: {
   href: string;
   active: boolean;
   icon: React.ReactNode;
   children: React.ReactNode;
+  onClick?: () => void;
 }) {
   return (
-    <Link href={href} className={`tnav-tab${active ? " tnav-tab--active" : ""}`}>
+    <Link href={href} onClick={onClick} className={`tnav-tab${active ? " tnav-tab--active" : ""}`}>
       <span className="tnav-tab-icon">{icon}</span>
       {children}
     </Link>

@@ -132,10 +132,11 @@ interface WorkflowStore {
   redo: () => void;
 
   // ── Space actions
-  createSpace: (name: string) => void;
-  switchSpace: (id: string)   => void;
-  renameSpace: (id: string, name: string) => void;
-  deleteSpace: (id: string)   => void;
+  createSpace:    (name: string) => void;
+  switchSpace:    (id: string)   => void;
+  renameSpace:    (id: string, name: string) => void;
+  deleteSpace:    (id: string)   => void;
+  duplicateSpace: (id: string)   => void;
 
   // ── Workflow actions
   onNodesChange:      (changes: NodeChange[]) => void;
@@ -160,6 +161,8 @@ interface WorkflowStore {
   setAuthModalOpen:          (v: boolean) => void;
   resetPasswordModalOpen:    boolean;
   setResetPasswordModalOpen: (v: boolean) => void;
+  showDashboard:             boolean;
+  setShowDashboard:          (v: boolean) => void;
   saveViewport: (viewport: { x: number; y: number; zoom: number }) => void;
   loadSpacesFromDB: (spaces: Space[]) => void;
 }
@@ -271,6 +274,19 @@ export const useWorkflowStore = create<WorkflowStore>()(
               edges:         next.edges,
               nodeCounters:  next.nodeCounters,
             };
+          }),
+
+        duplicateSpace: (id) =>
+          set((s) => {
+            const original = s.spaces.find((sp) => sp.id === id);
+            if (!original) return {};
+            const copy = makeSpace(`${original.name} (copy)`, {
+              nodes:        original.nodes,
+              edges:        original.edges,
+              nodeCounters: original.nodeCounters,
+            });
+            const spaces = syncSpace(s.spaces, s.activeSpaceId, s.nodes, s.edges, s.nodeCounters);
+            return { spaces: [...spaces, copy] };
           }),
 
         // ── Workflow actions (each syncs back to spaces) ────────────────────
@@ -526,6 +542,8 @@ export const useWorkflowStore = create<WorkflowStore>()(
         setAuthModalOpen:          (v) => set({ authModalOpen: v }),
         resetPasswordModalOpen:    false,
         setResetPasswordModalOpen: (v) => set({ resetPasswordModalOpen: v }),
+        showDashboard:             true,
+        setShowDashboard:          (v) => set({ showDashboard: v }),
       };
     },
     {
