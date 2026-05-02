@@ -35,7 +35,6 @@ import NodePickerMenu, { DropState } from "./NodePickerMenu";
 import SelectionToolbar from "./SelectionToolbar";
 import CanvasToolbar from "./CanvasToolbar";
 import AddNodeMenu from "./AddNodeMenu";
-import TopBar from "./TopBar";
 
 async function getAccessToken(): Promise<string | undefined> {
   try {
@@ -1252,13 +1251,6 @@ export default function WorkflowCanvas() {
 
   return (
     <div className="relative flex-1 flex flex-col min-w-0 h-full">
-      <TopBar
-        isRunning={isRunning}
-        canRun={canRun}
-        onRunAll={runAll}
-        hasNodes={nodes.length > 0}
-        onClear={clear}
-      />
       <div
         ref={wrapperRef}
         className={`relative flex-1 flex flex-col min-h-0 min-w-0${activeTool === "hand" ? " canvas-hand-mode" : ""}`}

@@ -42,7 +42,7 @@ export default function TopBar({
         height:         "40px",
         padding:        "0 12px",
         borderBottom:   "1px solid rgba(255,255,255,0.05)",
-        background:     "#080A0C",
+        background:     "#1A1A1C",
         flexShrink:     0,
         userSelect:     "none",
         position:       "relative",

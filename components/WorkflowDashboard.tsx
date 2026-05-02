@@ -561,10 +561,10 @@ export default function WorkflowDashboard() {
   );
 
   return (
-    <div className="flex-1 overflow-y-auto" style={{ background: "#080A0C" }}>
-      <div style={{ maxWidth: "1100px", margin: "0 auto", padding: "40px 32px" }}>
-        <div style={{ marginBottom: "32px" }}>
-          <h1 style={{ fontSize: "20px", fontWeight: 600, color: "#fff", margin: 0, letterSpacing: "-0.02em" }}>
+    <div className="flex-1 overflow-y-auto" style={{ background: "#1A1A1C" }}>
+      <div style={{ maxWidth: "1400px", margin: "0 auto", padding: "48px 40px" }}>
+        <div style={{ marginBottom: "40px" }}>
+          <h1 style={{ fontSize: "22px", fontWeight: 600, color: "#fff", margin: 0, letterSpacing: "-0.02em" }}>
             My Workflows
           </h1>
           <p style={{ fontSize: "13px", color: "rgba(255,255,255,0.35)", margin: "6px 0 0" }}>
@@ -575,8 +575,8 @@ export default function WorkflowDashboard() {
         <div
           style={{
             display: "grid",
-            gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))",
-            gap: "16px",
+            gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))",
+            gap: "20px",
           }}
         >
           <CreateCard onCreate={handleCreate} />

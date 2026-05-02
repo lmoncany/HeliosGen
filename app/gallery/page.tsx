@@ -1082,18 +1082,18 @@ function GalleryInner() {
 
   // ── Render ────────────────────────────────────────────────────────────────
 
-  if (!authLoaded) return <div style={{ flex: 1, background: "#080A0C" }} />;
+  if (!authLoaded) return <div style={{ flex: 1, background: "#1A1A1C" }} />;
 
   if (!user) {
     return (
-      <div style={{ flex: 1, background: "#080A0C", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: "16px" }}>
+      <div style={{ flex: 1, background: "#1A1A1C", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: "16px" }}>
         <p style={{ color: "#4A4A45", fontSize: "14px" }}>Sign in to view your gallery</p>
       </div>
     );
   }
 
   return (
-    <div style={{ flex: 1, background: "#080A0C", display: "flex", flexDirection: "column", overflow: "hidden", color: "#fff" }}>
+    <div style={{ flex: 1, background: "#1A1A1C", display: "flex", flexDirection: "column", overflow: "hidden", color: "#fff" }}>
 
       {/* ── Sub-navbar ── */}
       <div style={{
@@ -1168,7 +1168,7 @@ function GalleryInner() {
         {!loading && filteredItems.length === 0 && pendingGens.length === 0 ? (
           <EmptyState tab={tab} />
         ) : (
-          <div style={{ columns: colCount, columnGap: "3px", padding: "3px" }}>
+          <div style={{ display: "grid", gridTemplateColumns: `repeat(${colCount}, 1fr)`, gap: "3px", padding: "3px", alignItems: "start" }}>
             {[
               ...pendingGens.map(pg => ({ kind: "pending" as const, pg })),
               ...filteredItems.map(item => ({ kind: "gallery" as const, item })),
@@ -2344,7 +2344,7 @@ function GalleryInner() {
 
 export default function GalleryPage() {
   return (
-    <Suspense fallback={<div style={{ flex: 1, background: "#080A0C" }} />}>
+    <Suspense fallback={<div style={{ flex: 1, background: "#1A1A1C" }} />}>
       <GalleryInner />
     </Suspense>
   );
@@ -3324,7 +3324,16 @@ function GalleryCard({
     >
       {isVideo ? (
         <>
-          <video ref={videoRef} src={item.url} muted={videoMuted} loop playsInline preload="metadata" onError={() => setFailed(true)} />
+          <video
+            ref={videoRef}
+            src={item.url}
+            muted={videoMuted}
+            loop
+            playsInline
+            preload="metadata"
+            onError={() => setFailed(true)}
+            style={cssRatio ? { width: "100%", height: "100%", objectFit: "cover", display: "block" } : { width: "100%", height: "auto", display: "block" }}
+          />
           {!playing && (
             <div className="gallery-play-icon">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="#fff" stroke="none"><polygon points="5 3 19 12 5 21 5 3" /></svg>
@@ -4096,10 +4105,8 @@ const GALLERY_CSS = `
     position: relative;
     overflow: hidden;
     cursor: pointer;
-    background: #111416;
+    background: #222226;
     width: 100%;
-    break-inside: avoid;
-    margin-bottom: 3px;
   }
   .gallery-actions-top {
     position: absolute;
@@ -4180,11 +4187,12 @@ const GALLERY_CSS = `
   }
   .gallery-shimmer {
     position: absolute; inset: 0;
-    background: linear-gradient(90deg, #111416 25%, #1a1d20 50%, #111416 75%);
+    background: linear-gradient(90deg, #222226 25%, #2a2a2e 50%, #222226 75%);
     background-size: 800px 100%;
     animation: shimmer 1.6s infinite linear;
   }
-  .gallery-item img, .gallery-item video { display: block; width: 100%; height: auto; }
+  .gallery-item img { display: block; width: 100%; height: auto; }
+  .gallery-item video { display: block; width: 100%; height: auto; }
   [data-at-menu] { font-family: inherit; }
   .gallery-overlay {
     position: absolute; inset: 0;

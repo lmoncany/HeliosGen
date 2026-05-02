@@ -30,7 +30,7 @@ export default function RootLayout({
       className={`${geistSans.variable} ${geistMono.variable} antialiased dark`}
       style={{ height: "100%" }}
     >
-      <body style={{ height: "100%", background: "#080A0C", color: "#fff", display: "flex", flexDirection: "column" }}>
+      <body style={{ height: "100%", background: "#1A1A1C", color: "#fff", display: "flex", flexDirection: "column" }}>
         <Navbar />
         <main style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
           {children}

@@ -251,7 +251,7 @@ function DropdownItem({
 const NAV_CSS = `
   .tnav-skeleton {
     height: 52px;
-    background: #080A0C;
+    background: #1A1A1C;
     border-bottom: 1px solid rgba(255,255,255,0.05);
     flex-shrink: 0;
   }
@@ -261,7 +261,7 @@ const NAV_CSS = `
     align-items: center;
     height: 52px;
     padding: 0 16px;
-    background: #080A0C;
+    background: #1A1A1C;
     border-bottom: 1px solid rgba(255,255,255,0.05);
     flex-shrink: 0;
     gap: 0;
