@@ -1,5 +1,6 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
+import GenerateButton from "@/components/nodes/GenerateButton";
 import { Handle, Position, NodeProps, Node } from "@xyflow/react";
 import { useWorkflowStore, NodeData } from "@/lib/store";
 import { useAnimatedPopup } from "@/lib/useAnimatedPopup";
@@ -367,17 +368,7 @@ export default function AssistantNode({ id, data, selected }: NodeProps<Assistan
                 Stop
               </button>
             ) : (
-              <button
-                onClick={(e) => { e.stopPropagation(); handleGenerate(); }}
-                disabled={!hasPrompt}
-                className="flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-medium transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-                style={{ border: "1px solid #2a4a0f", color: "#ff3df5", background: "rgba(119,229,68,0.07)" }}
-                onMouseEnter={(e) => { if (hasPrompt) (e.currentTarget as HTMLElement).style.background = "rgba(119,229,68,0.13)"; }}
-                onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "rgba(119,229,68,0.07)"; }}
-              >
-                <svg width="7" height="7" viewBox="0 0 8 8" fill="currentColor"><polygon points="1,0.5 7.5,4 1,7.5" /></svg>
-                Generate
-              </button>
+              <GenerateButton onClick={handleGenerate} disabled={!hasPrompt} />
             )}
           </div>
         </div>

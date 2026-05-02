@@ -33,8 +33,8 @@ function Btn({
       title={title}
       className={`w-7 h-7 flex items-center justify-center rounded-full transition-colors duration-150 disabled:opacity-30 disabled:cursor-not-allowed ${
         danger
-          ? "text-[#777] hover:text-red-400 hover:bg-red-400/10"
-          : "text-[#777] hover:text-white hover:bg-white/10"
+          ? "text-white hover:text-red-400 hover:bg-red-400/10"
+          : "text-white hover:bg-white/10"
       }`}
     >
       {children}

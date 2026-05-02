@@ -144,11 +144,7 @@ function Btn({ id, title, active, activeStyle = "highlight", dimmed, onClick, ch
           ? "rgba(255,255,255,0.2)"
           : isCircleActive
           ? "#111"
-          : active
-          ? "rgba(255,255,255,0.9)"
-          : hovered
-          ? "rgba(255,255,255,0.8)"
-          : "rgba(255,255,255,0.45)",
+          : "rgba(255,255,255,0.9)",
         opacity: dimmed ? 0.45 : 1,
       }}
     >
@@ -216,16 +212,14 @@ export default function CanvasToolbar({
           cursor: "pointer",
           flexShrink: 0,
           background: "transparent",
-          color: "rgba(255,255,255,0.55)",
+          color: "rgba(255,255,255,0.9)",
           transition: "background 150ms ease, color 150ms ease",
         }}
         onMouseEnter={(e) => {
           (e.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.07)";
-          (e.currentTarget as HTMLElement).style.color = "rgba(255,255,255,0.9)";
         }}
         onMouseLeave={(e) => {
           (e.currentTarget as HTMLElement).style.background = "transparent";
-          (e.currentTarget as HTMLElement).style.color = "rgba(255,255,255,0.55)";
         }}
       >
         <IconAdd />
@@ -253,38 +247,6 @@ export default function CanvasToolbar({
         onClick={() => selectTool("hand")}
       >
         <IconHand />
-      </Btn>
-
-      <Divider />
-
-      {/* Scissors / Cut */}
-      <Btn
-        id="toolbar-cut"
-        title="Cut edges (X)"
-        active={activeTool === "cut"}
-        onClick={() => selectTool("cut")}
-      >
-        <IconScissors />
-      </Btn>
-
-      {/* Frame */}
-      <Btn
-        id="toolbar-frame"
-        title="Add frame"
-        active={activeTool === "frame"}
-        onClick={() => selectTool("frame")}
-      >
-        <IconFrame />
-      </Btn>
-
-      {/* Comment */}
-      <Btn
-        id="toolbar-comment"
-        title="Add comment"
-        active={activeTool === "comment"}
-        onClick={() => selectTool("comment")}
-      >
-        <IconComment />
       </Btn>
 
       <Divider />

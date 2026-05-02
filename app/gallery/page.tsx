@@ -181,6 +181,7 @@ const galleryCache = {
 };
 
 const loadedImageUrls = new Set<string>();
+const naturalRatioCache = new Map<string, string>(); // url → "w / h"
 
 interface SavedSettings {
   prompt: string; modelId: string; aspectRatio: string;
@@ -1165,7 +1166,17 @@ function GalleryInner() {
       {/* ── Grid ── */}
       <div style={{ flex: 1, overflowY: "auto", paddingBottom: "260px" }}>
         {/* ── Gallery grid ── */}
-        {!loading && filteredItems.length === 0 && pendingGens.length === 0 ? (
+        {loading ? (
+          <div style={{ display: "grid", gridTemplateColumns: `repeat(${colCount}, 1fr)`, gap: "3px", padding: "3px", alignItems: "start" }}>
+            {Array.from({ length: colCount * 3 }).map((_, i) => (
+              <div
+                key={i}
+                className="gallery-skeleton"
+                style={{ aspectRatio: i % 3 === 1 ? "4 / 5" : i % 5 === 0 ? "16 / 9" : "1 / 1" }}
+              />
+            ))}
+          </div>
+        ) : !loading && filteredItems.length === 0 && pendingGens.length === 0 ? (
           <EmptyState tab={tab} />
         ) : (
           <div style={{ display: "grid", gridTemplateColumns: `repeat(${colCount}, 1fr)`, gap: "3px", padding: "3px", alignItems: "start" }}>
@@ -3254,6 +3265,7 @@ function GalleryCard({
   const [downloading, setDownloading] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [cardImgIdx, setCardImgIdx] = useState(0);
+  const [naturalRatio, setNaturalRatio] = useState<string | null>(() => naturalRatioCache.get(item.url) ?? null);
   const isVideo = item.mediaType === "video";
   const allUrls = item.imageUrls ?? [item.url];
   const displayUrl = allUrls[cardImgIdx] ?? item.url;
@@ -3271,11 +3283,19 @@ function GalleryCard({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const cssRatio = (() => {
+  const storedRatio = (() => {
     const ar = item.aspect_ratio;
     if (!ar || ar === "auto") return null;
     const [w, h] = ar.split(":");
     return w && h ? `${w} / ${h}` : null;
+  })();
+
+  // Uploads have no stored aspect_ratio — use natural dims once known, 1/1 only while actively loading
+  const cssRatio = storedRatio ?? (() => {
+    if (item.source !== "upload") return null;
+    if (naturalRatio) return naturalRatio;
+    if (shouldLoad && !imgLoaded) return "1 / 1"; // placeholder so shimmer has height
+    return null;
   })();
 
   const handleDownload = async (e: React.MouseEvent) => {
@@ -3365,7 +3385,16 @@ function GalleryCard({
             src={shouldLoad ? `/_next/image?url=${encodeURIComponent(displayUrl)}&w=828&q=75` : undefined}
             alt={item.prompt ?? ""}
             decoding="async"
-            onLoad={() => { setImgLoaded(true); loadedImageUrls.add(item.url); }}
+            onLoad={(e) => {
+              const img = e.currentTarget;
+              if (!storedRatio && item.source === "upload" && img.naturalWidth && img.naturalHeight) {
+                const r = `${img.naturalWidth} / ${img.naturalHeight}`;
+                naturalRatioCache.set(item.url, r);
+                setNaturalRatio(r);
+              }
+              setImgLoaded(true);
+              loadedImageUrls.add(item.url);
+            }}
             onError={() => setFailed(true)}
             style={{ display: "block", width: "100%", height: "auto", opacity: imgLoaded ? 1 : 0, transition: "opacity 280ms ease" }}
           />
@@ -4027,8 +4056,22 @@ const GALLERY_CSS = `
     to   { opacity: 1; transform: translateY(0)   scale(1);    }
   }
   @keyframes shimmer {
-    0%   { background-position: -400px 0; }
-    100% { background-position:  400px 0; }
+    0%   { background-position: -800px 0; }
+    100% { background-position:  800px 0; }
+  }
+  .gallery-skeleton {
+    width: 100%;
+    background: linear-gradient(
+      90deg,
+      #222226 0px,
+      #2e2e33 200px,
+      #3a3a40 350px,
+      #2e2e33 500px,
+      #222226 700px
+    );
+    background-size: 800px 100%;
+    animation: shimmer 1.6s ease-in-out infinite;
+    border-radius: 2px;
   }
   @keyframes refImgIn {
     from { opacity: 0; transform: translateY(14px) scale(0.91); }

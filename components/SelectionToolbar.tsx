@@ -3,6 +3,7 @@ import React, { useCallback, useEffect, useState } from "react";
 import { useReactFlow, Node } from "@xyflow/react";
 import { useWorkflowStore, NodeData } from "@/lib/store";
 import { edgeStyle } from "@/lib/edgeStyles";
+import { arrangeNodes } from "@/lib/arrangeNodes";
 
 const GROUP_PADDING = 24;
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
@@ -32,8 +33,8 @@ function Btn({
       onClick={(e) => { e.stopPropagation(); onClick(); }}
       title={title}
       className={`w-7 h-7 flex items-center justify-center rounded-full transition-colors duration-150 ${
-        danger ? "text-[#777] hover:text-red-400 hover:bg-red-400/10"
-               : "text-[#777] hover:text-white hover:bg-white/10"
+        danger ? "text-white hover:text-red-400 hover:bg-red-400/10"
+               : "text-white hover:bg-white/10"
       }`}
     >
       {children}
@@ -75,6 +76,12 @@ export default function SelectionToolbar() {
   const screenPos = bounds
     ? flowToScreenPosition({ x: bounds.x + bounds.width / 2, y: bounds.y })
     : null;
+
+  // ── Arrange ─────────────────────────────────────────────────────────────────
+  const handleArrange = useCallback(() => {
+    const sel = useWorkflowStore.getState().nodes.filter((n) => n.selected && n.type !== "groupNode");
+    arrangeNodes(sel.map((n) => n.id));
+  }, []);
 
   // ── Group ───────────────────────────────────────────────────────────────────
   const handleGroup = useCallback(() => {
@@ -186,6 +193,18 @@ export default function SelectionToolbar() {
           whiteSpace:   "nowrap",
         }}
       >
+        {/* Arrange */}
+        <Btn onClick={handleArrange} title="Auto-arrange selected nodes">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <rect x="3" y="3" width="7" height="7" rx="1" />
+            <rect x="14" y="3" width="7" height="7" rx="1" />
+            <rect x="3" y="14" width="7" height="7" rx="1" />
+            <rect x="14" y="14" width="7" height="7" rx="1" />
+          </svg>
+        </Btn>
+
+        <Sep />
+
         {/* Group */}
         <Btn onClick={handleGroup} title="Group selected nodes">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

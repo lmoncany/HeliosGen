@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useAnimatedPopup } from "@/lib/useAnimatedPopup";
 import { createPortal } from "react-dom";
+import GenerateButton from "@/components/nodes/GenerateButton";
 import Image from "next/image";
 import { Handle, Position, NodeProps, Node, useUpdateNodeInternals } from "@xyflow/react";
 import CornerResizer from "./CornerResizer";
@@ -999,22 +1000,7 @@ export default function GenerateNode({ id, data, selected }: NodeProps<GenerateN
           </div>{/* end pills wrapper */}
 
           {/* Generate button — always right */}
-          <button
-            onMouseDown={(e) => e.stopPropagation()}
-            onClick={generate}
-            disabled={busy || promptOverLimit}
-            className="shrink-0 h-7 px-3 rounded-lg flex items-center gap-1.5 transition-all disabled:opacity-30 hover:brightness-110"
-            style={{ background: "rgba(109,40,217,0.18)", backdropFilter: "blur(10px)", WebkitBackdropFilter: "blur(10px)", border: "1px solid rgba(109,40,217,0.55)" }}
-          >
-            {busy ? (
-              <svg width="10" height="10" viewBox="0 0 10 10" fill="none" style={{ animation: "spin 0.9s linear infinite" }}>
-                <circle cx="5" cy="5" r="4" stroke="rgba(255,255,255,0.2)" strokeWidth="1.5" />
-                <path d="M5 1 A4 4 0 0 1 9 5" stroke="rgba(255,255,255,0.85)" strokeWidth="1.5" strokeLinecap="round" />
-              </svg>
-            ) : (
-              <span className="text-[11px] font-medium text-white/90">Generate</span>
-            )}
-          </button>
+          <GenerateButton onClick={generate} busy={busy} disabled={promptOverLimit} />
         </div>
       </div>
 

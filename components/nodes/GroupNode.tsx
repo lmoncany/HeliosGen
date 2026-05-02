@@ -2,6 +2,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { NodeProps, Node, useReactFlow, NodeResizeControl, NodeToolbar, Position } from "@xyflow/react";
 import { useWorkflowStore, NodeData } from "@/lib/store";
+import { arrangeNodes } from "@/lib/arrangeNodes";
 
 export type GroupNodeType = Node<NodeData, "groupNode">;
 
@@ -20,22 +21,25 @@ const GROUP_COLORS = [
 
 // ── Toolbar button ─────────────────────────────────────────────────────────────
 function Btn({
-  onClick, title, danger, active, children,
+  onClick, title, danger, active, label, children,
 }: {
-  onClick: () => void; title: string; danger?: boolean; active?: boolean; children: React.ReactNode;
+  onClick: () => void; title: string; danger?: boolean; active?: boolean; label?: string; children: React.ReactNode;
 }) {
   return (
     <button
       onMouseDown={(e) => e.stopPropagation()}
       onClick={(e) => { e.stopPropagation(); onClick(); }}
       title={title}
-      className={`w-7 h-7 flex items-center justify-center rounded-full transition-colors duration-150 ${
-        active   ? "text-white bg-white/15" :
-        danger   ? "text-[#777] hover:text-red-400 hover:bg-red-400/10" :
-                   "text-[#777] hover:text-white hover:bg-white/10"
+      className={`h-7 flex items-center justify-center rounded-full transition-colors duration-150 ${
+        label ? "px-2.5 gap-1.5" : "w-7"
+      } ${
+        active ? "text-white bg-white/15" :
+        danger ? "text-white hover:text-red-400 hover:bg-red-400/10" :
+                 "text-white hover:bg-white/10"
       }`}
     >
       {children}
+      {label && <span className="text-[11px] font-medium leading-none tracking-wide">{label}</span>}
     </button>
   );
 }
@@ -163,6 +167,13 @@ export default function GroupNode({ id, data, selected }: NodeProps<GroupNodeTyp
     const allIds = new Set([id, ...memberIds]);
     onNodesChange([...allIds].map((nid) => ({ type: "remove" as const, id: nid })));
   }, [id, onNodesChange]);
+
+  // ── Arrange members ───────────────────────────────────────────────────────
+  const handleArrange = useCallback(() => {
+    const state = useWorkflowStore.getState();
+    const memberIds = (state.nodes.find((n) => n.id === id)?.data?.memberIds as string[] | undefined) ?? [];
+    arrangeNodes(memberIds, { groupId: id });
+  }, [id]);
 
   // ── Duplicate group + members ─────────────────────────────────────────────
   const handleDuplicate = useCallback(() => {
@@ -299,7 +310,7 @@ export default function GroupNode({ id, data, selected }: NodeProps<GroupNodeTyp
         ) : (
           <>
             {/* Focus / center view */}
-            <Btn onClick={handleFocus} title="Center view on group">
+            <Btn onClick={handleFocus} title="Center view on group" label="Center">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <circle cx="12" cy="12" r="7" />
                 <circle cx="12" cy="12" r="2.5" fill="currentColor" stroke="none" />
@@ -310,8 +321,18 @@ export default function GroupNode({ id, data, selected }: NodeProps<GroupNodeTyp
               </svg>
             </Btn>
 
+            {/* Arrange members */}
+            <Btn onClick={handleArrange} title="Auto-arrange nodes in group" label="Arrange">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="3" y="3" width="7" height="7" rx="1" />
+                <rect x="14" y="3" width="7" height="7" rx="1" />
+                <rect x="3" y="14" width="7" height="7" rx="1" />
+                <rect x="14" y="14" width="7" height="7" rx="1" />
+              </svg>
+            </Btn>
+
             {/* Ungroup */}
-            <Btn onClick={handleUngroup} title="Ungroup">
+            <Btn onClick={handleUngroup} title="Ungroup" label="Ungroup">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <rect x="2" y="7" width="8" height="8" rx="1.5" />
                 <rect x="14" y="7" width="8" height="8" rx="1.5" />
