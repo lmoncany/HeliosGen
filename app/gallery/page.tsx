@@ -267,6 +267,7 @@ function GalleryInner() {
   const gridRef = useRef<HTMLDivElement>(null);
   const gridOuterRef = useRef<HTMLDivElement>(null);
   const [containerWidth, setContainerWidth] = useState(0);
+  const [natRatioVersion, setNatRatioVersion] = useState(0);
   const [downloads, setDownloads] = useState<DownloadTask[]>([]);
   const [refError, setRefError] = useState("");
 
@@ -1106,62 +1107,134 @@ function GalleryInner() {
       : items.filter(item => item.source === "upload"),
     [items, sourceFilter]);
 
+  type GalleryLayoutItem =
+    | { kind: "pending"; pg: PendingGen; ratio: number; width: number }
+    | { kind: "gallery"; item: GalleryItem; ratio: number; width: number };
+
+  // Justified row layout: items are packed into rows that each fill the full container width.
+  // Zoom controls target row height — higher zoom = shorter rows = more items per row.
   const justifiedRows = useMemo(() => {
-    if (containerWidth <= 0) return [];
+    if (containerWidth <= 0) return [] as Array<{ items: GalleryLayoutItem[]; height: number }>;
     const targetH = Math.max(80, Math.min(400, Math.round(containerWidth / Math.max(1, zoom))));
 
-    type LayoutEntry =
-      | { kind: "pending"; pg: PendingGen; ratio: number; width: number }
-      | { kind: "gallery"; item: GalleryItem; ratio: number; width: number };
+    const toRatio = (ar: string | undefined, mediaType: "image" | "video", url: string): number => {
+      const fallback = mediaType === "video" ? 16 / 9 : 4 / 3;
+      if (ar && ar !== "auto") {
+        const [w, h] = ar.split(":");
+        const wn = parseFloat(w), hn = parseFloat(h);
+        if (wn && hn) return wn / hn;
+      }
+      const cached = naturalRatioCache.get(url);
+      if (cached) {
+        const [w, h] = cached.split(" / ");
+        const wn = parseFloat(w), hn = parseFloat(h);
+        if (wn && hn) return wn / hn;
+      }
+      return fallback;
+    };
 
-    const allItems: LayoutEntry[] = [
+    const allItems: GalleryLayoutItem[] = [
       ...pendingGens.map(pg => {
         const [ws, hs] = pg.aspectRatio.split(":");
         const w = parseFloat(ws), h = parseFloat(hs);
-        return { kind: "pending" as const, pg, ratio: (w && h) ? w / h : 1, width: 0 };
+        return { kind: "pending" as const, pg, ratio: (w && h) ? w / h : 16 / 9, width: 0 };
       }),
-      ...filteredItems.map(item => {
-        const ar = item.aspect_ratio;
-        let ratio = 1;
-        if (ar && ar !== "auto") {
-          const [w, h] = ar.split(":");
-          const wn = parseFloat(w), hn = parseFloat(h);
-          if (wn && hn) ratio = wn / hn;
-        }
-        return { kind: "gallery" as const, item, ratio, width: 0 };
-      }),
+      ...filteredItems.map(item => ({
+        kind: "gallery" as const,
+        item,
+        ratio: toRatio(item.aspect_ratio, item.mediaType, item.url),
+        width: 0,
+      })),
     ];
 
-    const rows: Array<{ items: LayoutEntry[]; height: number }> = [];
-    let cur: LayoutEntry[] = [];
+    const rows: Array<{ items: GalleryLayoutItem[]; height: number }> = [];
+    let cur: GalleryLayoutItem[] = [];
     let ratioSum = 0;
 
-    const sealRow = (items: LayoutEntry[], rSum: number, rowH: number) => {
+    const sealRow = (items: GalleryLayoutItem[], rSum: number, rowH: number) => {
       const totalGaps = (items.length - 1) * GALLERY_GAP;
       const availW = containerWidth - totalGaps;
-      rows.push({
-        items: items.map(it => ({ ...it, width: availW * it.ratio / rSum })),
-        height: rowH,
-      });
+      rows.push({ items: items.map(it => ({ ...it, width: availW * it.ratio / rSum })), height: rowH });
     };
 
-    for (const item of allItems) {
-      cur.push(item);
-      ratioSum += item.ratio;
+    for (const entry of allItems) {
+      cur.push(entry);
+      ratioSum += entry.ratio;
       const gaps = (cur.length - 1) * GALLERY_GAP;
       const h = (containerWidth - gaps) / ratioSum;
-      if (h <= targetH) {
-        sealRow(cur, ratioSum, h);
-        cur = [];
-        ratioSum = 0;
+      if (h <= targetH) { sealRow(cur, ratioSum, h); cur = []; ratioSum = 0; }
+    }
+    if (cur.length > 0) {
+      // Last (partial) row: keep natural widths at targetH so ratios aren't distorted.
+      const totalGaps = (cur.length - 1) * GALLERY_GAP;
+      const naturalW = cur.reduce((s, it) => s + targetH * it.ratio, 0);
+      if (naturalW + totalGaps <= containerWidth) {
+        rows.push({ items: cur.map(it => ({ ...it, width: targetH * it.ratio })), height: targetH });
+      } else {
+        sealRow(cur, ratioSum, (containerWidth - totalGaps) / ratioSum);
       }
     }
 
-    if (cur.length > 0) sealRow(cur, ratioSum, targetH);
-
     return rows;
-  }, [containerWidth, zoom, pendingGens, filteredItems, GALLERY_GAP]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [containerWidth, zoom, pendingGens, filteredItems, GALLERY_GAP, natRatioVersion]);
 
+
+  // True when there are upload items whose dimensions aren't cached yet.
+  // Re-evaluates synchronously each render (same render cycle as filteredItems update),
+  // so the skeleton condition below blocks painting before probes complete.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const needsProbing = useMemo(() =>
+    filteredItems.some(
+      item => item.source === "upload" &&
+              (!item.aspect_ratio || item.aspect_ratio === "auto") &&
+              !naturalRatioCache.has(item.url),
+    ),
+  // natRatioVersion causes re-check once the probes write their results
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  [filteredItems, natRatioVersion]);
+
+  // Fire probes for every uncached item without a stored aspect_ratio.
+  // Images: 32px next/image probe (fast). Videos: <video preload="metadata"> probe.
+  // Results are non-blocking for video (uses 16:9 default until resolved).
+  useEffect(() => {
+    const toProbe = filteredItems.filter(
+      item => (!item.aspect_ratio || item.aspect_ratio === "auto") &&
+              !naturalRatioCache.has(item.url),
+    );
+    if (toProbe.length === 0) return;
+
+    let cancelled = false;
+    const bump = () => { if (!cancelled) setNatRatioVersion(v => v + 1); };
+
+    toProbe.forEach(item => {
+      if (item.mediaType === "video") {
+        const vid = document.createElement("video");
+        vid.preload = "metadata";
+        vid.onloadedmetadata = () => {
+          if (vid.videoWidth && vid.videoHeight)
+            naturalRatioCache.set(item.url, `${vid.videoWidth} / ${vid.videoHeight}`);
+          else
+            naturalRatioCache.set(item.url, "16 / 9");
+          bump();
+        };
+        vid.onerror = () => { naturalRatioCache.set(item.url, "16 / 9"); bump(); };
+        vid.src = item.url;
+      } else {
+        const probeUrl = item.imageUrls?.[0] ?? item.url;
+        const img = new window.Image();
+        img.onload = () => {
+          if (img.naturalWidth && img.naturalHeight)
+            naturalRatioCache.set(item.url, `${img.naturalWidth} / ${img.naturalHeight}`);
+          bump();
+        };
+        img.onerror = () => { naturalRatioCache.set(item.url, "4 / 3"); bump(); };
+        img.src = `/_next/image?url=${encodeURIComponent(probeUrl)}&w=32&q=75`;
+      }
+    });
+
+    return () => { cancelled = true; };
+  }, [filteredItems]);
 
   // ── Render ────────────────────────────────────────────────────────────────
 
@@ -1247,8 +1320,8 @@ function GalleryInner() {
 
       {/* ── Grid ── */}
       <div ref={gridOuterRef} style={{ flex: 1, overflowY: "auto", paddingBottom: "260px" }}>
-        {loading || containerWidth === 0 ? (
-          /* Skeleton — shown while loading or before container size is measured */
+        {loading || containerWidth === 0 || needsProbing ? (
+          /* Skeleton — shown while loading, before container is measured, or while probing upload dimensions */
           <div style={{ display: "grid", gridTemplateColumns: `repeat(${zoom}, 1fr)`, gap: "3px", padding: "3px", alignItems: "start" }}>
             {Array.from({ length: zoom * 3 }).map((_, i) => (
               <div key={i} className="gallery-skeleton" style={{ aspectRatio: i % 3 === 1 ? "4 / 5" : i % 5 === 0 ? "16 / 9" : "1 / 1" }} />
@@ -1259,27 +1332,19 @@ function GalleryInner() {
         ) : (
           <div ref={gridRef} style={{ padding: "3px" }}>
             {justifiedRows.map((row, rowIdx) => (
-              <div
-                key={rowIdx}
-                style={{
-                  display: "flex",
-                  height: row.height,
-                  gap: `${GALLERY_GAP}px`,
-                  marginBottom: rowIdx < justifiedRows.length - 1 ? `${GALLERY_GAP}px` : 0,
-                }}
-              >
-                {row.items.map(layoutItem => {
-                  if (layoutItem.kind === "pending") {
-                    const pg = layoutItem.pg;
-                    return (
-                      <div key={pg.id} style={{
-                        width: layoutItem.width,
-                        flex: "0 0 auto",
-                        height: "100%",
-                        position: "relative",
-                        overflow: "hidden",
-                        background: pg.error ? "rgba(20,8,8,0.95)" : "#0D1012",
-                      }}>
+              <div key={rowIdx} style={{ display: "flex", height: row.height, gap: `${GALLERY_GAP}px`, marginBottom: rowIdx < justifiedRows.length - 1 ? `${GALLERY_GAP}px` : 0 }}>
+                {row.items.map((layoutItem) => {
+              if (layoutItem.kind === "pending") {
+                const pg = layoutItem.pg;
+                return (
+                  <div key={pg.id} style={{
+                    width: layoutItem.width,
+                    flex: "0 0 auto",
+                    height: "100%",
+                    position: "relative",
+                    overflow: "hidden",
+                    background: pg.error ? "rgba(20,8,8,0.95)" : "#0D1012",
+                  }}>
                         {pg.error ? (
                           <>
                             <div style={{
@@ -1386,6 +1451,7 @@ function GalleryInner() {
                         onDelete={handleDelete}
                         videoMuted={videoMuted}
                         onToggleMute={() => setVideoMuted(m => !m)}
+                        onNaturalRatioDiscovered={() => setNatRatioVersion(v => v + 1)}
                       />
                     </div>
                   );
@@ -3276,6 +3342,7 @@ function GalleryCard({
   onDelete,
   videoMuted,
   onToggleMute,
+  onNaturalRatioDiscovered,
 }: {
   item: GalleryItem;
   onOpen?: () => void;
@@ -3285,6 +3352,7 @@ function GalleryCard({
   onDelete?: (id: string, source: "generation" | "upload") => Promise<void>;
   videoMuted?: boolean;
   onToggleMute?: () => void;
+  onNaturalRatioDiscovered?: () => void;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const cardRef = useRef<HTMLDivElement>(null);
@@ -3383,7 +3451,7 @@ function GalleryCard({
             playsInline
             preload="metadata"
             onError={() => setFailed(true)}
-            style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+            style={{ width: "100%", height: "100%", objectFit: "contain", display: "block" }}
           />
           {!playing && (
             <div className="gallery-play-icon">
@@ -3420,14 +3488,17 @@ function GalleryCard({
               const img = e.currentTarget;
               if (!storedRatio && item.source === "upload" && img.naturalWidth && img.naturalHeight) {
                 const r = `${img.naturalWidth} / ${img.naturalHeight}`;
-                naturalRatioCache.set(item.url, r);
+                if (!naturalRatioCache.has(item.url)) {
+                  naturalRatioCache.set(item.url, r);
+                  onNaturalRatioDiscovered?.();
+                }
                 setNaturalRatio(r);
               }
               setImgLoaded(true);
               loadedImageUrls.add(item.url);
             }}
             onError={() => setFailed(true)}
-            style={{ display: "block", width: "100%", height: "100%", objectFit: "cover", opacity: imgLoaded ? 1 : 0, transition: "opacity 280ms ease" }}
+            style={{ display: "block", width: "100%", height: "100%", objectFit: "contain", opacity: imgLoaded ? 1 : 0, transition: "opacity 280ms ease" }}
           />
           {/* Inner carousel nav — only when multiple images */}
           {allUrls.length > 1 && (
