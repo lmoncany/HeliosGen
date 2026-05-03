@@ -40,6 +40,7 @@ interface PendingGen {
   error?: string;
   taskId?: string;
   createdAt?: string;
+  tab?: Tab;
 }
 
 
@@ -922,7 +923,7 @@ function GalleryInner() {
     const n = isVideo ? 1 : count;
     const snapshotRefUrls = [...new Set(refImages.filter(r => r.cdnUrl && !r.error).map(r => r.cdnUrl!))];
     const newPendings: PendingGen[] = Array.from({ length: n }, () => ({
-      id: crypto.randomUUID(), aspectRatio, prompt, referenceImageUrls: snapshotRefUrls, createdAt: new Date().toISOString(),
+      id: crypto.randomUUID(), aspectRatio, prompt, referenceImageUrls: snapshotRefUrls, createdAt: new Date().toISOString(), tab,
     }));
     setPendingGens(prev => [...prev, ...newPendings]);
 
@@ -1221,9 +1222,13 @@ function GalleryInner() {
       return { kind: "pending" as const, pg, ratio: (w && h) ? w / h : 16 / 9, width: 0 };
     };
 
-    // Active (generating) gens stay at the top; failed gens sort among gallery items by time.
-    const activePendings = pendingGens.filter(pg => !pg.error);
-    const failedPendings = pendingGens.filter(pg => !!pg.error);
+    // Pending gens are only shown in the "generated" source filter, not "uploaded".
+    const activePendings = sourceFilter === "generated"
+      ? pendingGens.filter(pg => !pg.error && (pg.tab == null || pg.tab === tab))
+      : [];
+    const failedPendings = sourceFilter === "generated"
+      ? pendingGens.filter(pg => !!pg.error && (pg.tab == null || pg.tab === tab))
+      : [];
 
     type Dated = { t: number; entry: GalleryLayoutItem };
     const mixed: Dated[] = [
@@ -1265,8 +1270,7 @@ function GalleryInner() {
     }
 
     return rows;
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [containerWidth, zoom, pendingGens, filteredItems, GALLERY_GAP, natRatioVersion]);
+  }, [containerWidth, zoom, pendingGens, filteredItems, GALLERY_GAP, natRatioVersion, tab, sourceFilter]);
 
 
   // True when there are upload items whose dimensions aren't cached yet.
@@ -1416,7 +1420,7 @@ function GalleryInner() {
               <div key={i} className="gallery-skeleton" style={{ aspectRatio: i % 3 === 1 ? "4 / 5" : i % 5 === 0 ? "16 / 9" : "1 / 1" }} />
             ))}
           </div>
-        ) : filteredItems.length === 0 && pendingGens.length === 0 ? (
+        ) : filteredItems.length === 0 && (sourceFilter !== "generated" || pendingGens.filter(pg => pg.tab == null || pg.tab === tab).length === 0) ? (
           <EmptyState tab={tab} />
         ) : (
           <div ref={gridRef} style={{ padding: "3px" }}>
@@ -1460,7 +1464,7 @@ function GalleryInner() {
                               </button>
                               <button className="gallery-action-btn" title="Retry" onClick={async () => {
                                 const newId = crypto.randomUUID();
-                                const newPending: PendingGen = { id: newId, aspectRatio: pg.aspectRatio, prompt: pg.prompt, referenceImageUrls: pg.referenceImageUrls, createdAt: new Date().toISOString() };
+                                const newPending: PendingGen = { id: newId, aspectRatio: pg.aspectRatio, prompt: pg.prompt, referenceImageUrls: pg.referenceImageUrls, createdAt: new Date().toISOString(), tab: pg.tab };
                                 setPendingGens(prev => [...prev.filter(p => p.id !== pg.id), newPending]);
                                 const token = await getToken();
                                 if (!token) { setPendingGens(prev => prev.map(p => p.id === newId ? { ...p, error: "Please sign in." } : p)); return; }
