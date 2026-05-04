@@ -31,6 +31,39 @@ export function topoSort(nodes: Node<NodeData>[], edges: Edge[]): string[] {
   return order;
 }
 
+/** Returns waves of generation node IDs in dependency order.
+ *  Nodes in the same wave have no inter-dependencies and run in parallel.
+ *  Each wave must complete before the next starts. */
+export function buildPipelineWaves(nodes: Node<NodeData>[], edges: Edge[]): string[][] {
+  const genIds = new Set(
+    nodes
+      .filter(n => n.type === "generateNode" || n.type === "videoGeneratorNode")
+      .map(n => n.id)
+  );
+  if (genIds.size === 0) return [];
+
+  // Only edges between gen nodes affect ordering
+  const deps = new Map<string, Set<string>>();
+  for (const id of genIds) deps.set(id, new Set());
+  for (const e of edges) {
+    if (genIds.has(e.source) && genIds.has(e.target)) {
+      deps.get(e.target)!.add(e.source);
+    }
+  }
+
+  const waves: string[][] = [];
+  const remaining = new Set(genIds);
+  while (remaining.size > 0) {
+    const wave = [...remaining].filter(id =>
+      [...(deps.get(id) ?? [])].every(dep => !remaining.has(dep))
+    );
+    if (wave.length === 0) break; // cycle guard
+    waves.push(wave);
+    for (const id of wave) remaining.delete(id);
+  }
+  return waves;
+}
+
 /** Resolve upstream prompt + images for a target node */
 export function resolveInputs(
   nodeId: string,

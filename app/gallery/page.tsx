@@ -6,6 +6,7 @@ import NextImage from "next/image";
 import { createClient } from "@/lib/supabase/client";
 import { IMAGE_MODELS, VIDEO_MODELS } from "@/lib/modelConfig";
 import { useWorkflowStore } from "@/lib/store";
+import { useGeneratingPhase } from "@/lib/useGeneratingPhase";
 import type { User } from "@supabase/supabase-js";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -221,6 +222,63 @@ function saveKlingElements(elements: KlingElement[]) {
   try { localStorage.setItem("nf-kling-elements", JSON.stringify(elements)); } catch { }
 }
 
+// ── Pending generation tile (needs hooks, must be a component) ────────────────
+
+function PendingGenTile({ pg, onCancel }: { pg: PendingGen; onCancel: () => void }) {
+  const phaseLabel = useGeneratingPhase(true);
+  return (
+    <>
+      {/* Top-left: phase label */}
+      <div style={{
+        position: "absolute", top: 8, left: 8,
+        display: "flex", alignItems: "center", gap: "6px",
+        height: "26px", padding: "0 10px", borderRadius: "999px", zIndex: 5,
+        background: "rgba(0,0,0,0.58)", backdropFilter: "blur(10px)",
+        border: "1px solid rgba(255,255,255,0.08)", pointerEvents: "none",
+      }}>
+        <svg width="9" height="9" viewBox="0 0 10 10" fill="none" style={{ animation: "spin 0.9s linear infinite", flexShrink: 0 }}>
+          <circle cx="5" cy="5" r="4" stroke="rgba(255,255,255,0.18)" strokeWidth="1.5" />
+          <path d="M5 1 A4 4 0 0 1 9 5" stroke="rgba(255,255,255,0.8)" strokeWidth="1.5" strokeLinecap="round" />
+        </svg>
+        <span style={{ fontSize: "11px", color: "#ccc", fontWeight: 500 }}>{phaseLabel || "Generating…"}</span>
+      </div>
+
+      {/* Top-right: cancel button */}
+      <button
+        onClick={onCancel}
+        style={{
+          position: "absolute", top: 8, right: 8,
+          display: "flex", alignItems: "center", gap: "6px",
+          height: "26px", padding: "0 10px", borderRadius: "999px", zIndex: 5,
+          background: "rgba(0,0,0,0.58)", backdropFilter: "blur(10px)",
+          border: "1px solid rgba(255,255,255,0.08)", cursor: "pointer",
+          transition: "background 140ms",
+        }}
+        onMouseEnter={e => (e.currentTarget.style.background = "rgba(255,255,255,0.1)")}
+        onMouseLeave={e => (e.currentTarget.style.background = "rgba(0,0,0,0.58)")}
+      >
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.7)" strokeWidth="2" strokeLinecap="round">
+          <circle cx="12" cy="12" r="9" />
+          <path d="m6 6 12 12" />
+        </svg>
+        <span style={{ fontSize: "11px", color: "#ccc", fontWeight: 500 }}>Cancel</span>
+      </button>
+
+      {/* Center spinner */}
+      <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: "10px" }}>
+        <div style={{ width: "20px", height: "20px", borderRadius: "50%", border: "2px solid rgba(119,229,68,0.15)", borderTopColor: "#ff3df5", animation: "spin 0.9s linear infinite" }} />
+      </div>
+
+      {/* Bottom: prompt */}
+      {pg.prompt && (
+        <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, padding: "24px 10px 10px", background: "linear-gradient(to top, rgba(0,0,0,0.6) 0%, transparent 100%)" }}>
+          <p style={{ fontSize: "11px", color: "rgba(255,255,255,0.35)", overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis" }}>{pg.prompt}</p>
+        </div>
+      )}
+    </>
+  );
+}
+
 // ── Inner page ────────────────────────────────────────────────────────────────
 
 function GalleryInner() {
@@ -236,6 +294,10 @@ function GalleryInner() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(() => galleryCache.get(tab)?.hasMore ?? true);
   const [lightboxItem, setLightboxItem] = useState<GalleryItem | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const anySelected = selectedIds.size > 0;
+  const toggleSelect = (id: string) => setSelectedIds(prev => { const s = new Set(prev); s.has(id) ? s.delete(id) : s.add(id); return s; });
+  const clearSelection = () => setSelectedIds(new Set());
 
   const isVideo = tab === "videos";
   const models = isVideo ? VIDEO_MODELS : IMAGE_MODELS;
@@ -478,6 +540,7 @@ function GalleryInner() {
   }, [authLoaded, kieKeySet]);
 
   useEffect(() => {
+    clearSelection();
     tabRef.current = tab;
     pageRef.current = 0;
     setHasMore(true);
@@ -1182,6 +1245,34 @@ function GalleryInner() {
     }
   }, [downloads]);
 
+  const handleDownloadSelected = useCallback(async () => {
+    const toDownload = items.filter(i => selectedIds.has(i.id));
+    clearSelection();
+    for (const item of toDownload) {
+      await handleDownload(item.url, item.mediaType === "video");
+    }
+  }, [items, selectedIds, handleDownload]);
+
+  const handleDeleteSelected = useCallback(async () => {
+    const toDelete = items.filter(i => selectedIds.has(i.id));
+    clearSelection();
+    const token = await getToken();
+    if (!token) return;
+    await Promise.all(toDelete.map(item =>
+      fetch("/api/gallery", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ id: item.id, source: item.source }),
+      })
+    ));
+    setItems(prev => {
+      const ids = new Set(toDelete.map(i => i.id));
+      const updated = prev.filter(i => !ids.has(i.id));
+      galleryCache.set(tabRef.current, { items: updated, hasMore });
+      return updated;
+    });
+  }, [items, selectedIds, hasMore]);
+
   const GALLERY_GAP = 3;
 
   const filteredItems = useMemo(() =>
@@ -1517,23 +1608,16 @@ function GalleryInner() {
                             </div>
                           </>
                         ) : (
-                          <>
-                            <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: "10px" }}>
-                              <div style={{ width: "20px", height: "20px", borderRadius: "50%", border: "2px solid rgba(119,229,68,0.15)", borderTopColor: "#ff3df5", animation: "spin 0.9s linear infinite" }} />
-                              <span style={{ fontSize: "10px", color: "rgba(255,255,255,0.22)", letterSpacing: "0.08em", textTransform: "uppercase" }}>Generating</span>
-                            </div>
-                            {pg.prompt && (
-                              <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, padding: "24px 10px 10px", background: "linear-gradient(to top, rgba(0,0,0,0.6) 0%, transparent 100%)" }}>
-                                <p style={{ fontSize: "11px", color: "rgba(255,255,255,0.35)", overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis" }}>{pg.prompt}</p>
-                              </div>
-                            )}
-                          </>
+                          <PendingGenTile
+                            pg={pg}
+                            onCancel={() => setPendingGens(prev => prev.filter(p => p.id !== pg.id))}
+                          />
                         )}
                       </div>
                     );
                   }
                   return (
-                    <div key={layoutItem.item.id} style={{ width: layoutItem.width, flex: "0 0 auto", height: "100%", overflow: "hidden" }}>
+                    <div key={layoutItem.item.id} style={{ width: layoutItem.width, flex: "0 0 auto", height: "100%", overflow: "hidden", background: selectedIds.has(layoutItem.item.id) ? "#ffffff" : "transparent", padding: selectedIds.has(layoutItem.item.id) ? "2px" : "0", transition: "background 180ms ease, padding 180ms ease" }}>
                       <GalleryCard
                         item={layoutItem.item}
                         onOpen={() => setLightboxItem(layoutItem.item)}
@@ -1544,6 +1628,9 @@ function GalleryInner() {
                         videoMuted={videoMuted}
                         onToggleMute={() => setVideoMuted(m => !m)}
                         onNaturalRatioDiscovered={() => setNatRatioVersion(v => v + 1)}
+                        selected={selectedIds.has(layoutItem.item.id)}
+                        anySelected={anySelected}
+                        onSelect={() => toggleSelect(layoutItem.item.id)}
                       />
                     </div>
                   );
@@ -1571,6 +1658,85 @@ function GalleryInner() {
       <input ref={vidAudioInputRef} type="file" accept="audio/*" multiple style={{ display: "none" }}
         onChange={e => { if (e.target.files && vidPickTarget.current) { handleVidFilePick(e.target.files, vidPickTarget.current); e.target.value = ""; } }} />
 
+      {/* ── Selection toolbar ── */}
+      <div style={{
+        position: "fixed",
+        bottom: "20px",
+        left: "50%",
+        transform: `translateX(-50%) translateY(${anySelected ? "0" : "80px"})`,
+        opacity: anySelected ? 1 : 0,
+        transition: "transform 300ms cubic-bezier(0.16,1,0.3,1), opacity 240ms ease",
+        pointerEvents: anySelected ? "auto" : "none",
+        zIndex: 300,
+        display: "flex",
+        alignItems: "center",
+        gap: "6px",
+        padding: "8px 8px 8px 16px",
+        background: "rgba(14,16,18,0.92)",
+        backdropFilter: "blur(24px)",
+        WebkitBackdropFilter: "blur(24px)",
+        border: "1px solid rgba(255,255,255,0.1)",
+        borderRadius: "16px",
+        boxShadow: "0 8px 40px rgba(0,0,0,0.8), 0 2px 12px rgba(0,0,0,0.5)",
+        fontFamily: "inherit",
+      }}>
+        <span style={{ fontSize: "13px", color: "rgba(255,255,255,0.55)", fontWeight: 500, paddingRight: "6px", whiteSpace: "nowrap" }}>
+          {selectedIds.size} selected
+        </span>
+        <div style={{ width: "1px", height: "20px", background: "rgba(255,255,255,0.1)", flexShrink: 0 }} />
+        <button
+          onClick={handleDownloadSelected}
+          style={{
+            display: "flex", alignItems: "center", gap: "7px",
+            padding: "7px 14px", borderRadius: "10px", border: "none",
+            background: "rgba(255,255,255,0.07)", color: "rgba(255,255,255,0.85)",
+            fontSize: "13px", fontWeight: 500, cursor: "pointer", fontFamily: "inherit",
+            transition: "background 140ms",
+          }}
+          onMouseEnter={e => (e.currentTarget.style.background = "rgba(255,255,255,0.13)")}
+          onMouseLeave={e => (e.currentTarget.style.background = "rgba(255,255,255,0.07)")}
+        >
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" />
+          </svg>
+          Download
+        </button>
+        <button
+          onClick={handleDeleteSelected}
+          style={{
+            display: "flex", alignItems: "center", gap: "7px",
+            padding: "7px 14px", borderRadius: "10px", border: "none",
+            background: "rgba(255,255,255,0.07)", color: "rgba(255,255,255,0.85)",
+            fontSize: "13px", fontWeight: 500, cursor: "pointer", fontFamily: "inherit",
+            transition: "background 140ms, color 140ms",
+          }}
+          onMouseEnter={e => { e.currentTarget.style.background = "rgba(239,68,68,0.15)"; e.currentTarget.style.color = "#f87171"; }}
+          onMouseLeave={e => { e.currentTarget.style.background = "rgba(255,255,255,0.07)"; e.currentTarget.style.color = "rgba(255,255,255,0.85)"; }}
+        >
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="3 6 5 6 21 6" /><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" /><path d="M10 11v6M14 11v6" /><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+          </svg>
+          Remove
+        </button>
+        <div style={{ width: "1px", height: "20px", background: "rgba(255,255,255,0.1)", flexShrink: 0, marginLeft: "2px" }} />
+        <button
+          onClick={clearSelection}
+          title="Cancel selection"
+          style={{
+            width: "34px", height: "34px", borderRadius: "10px", border: "none",
+            background: "rgba(255,255,255,0.07)", color: "rgba(255,255,255,0.55)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            cursor: "pointer", flexShrink: 0, transition: "background 140ms, color 140ms",
+          }}
+          onMouseEnter={e => { e.currentTarget.style.background = "rgba(255,255,255,0.13)"; e.currentTarget.style.color = "#fff"; }}
+          onMouseLeave={e => { e.currentTarget.style.background = "rgba(255,255,255,0.07)"; e.currentTarget.style.color = "rgba(255,255,255,0.55)"; }}
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+            <path d="M18 6 6 18M6 6l12 12" />
+          </svg>
+        </button>
+      </div>
+
       {/* ── Prompt bar ── */}
       <div
         ref={promptBarRef}
@@ -1578,7 +1744,10 @@ function GalleryInner() {
           position: "fixed",
           bottom: "20px",
           left: "50%",
-          transform: "translateX(-50%)",
+          transform: `translateX(-50%) translateY(${anySelected ? "160px" : "0"})`,
+          opacity: anySelected ? 0 : 1,
+          transition: "transform 300ms cubic-bezier(0.4,0,0.2,1), opacity 240ms ease",
+          pointerEvents: anySelected ? "none" : "auto",
           width: "min(860px, calc(100vw - 32px))",
           zIndex: 200,
         }}
@@ -3435,6 +3604,9 @@ function GalleryCard({
   videoMuted,
   onToggleMute,
   onNaturalRatioDiscovered,
+  selected,
+  anySelected,
+  onSelect,
 }: {
   item: GalleryItem;
   onOpen?: () => void;
@@ -3445,6 +3617,9 @@ function GalleryCard({
   videoMuted?: boolean;
   onToggleMute?: () => void;
   onNaturalRatioDiscovered?: () => void;
+  selected?: boolean;
+  anySelected?: boolean;
+  onSelect?: () => void;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const cardRef = useRef<HTMLDivElement>(null);
@@ -3528,11 +3703,19 @@ function GalleryCard({
   return (
     <div
       ref={cardRef}
-      className="gallery-item"
-      onMouseEnter={() => { if (isVideo) videoRef.current?.play().then(() => setPlaying(true)).catch(() => { }); }}
+      className={`gallery-item${selected ? " gallery-item--selected" : ""}${anySelected ? " gallery-item--anyselected" : ""}`}
+      onMouseEnter={() => { if (isVideo && !anySelected) videoRef.current?.play().then(() => setPlaying(true)).catch(() => { }); }}
       onMouseLeave={() => { if (isVideo && videoRef.current) { videoRef.current.pause(); setPlaying(false); } }}
-      onClick={onOpen}
+      onClick={anySelected ? onSelect : onOpen}
     >
+      {/* ── Checkbox (top-left) ── */}
+      <div className="gallery-checkbox" onClick={e => { e.stopPropagation(); onSelect?.(); }}>
+        {selected && (
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#000000" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M20 6 9 17l-5-5" />
+          </svg>
+        )}
+      </div>
       {isVideo ? (
         <>
           <video
@@ -4457,4 +4640,34 @@ const GALLERY_CSS = `
     opacity: 1;
     pointer-events: auto;
   }
+  .gallery-checkbox {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    width: 20px;
+    height: 20px;
+    border-radius: 6px;
+    border: 2px solid rgba(255,255,255,0.55);
+    background: transparent;
+    z-index: 6;
+    opacity: 0;
+    transition: opacity 150ms ease, border-color 120ms ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: auto;
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+  .gallery-item:hover .gallery-checkbox { opacity: 1; }
+  .gallery-item--selected .gallery-checkbox {
+    opacity: 1;
+    border-color: #ffffff;
+    background: #ffffff;
+  }
+  .gallery-item--anyselected .gallery-actions-top { display: none; }
+  .gallery-item--anyselected .gallery-actions-bottom { display: none; }
+  .gallery-item--anyselected .gallery-mute-btn { opacity: 0 !important; pointer-events: none !important; }
+  .gallery-item--anyselected .gallery-overlay { opacity: 0 !important; }
+  .gallery-item--anyselected { cursor: pointer; }
 `;

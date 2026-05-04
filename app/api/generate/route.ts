@@ -24,7 +24,7 @@ function httpsPost(
   url: string,
   headers: Record<string, string>,
   body: string,
-  timeoutMs = 120_000, // Azure image gen can take up to 60s; 120s gives comfortable headroom
+  timeoutMs = 300_000, // Azure image gen (gpt-image-2) can be slow; 300s gives ample headroom
 ): Promise<{ ok: boolean; status: number; text: () => Promise<string> }> {
   return new Promise((resolve, reject) => {
     const u       = new URL(url);
@@ -164,6 +164,8 @@ async function getUserId(req: NextRequest): Promise<string | null> {
   const { data } = await supabaseAdmin.auth.getUser(token);
   return data.user?.id ?? null;
 }
+
+export const maxDuration = 300;
 
 export async function POST(req: NextRequest) {
   const {

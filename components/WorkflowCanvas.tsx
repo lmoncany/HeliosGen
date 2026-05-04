@@ -121,7 +121,6 @@ export default function WorkflowCanvas() {
   } = useWorkflowStore();
   const updateNodeDataRef = useRef(updateNodeData);
   updateNodeDataRef.current = updateNodeData;
-
   const [activeTool, setActiveTool] = useState<"select" | "hand">("select");
 
   const canUndo = undoStack.length > 0;

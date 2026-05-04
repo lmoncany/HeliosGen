@@ -677,23 +677,6 @@ export default function PromptNode({ id, data, selected }: NodeProps<PromptNodeT
               }}
             />
 
-            {/* Top gradient — visible when scrolled down */}
-            {hasScrollTop && (
-              <div
-                aria-hidden
-                className="absolute top-0 left-0 right-0 h-8 pointer-events-none z-20"
-                style={{ background: "linear-gradient(to bottom, #0D1012 0%, transparent 100%)" }}
-              />
-            )}
-
-            {/* Bottom gradient — visible when more text is below */}
-            {hasScrollBottom && (
-              <div
-                aria-hidden
-                className="absolute bottom-0 left-0 right-0 h-8 pointer-events-none z-20"
-                style={{ background: "linear-gradient(to top, #0D1012 0%, transparent 100%)" }}
-              />
-            )}
 
             {/* Character count */}
             {promptMaxLength !== null && (

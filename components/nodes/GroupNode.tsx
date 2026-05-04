@@ -3,6 +3,8 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { NodeProps, Node, useReactFlow, NodeResizeControl, NodeToolbar, Position } from "@xyflow/react";
 import { useWorkflowStore, NodeData } from "@/lib/store";
 import { arrangeNodes } from "@/lib/arrangeNodes";
+import { usePipelineRunner } from "@/lib/usePipelineRunner";
+import { makeZip } from "@/lib/makeZip";
 
 export type GroupNodeType = Node<NodeData, "groupNode">;
 
@@ -75,6 +77,60 @@ export default function GroupNode({ id, data, selected }: NodeProps<GroupNodeTyp
   const color  = (data.color  as string)  ?? "#3b82f6";
   const locked = (data.locked as boolean) ?? false;
   const label  = data.label   as string;
+
+  const memberIds = (data.memberIds as string[] | undefined) ?? [];
+  const { run: runPipeline, isRunning: pipelineRunning, genNodeCount } = usePipelineRunner(memberIds);
+  const [isDownloading, setIsDownloading] = useState(false);
+
+  const handleDownload = useCallback(async () => {
+    if (isDownloading) return;
+    const { nodes } = useWorkflowStore.getState();
+    const members = nodes.filter((n) => memberIds.includes(n.id));
+
+    // Collect all output URLs from member nodes
+    const assets: { url: string; name: string }[] = [];
+    for (const node of members) {
+      const nodeLabel = (node.data.label as string | undefined) ?? node.id;
+      const ext = node.type === "videoGeneratorNode" ? "mp4" : "png";
+
+      // Prefer the full generations history, fall back to single URL
+      const gens = node.data.generations as (string | null | { error: string })[] | undefined;
+      if (gens && gens.length > 0) {
+        gens.forEach((entry, i) => {
+          if (typeof entry === "string") {
+            const suffix = gens.length > 1 ? `-${i + 1}` : "";
+            assets.push({ url: entry, name: `${nodeLabel}${suffix}.${ext}` });
+          }
+        });
+      } else {
+        const url = (node.data.imageUrl ?? node.data.videoUrl) as string | undefined;
+        if (url) assets.push({ url, name: `${nodeLabel}.${ext}` });
+      }
+    }
+
+    if (assets.length === 0) return;
+    setIsDownloading(true);
+    try {
+      const entries = await Promise.all(
+        assets.map(async ({ url, name }) => {
+          const resp = await fetch(`/api/download?url=${encodeURIComponent(url)}&filename=${name}`);
+          const buf = await resp.arrayBuffer();
+          return { name, data: new Uint8Array(buf) };
+        })
+      );
+      const blob = makeZip(entries);
+      const objUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = objUrl;
+      a.download = `${label || "group"}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(objUrl);
+    } finally {
+      setIsDownloading(false);
+    }
+  }, [isDownloading, memberIds, label]);
 
   const cardRef = useRef<HTMLDivElement>(null);
   const [colorPickerOpen, setColorPickerOpen] = useState(false);
@@ -412,6 +468,60 @@ export default function GroupNode({ id, data, selected }: NodeProps<GroupNodeTyp
                 <path d="M9 6V4h6v2" />
               </svg>
             </Btn>
+
+            <Sep />
+
+            {/* Download all outputs */}
+            <Btn onClick={handleDownload} title="Download all outputs as ZIP">
+              {isDownloading ? (
+                <svg width="13" height="13" viewBox="0 0 10 10" fill="none" style={{ animation: "spin 0.9s linear infinite" }}>
+                  <circle cx="5" cy="5" r="4" stroke="rgba(255,255,255,0.2)" strokeWidth="1.5" />
+                  <path d="M5 1 A4 4 0 0 1 9 5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                </svg>
+              ) : (
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                  <polyline points="7 10 12 15 17 10" />
+                  <line x1="12" y1="15" x2="12" y2="3" />
+                </svg>
+              )}
+            </Btn>
+
+            {/* Run pipeline */}
+            <button
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={(e) => { e.stopPropagation(); runPipeline(); }}
+              title={genNodeCount === 0 ? "No generation nodes in group" : `Run ${genNodeCount} generation node${genNodeCount === 1 ? "" : "s"}`}
+              disabled={genNodeCount === 0 || pipelineRunning}
+              className="h-7 flex items-center gap-1.5 px-2.5 rounded-full transition-colors duration-150"
+              style={{
+                border: `1px solid ${pipelineRunning ? "rgba(255,61,245,0.5)" : "rgba(255,61,245,0.25)"}`,
+                background: pipelineRunning ? "rgba(255,61,245,0.18)" : "rgba(255,61,245,0.07)",
+                color: genNodeCount === 0 ? "rgba(255,255,255,0.25)" : "rgba(255,61,245,0.9)",
+                opacity: genNodeCount === 0 ? 0.45 : 1,
+                cursor: genNodeCount === 0 || pipelineRunning ? "not-allowed" : "pointer",
+              }}
+            >
+              {pipelineRunning ? (
+                <svg width="9" height="9" viewBox="0 0 10 10" fill="none" style={{ animation: "spin 0.9s linear infinite", flexShrink: 0 }}>
+                  <circle cx="5" cy="5" r="4" stroke="rgba(255,61,245,0.3)" strokeWidth="1.5" />
+                  <path d="M5 1 A4 4 0 0 1 9 5" stroke="rgba(255,61,245,0.9)" strokeWidth="1.5" strokeLinecap="round" />
+                </svg>
+              ) : (
+                <svg width="9" height="9" viewBox="0 0 10 10" fill="currentColor" style={{ flexShrink: 0 }}>
+                  <path d="M2 1.5 L9 5 L2 8.5 Z" />
+                </svg>
+              )}
+              <span className="text-[11px] font-medium leading-none tracking-wide">Run</span>
+              {genNodeCount > 0 && (
+                <span
+                  className="text-[10px] font-semibold leading-none rounded-full px-1.5 py-0.5"
+                  style={{ background: "rgba(255,61,245,0.2)" }}
+                >
+                  {genNodeCount}
+                </span>
+              )}
+            </button>
           </>
         )}
       </div>
