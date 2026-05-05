@@ -344,6 +344,27 @@ export default function VideoGeneratorNode({ id, data, selected }: NodeProps<Vid
   const prompt = (data.prompt as string) ?? "";
   const busy = loading || status === "running";
   const phaseLabel = useGeneratingPhase(busy);
+
+  useEffect(() => {
+    if (!busy) return;
+    const el = cardRef.current;
+    if (!el) return;
+    el.style.setProperty("border-color", "transparent", "important");
+    el.style.setProperty("box-shadow", "none", "important");
+    let rafId: number;
+    const start = performance.now();
+    const tick = (now: number) => {
+      el.style.setProperty("--border-angle", `${(now - start) / 2000 * 360}deg`);
+      rafId = requestAnimationFrame(tick);
+    };
+    rafId = requestAnimationFrame(tick);
+    return () => {
+      cancelAnimationFrame(rafId);
+      el.style.removeProperty("--border-angle");
+      el.style.removeProperty("border-color");
+      el.style.removeProperty("box-shadow");
+    };
+  }, [busy]);
   const videoUrl = data.videoUrl as string | undefined;
 
   const promptOverLimit = (() => {
@@ -749,8 +770,8 @@ export default function VideoGeneratorNode({ id, data, selected }: NodeProps<Vid
   return (
     <div
       ref={cardRef}
-      className={`video-node-card node-card w-full${(data.hasError as boolean) ? " node-error-blink" : ""}`}
-      style={{ minWidth: 320, minHeight: 280, ...(busy ? { animation: "video-node-pulse-glow 2.4s ease-in-out infinite" } : {}) }}
+      className={`video-node-card node-card w-full${busy ? " node-generating" : ""}${(data.hasError as boolean) ? " node-error-blink" : ""}`}
+      style={{ minWidth: 320, minHeight: 280 }}
       onMouseEnter={() => setHovering(true)}
       onMouseLeave={closeAll}
       onAnimationEnd={(e) => { if (e.animationName === "node-error-blink") updateNodeData(id, { hasError: false }); }}

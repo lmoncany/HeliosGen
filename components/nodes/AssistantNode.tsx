@@ -52,6 +52,28 @@ export default function AssistantNode({ id, data, selected }: NodeProps<Assistan
   const modelPopup = useAnimatedPopup(modelOpen);
 
   const busy = loading || status === "running";
+
+  useEffect(() => {
+    if (!busy) return;
+    const el = cardRef.current;
+    if (!el) return;
+    el.style.setProperty("border-color", "transparent", "important");
+    el.style.setProperty("box-shadow", "none", "important");
+    let rafId: number;
+    const start = performance.now();
+    const tick = (now: number) => {
+      el.style.setProperty("--border-angle", `${(now - start) / 2000 * 360}deg`);
+      rafId = requestAnimationFrame(tick);
+    };
+    rafId = requestAnimationFrame(tick);
+    return () => {
+      cancelAnimationFrame(rafId);
+      el.style.removeProperty("--border-angle");
+      el.style.removeProperty("border-color");
+      el.style.removeProperty("box-shadow");
+    };
+  }, [busy]);
+
   const hasOutput = !!outputText;
   const hasPrompt = !!localPrompt.trim();
   const sourceConnected = edges.some((e) => e.source === id);
@@ -180,8 +202,8 @@ export default function AssistantNode({ id, data, selected }: NodeProps<Assistan
   return (
     <div
       ref={cardRef}
-      className="node-card w-full h-full flex flex-col"
-      style={{ minWidth: 260, ...(busy ? { animation: "node-pulse-glow 2.4s ease-in-out infinite" } : {}) }}
+      className={`node-card w-full h-full flex flex-col${busy ? " node-generating" : ""}`}
+      style={{ minWidth: 260 }}
     >
       <CornerResizer minWidth={200} minHeight={120} />
 

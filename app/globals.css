@@ -541,6 +541,11 @@ body {
   box-shadow: 0 0 0 1px rgba(255, 61, 245, 0.2), 0 2px 16px rgba(30, 10, 30, 0.5);
 }
 
+.react-flow__node.selected .node-card.node-generating {
+  border-color: transparent !important;
+  box-shadow: none !important;
+}
+
 .react-flow__node .node-card.node-over-limit,
 .react-flow__node.selected .node-card.node-over-limit,
 .react-flow__node.node-ancestor .node-card.node-over-limit {
@@ -962,30 +967,22 @@ body {
 }
 
 /* ── Generating border animation ─────────────────────────────────────────── */
-@keyframes node-pulse-glow {
-
-  0%,
-  100% {
-    box-shadow: 0 0 6px 2px rgba(255, 61, 245, 0.15);
-  }
-
-  50% {
-    box-shadow: 0 0 22px 8px rgba(255, 61, 245, 0.45);
-  }
-}
-
-@keyframes video-node-pulse-glow {
-
-  0%,
-  100% {
-    box-shadow: 0 0 6px 2px rgba(255, 61, 245, 0.15);
-    border-color: rgba(255, 61, 245, 0.5);
-  }
-
-  50% {
-    box-shadow: 0 0 22px 8px rgba(255, 61, 245, 0.45);
-    border-color: rgba(255, 61, 245, 1);
-  }
+.node-card.node-generating {
+  border: 2px solid transparent;
+  background:
+    linear-gradient(#191919, #191919) padding-box,
+    conic-gradient(
+      from var(--border-angle, 0deg),
+      rgba(255, 255, 255, 0.05) 0deg,
+      rgba(255, 255, 255, 0.05) 150deg,
+      #4B0082 200deg,
+      #9400D3 250deg,
+      #DA70D6 305deg,
+      #ffffff 345deg,
+      rgba(255, 255, 255, 0.05) 360deg
+    ) border-box;
+  transition: none;
+  box-shadow: none;
 }
 
 /* ── @mention chip in PromptNode ─────────────────────────────────────────── */
