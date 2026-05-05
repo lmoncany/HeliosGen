@@ -15,6 +15,7 @@ type GenerateNodeType = Node<NodeData, "generateNode">;
 
 import { IMAGE_MODELS } from "@/lib/modelConfig";
 import { useGeneratingPhase } from "@/lib/useGeneratingPhase";
+import { useGeneratingBorderAnimation } from "@/lib/useGeneratingBorderAnimation";
 
 // Derived from config — no hardcoding needed
 const MODELS = IMAGE_MODELS.map((m) => ({ id: m.id, name: m.name, meta: m.provider }));
@@ -369,26 +370,7 @@ export default function GenerateNode({ id, data, selected }: NodeProps<GenerateN
   const busy = loading || status === "running";
   const phaseLabel = useGeneratingPhase(busy);
 
-  useEffect(() => {
-    if (!busy) return;
-    const el = cardRef.current;
-    if (!el) return;
-    el.style.setProperty("border-color", "transparent", "important");
-    el.style.setProperty("box-shadow", "none", "important");
-    let rafId: number;
-    const start = performance.now();
-    const tick = (now: number) => {
-      el.style.setProperty("--border-angle", `${(now - start) / 2000 * 360}deg`);
-      rafId = requestAnimationFrame(tick);
-    };
-    rafId = requestAnimationFrame(tick);
-    return () => {
-      cancelAnimationFrame(rafId);
-      el.style.removeProperty("--border-angle");
-      el.style.removeProperty("border-color");
-      el.style.removeProperty("box-shadow");
-    };
-  }, [busy]);
+  useGeneratingBorderAnimation(cardRef, busy);
 
   const [natW, natH] = (() => {
     const r = data.imageNaturalRatio as string | undefined;
@@ -1048,7 +1030,7 @@ export default function GenerateNode({ id, data, selected }: NodeProps<GenerateN
       {generations.length > 1 && (
         <div
           className="absolute left-0 right-0 flex items-center justify-center gap-1.5"
-          style={{ top: "calc(100% + 8px)" }}
+          style={{ top: "calc(100% + 16px)" }}
           onMouseDown={(e) => e.stopPropagation()}
         >
           <button
