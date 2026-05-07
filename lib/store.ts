@@ -12,7 +12,7 @@ import {
   Connection,
 } from "@xyflow/react";
 
-export type NodeStatus = "idle" | "running" | "done" | "error";
+export type NodeStatus = "idle" | "pending" | "running" | "done" | "error";
 export type GenerateMode = "t2i" | "t2v" | "i2i" | "i2v";
 
 export interface NodeData extends Record<string, unknown> {

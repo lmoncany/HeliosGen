@@ -32,6 +32,7 @@ interface PendingGen {
   taskId?: string;
   createdAt?: string;
   tab?: Tab;
+  prePending?: boolean;
 }
 
 
@@ -187,7 +188,7 @@ function saveKlingElements(elements: KlingElement[]) {
 // ── Pending generation tile (needs hooks, must be a component) ────────────────
 
 function PendingGenTile({ pg, onCancel }: { pg: PendingGen; onCancel: () => void }) {
-  const phaseLabel = useGeneratingPhase(true);
+  const phaseLabel = useGeneratingPhase(!pg.prePending);
   return (
     <>
       {/* Top-left: phase label */}
@@ -196,13 +197,23 @@ function PendingGenTile({ pg, onCancel }: { pg: PendingGen; onCancel: () => void
         display: "flex", alignItems: "center", gap: "6px",
         height: "26px", padding: "0 10px", borderRadius: "999px", zIndex: 5,
         background: "rgba(0,0,0,0.58)", backdropFilter: "blur(10px)",
-        border: "1px solid rgba(255,255,255,0.08)", pointerEvents: "none",
+        border: pg.prePending ? "1px solid rgba(255,255,255,0.08)" : "1px solid rgba(168,85,247,0.25)",
+        pointerEvents: "none",
       }}>
-        <svg width="9" height="9" viewBox="0 0 10 10" fill="none" style={{ animation: "spin 0.9s linear infinite", flexShrink: 0 }}>
-          <circle cx="5" cy="5" r="4" stroke="rgba(255,255,255,0.18)" strokeWidth="1.5" />
-          <path d="M5 1 A4 4 0 0 1 9 5" stroke="rgba(255,255,255,0.8)" strokeWidth="1.5" strokeLinecap="round" />
-        </svg>
-        <span style={{ fontSize: "11px", color: "#ccc", fontWeight: 500 }}>{phaseLabel || "Generating…"}</span>
+        {pg.prePending ? (
+          <svg width="9" height="9" viewBox="0 0 10 10" fill="none" style={{ animation: "spin 0.9s linear infinite", flexShrink: 0 }}>
+            <circle cx="5" cy="5" r="4" stroke="rgba(255,255,255,0.18)" strokeWidth="1.5" />
+            <path d="M5 1 A4 4 0 0 1 9 5" stroke="rgba(255,255,255,0.5)" strokeWidth="1.5" strokeLinecap="round" />
+          </svg>
+        ) : (
+          <svg width="9" height="9" viewBox="0 0 10 10" fill="none" style={{ animation: "spin 0.9s linear infinite", flexShrink: 0 }}>
+            <circle cx="5" cy="5" r="4" stroke="rgba(168,85,247,0.25)" strokeWidth="1.5" />
+            <path d="M5 1 A4 4 0 0 1 9 5" stroke="#a855f7" strokeWidth="1.5" strokeLinecap="round" />
+          </svg>
+        )}
+        <span style={{ fontSize: "11px", color: pg.prePending ? "#888" : "#a855f7", fontWeight: 500 }}>
+          {pg.prePending ? "Pending" : (phaseLabel || "Generating…")}
+        </span>
       </div>
 
       {/* Top-right: cancel button */}
@@ -226,10 +237,6 @@ function PendingGenTile({ pg, onCancel }: { pg: PendingGen; onCancel: () => void
         <span style={{ fontSize: "11px", color: "#ccc", fontWeight: 500 }}>Cancel</span>
       </button>
 
-      {/* Center spinner */}
-      <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: "10px" }}>
-        <div style={{ width: "20px", height: "20px", borderRadius: "50%", border: "2px solid rgba(119,229,68,0.15)", borderTopColor: "#ff3df5", animation: "spin 0.9s linear infinite" }} />
-      </div>
 
       {/* Bottom: prompt */}
       {pg.prompt && (
@@ -294,9 +301,14 @@ function GalleryInner() {
     if (typeof window === "undefined") return [];
     try {
       const stored = localStorage.getItem("aiui-pending-gens");
-      return stored ? (JSON.parse(stored) as PendingGen[]) : [];
+      // Strip prePending on restore — on page refresh, skip the 3-second delay
+      const parsed = stored ? (JSON.parse(stored) as PendingGen[]) : [];
+      return parsed.map(p => ({ ...p, prePending: false }));
     } catch { return []; }
   });
+  const prePendingTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  const pendingGensRef = useRef(pendingGens);
+  useEffect(() => { pendingGensRef.current = pendingGens; }, [pendingGens]);
   const [submitting, setSubmitting] = useState(false);
   const [genError, setGenError] = useState<string>("");
   const debugMode   = useWorkflowStore((s) => s.debugMode);
@@ -948,7 +960,7 @@ function GalleryInner() {
     const n = isVideo ? 1 : count;
     const snapshotRefUrls = [...new Set(refImages.filter(r => r.cdnUrl && !r.error).map(r => r.cdnUrl!))];
     const newPendings: PendingGen[] = Array.from({ length: n }, () => ({
-      id: crypto.randomUUID(), aspectRatio, prompt, referenceImageUrls: snapshotRefUrls, createdAt: new Date().toISOString(), tab,
+      id: crypto.randomUUID(), aspectRatio, prompt, referenceImageUrls: snapshotRefUrls, createdAt: new Date().toISOString(), tab, prePending: true,
     }));
     setPendingGens(prev => [...prev, ...newPendings]);
 
@@ -976,57 +988,71 @@ function GalleryInner() {
       return;
     }
 
-    // ── Submit ────────────────────────────────────────────────────────────
-    const token = await getToken();
-    if (!token) {
-      setPendingGens(prev => prev.map(p =>
-        newPendings.some(np => np.id === p.id) ? { ...p, error: "Please sign in to generate." } : p
-      ));
-      return;
-    }
+    // ── 3-second pre-pending window before actual API call ────────────────
+    const batchKey = newPendings[0].id;
+    const submitBatch = async () => {
+      prePendingTimersRef.current.delete(batchKey);
+      // Only process entries that weren't cancelled during the pre-pending window
+      const active = newPendings.filter(p => pendingGensRef.current.some(pg => pg.id === p.id && pg.prePending));
+      if (active.length === 0) return;
 
-    setSubmitting(true);
-    let taskIds: string[];
-    try {
-      taskIds = await Promise.all(newPendings.map(() => generateOne(token)));
-    } catch (e: unknown) {
-      setSubmitting(false);
-      const msg = e instanceof Error ? e.message : String(e);
-      setPendingGens(prev => prev.map(p =>
-        newPendings.some(np => np.id === p.id) ? { ...p, error: msg } : p
-      ));
-      return;
-    }
-    setSubmitting(false); // re-enable button — polling happens in background
+      const activeIds = new Set(active.map(p => p.id));
+      setPendingGens(prev => prev.map(p => activeIds.has(p.id) ? { ...p, prePending: false } : p));
 
-    // Store taskIds so polls can be resumed after a page refresh
-    setPendingGens(prev => prev.map(p => {
-      const idx = newPendings.findIndex(np => np.id === p.id);
-      return idx >= 0 ? { ...p, taskId: taskIds[idx] } : p;
-    }));
-
-    // ── Poll each task independently ───────────────────────────────────────
-    taskIds.forEach(async (taskId, i) => {
-      const pending = newPendings[i];
-      try {
-        await pollTask(taskId);
-        // Fetch fresh items before touching state so both updates land in one render.
-        const fresh = await fetchNewItems(tabRef.current);
-        setPendingGens(prev => prev.filter(p => p.id !== pending.id));
-        if (fresh.length > 0) {
-          setItems(prev => {
-            const merged = mergeByNewest(prev, fresh);
-            if (merged === prev) return prev;
-            galleryCache.set(tabRef.current, { items: merged, hasMore: true });
-            return merged;
-          });
-        }
-        window.dispatchEvent(new Event("credits-refresh"));
-      } catch (e: unknown) {
-        const msg = e instanceof Error ? e.message : String(e);
-        setPendingGens(prev => prev.map(p => p.id === pending.id ? { ...p, error: msg } : p));
+      const token = await getToken();
+      if (!token) {
+        setPendingGens(prev => prev.map(p =>
+          activeIds.has(p.id) ? { ...p, error: "Please sign in to generate." } : p
+        ));
+        return;
       }
-    });
+
+      setSubmitting(true);
+      let taskIds: string[];
+      try {
+        taskIds = await Promise.all(active.map(() => generateOne(token)));
+      } catch (e: unknown) {
+        setSubmitting(false);
+        const msg = e instanceof Error ? e.message : String(e);
+        setPendingGens(prev => prev.map(p =>
+          activeIds.has(p.id) ? { ...p, error: msg } : p
+        ));
+        return;
+      }
+      setSubmitting(false);
+
+      // Store taskIds so polls can be resumed after a page refresh
+      setPendingGens(prev => prev.map(p => {
+        const idx = active.findIndex(np => np.id === p.id);
+        return idx >= 0 ? { ...p, taskId: taskIds[idx] } : p;
+      }));
+
+      // ── Poll each task independently ──────────────────────────────────────
+      taskIds.forEach(async (taskId, i) => {
+        const pending = active[i];
+        try {
+          await pollTask(taskId);
+          // Fetch fresh items before touching state so both updates land in one render.
+          const fresh = await fetchNewItems(tabRef.current);
+          setPendingGens(prev => prev.filter(p => p.id !== pending.id));
+          if (fresh.length > 0) {
+            setItems(prev => {
+              const merged = mergeByNewest(prev, fresh);
+              if (merged === prev) return prev;
+              galleryCache.set(tabRef.current, { items: merged, hasMore: true });
+              return merged;
+            });
+          }
+          window.dispatchEvent(new Event("credits-refresh"));
+        } catch (e: unknown) {
+          const msg = e instanceof Error ? e.message : String(e);
+          setPendingGens(prev => prev.map(p => p.id === pending.id ? { ...p, error: msg } : p));
+        }
+      });
+    };
+
+    const batchTimer = setTimeout(submitBatch, 3000);
+    prePendingTimersRef.current.set(batchKey, batchTimer);
   };
 
   // ── @ mention derived + helpers ───────────────────────────────────────────
@@ -1161,20 +1187,41 @@ function GalleryInner() {
     });
   }, []);
 
+  const clearDeletedFromNodes = useCallback((deletedUrls: Set<string>) => {
+    const { nodes, updateNodeData } = useWorkflowStore.getState();
+    for (const node of nodes) {
+      const gens = ((node.data.generations as (string | null | { error: string })[]) ?? []);
+      const filtered = gens.filter(g => !(typeof g === "string" && deletedUrls.has(g)));
+      if (filtered.length === gens.length) continue;
+      const newIdx = Math.max(0, Math.min((node.data.currentGenIdx as number | undefined) ?? 0, filtered.length - 1));
+      const last = filtered[newIdx];
+      const lastUrl = filtered.length > 0 && typeof last === "string" ? last : undefined;
+      const isVideo = node.type === "videoGeneratorNode";
+      updateNodeData(node.id, {
+        generations: filtered,
+        currentGenIdx: filtered.length > 0 ? newIdx : 0,
+        ...(isVideo ? { videoUrl: lastUrl } : { imageUrl: lastUrl }),
+        status: filtered.length > 0 ? "done" : "idle",
+      });
+    }
+  }, []);
+
   const handleDelete = useCallback(async (id: string, source: "generation" | "upload") => {
     const token = await getToken();
     if (!token) return;
+    const item = items.find(i => i.id === id);
     await fetch("/api/gallery", {
       method: "DELETE",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
       body: JSON.stringify({ id, source }),
     });
+    if (item) clearDeletedFromNodes(new Set([item.url, ...(item.imageUrls ?? [])]));
     setItems(prev => {
       const updated = prev.filter(i => i.id !== id);
       galleryCache.set(tabRef.current, { items: updated, hasMore });
       return updated;
     });
-  }, [hasMore]);
+  }, [hasMore, items, clearDeletedFromNodes]);
 
   const handleDownload = useCallback(async (url: string, itemIsVideo: boolean): Promise<void> => {
     const ext = itemIsVideo ? "mp4" : "jpg";
@@ -1227,13 +1274,15 @@ function GalleryInner() {
         body: JSON.stringify({ id: item.id, source: item.source }),
       })
     ));
+    const deletedUrls = new Set(toDelete.flatMap(i => [i.url, ...(i.imageUrls ?? [])]));
+    clearDeletedFromNodes(deletedUrls);
     setItems(prev => {
       const ids = new Set(toDelete.map(i => i.id));
       const updated = prev.filter(i => !ids.has(i.id));
       galleryCache.set(tabRef.current, { items: updated, hasMore });
       return updated;
     });
-  }, [items, selectedIds, hasMore]);
+  }, [items, selectedIds, hasMore, clearDeletedFromNodes]);
 
   const GALLERY_GAP = 3;
 

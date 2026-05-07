@@ -12,6 +12,7 @@ const VIDEO_MODELS = [
 
 const STATUS_RING: Record<string, string> = {
   idle: "border-gray-700",
+  pending: "border-gray-500",
   running: "border-yellow-500 animate-pulse",
   done: "border-emerald-500",
   error: "border-red-500",

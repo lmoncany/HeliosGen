@@ -178,6 +178,7 @@ export default function VideoGeneratorNode({ id, data, selected }: NodeProps<Vid
 
   const updateNodeInternals = useUpdateNodeInternals();
   const cardRef = useRef<HTMLDivElement>(null);
+  const pendingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Instant hide on deselect — no delay when clicking outside the node
   const prevSelectedRef = useRef(selected);
@@ -318,6 +319,10 @@ export default function VideoGeneratorNode({ id, data, selected }: NodeProps<Vid
   }, [id, updateNodeData]);
 
   const handleCancel = useCallback(() => {
+    if (pendingTimerRef.current !== null) {
+      clearTimeout(pendingTimerRef.current);
+      pendingTimerRef.current = null;
+    }
     setLoading(false);
     const storeNode = useWorkflowStore.getState().nodes.find((n) => n.id === id);
     const rawGens = (storeNode?.data?.generations as GenEntry[] | undefined) ?? [];
@@ -348,10 +353,12 @@ export default function VideoGeneratorNode({ id, data, selected }: NodeProps<Vid
   const sound = (data.sound as boolean) ?? false;
   const status = (data.status as string) ?? "idle";
   const prompt = (data.prompt as string) ?? "";
-  const busy = loading || status === "running";
-  const phaseLabel = useGeneratingPhase(busy);
+  const isPending = status === "pending";
+  const animBusy = loading || status === "running";
+  const busy = animBusy || isPending;
+  const phaseLabel = useGeneratingPhase(animBusy);
 
-  useGeneratingBorderAnimation(cardRef, busy);
+  useGeneratingBorderAnimation(cardRef, animBusy);
   const videoUrl = data.videoUrl as string | undefined;
 
   const promptOverLimit = (() => {
@@ -751,35 +758,41 @@ export default function VideoGeneratorNode({ id, data, selected }: NodeProps<Vid
       return;
     }
 
-    setLoading(true);
+    // Set PENDING state — gives user 3 seconds to cancel before the API call
     const storeNode0 = useWorkflowStore.getState().nodes.find((n) => n.id === id);
     const prevGens2 = [...((storeNode0?.data?.generations as GenEntry[] | undefined) ?? [])] as GenEntry[];
     const prevMeta2 = [...((storeNode0?.data?.generationsMeta as (GenMeta | null)[] | undefined) ?? [])];
     const loadingGens2 = [...prevGens2, null] as GenEntry[];
     const thisMeta: GenMeta = { videoModel: videoModelId, aspectRatio, duration, klingMode: mode, grokResolution: resolution, sound };
     const loadingMeta2 = [...prevMeta2, thisMeta];
-    updateNodeData(id, { status: "running", videoUrl: undefined, imageNaturalRatio: undefined, errorMsg: undefined, taskId: undefined, generations: loadingGens2, generationsMeta: loadingMeta2, currentGenIdx: loadingGens2.length - 1 });
+    updateNodeData(id, { status: "pending", videoUrl: undefined, imageNaturalRatio: undefined, errorMsg: undefined, taskId: undefined, generations: loadingGens2, generationsMeta: loadingMeta2, currentGenIdx: loadingGens2.length - 1 });
 
-    try {
-      const res = await fetch("/api/generate-video", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${authData.session!.access_token}` },
-        body: JSON.stringify(payload),
-      });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error);
-      // Store taskId — the polling useEffect above will wait for completion
-      updateNodeData(id, { taskId: json.taskId });
-    } catch (e: unknown) {
-      const errMsg = e instanceof Error ? e.message : String(e);
-      const storeNode = useWorkflowStore.getState().nodes.find((n) => n.id === id);
-      const gens = [...((storeNode?.data?.generations as GenEntry[] | undefined) ?? [])] as GenEntry[];
-      const slot = (storeNode?.data?.currentGenIdx as number | undefined) ?? Math.max(0, gens.length - 1);
-      gens[slot] = { error: errMsg };
-      updateNodeData(id, { status: "error", errorMsg: errMsg, generations: gens, currentGenIdx: slot });
-    } finally {
-      setLoading(false);
-    }
+    const accessToken = authData.session!.access_token;
+    pendingTimerRef.current = setTimeout(async () => {
+      pendingTimerRef.current = null;
+      setLoading(true);
+      updateNodeData(id, { status: "running" });
+      try {
+        const res = await fetch("/api/generate-video", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}` },
+          body: JSON.stringify(payload),
+        });
+        const json = await res.json();
+        if (!res.ok) throw new Error(json.error);
+        // Store taskId — the polling useEffect above will wait for completion
+        updateNodeData(id, { taskId: json.taskId });
+      } catch (e: unknown) {
+        const errMsg = e instanceof Error ? e.message : String(e);
+        const storeNode = useWorkflowStore.getState().nodes.find((n) => n.id === id);
+        const gens = [...((storeNode?.data?.generations as GenEntry[] | undefined) ?? [])] as GenEntry[];
+        const slot = (storeNode?.data?.currentGenIdx as number | undefined) ?? Math.max(0, gens.length - 1);
+        gens[slot] = { error: errMsg };
+        updateNodeData(id, { status: "error", errorMsg: errMsg, generations: gens, currentGenIdx: slot });
+      } finally {
+        setLoading(false);
+      }
+    }, 3000);
   }, [id, nodes, edges, prompt, sound, duration, aspectRatio, videoModelId,
     mode, resolution, cfg, debugMode, textEdge, updateNodeData, setAuthModalOpen, flashEdgeError, kieKeySet, addToast]);
 
@@ -788,7 +801,7 @@ export default function VideoGeneratorNode({ id, data, selected }: NodeProps<Vid
   useEffect(() => { generateRef.current = generate; }, [generate]);
   useEffect(() => {
     if (!data.pendingGenerate) return;
-    updateNodeData(id, { pendingGenerate: false, status: "running" });
+    updateNodeData(id, { pendingGenerate: false });
     generateRef.current();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data.pendingGenerate]);
@@ -801,7 +814,7 @@ export default function VideoGeneratorNode({ id, data, selected }: NodeProps<Vid
   return (
     <div
       ref={cardRef}
-      className={`video-node-card node-card w-full${busy ? " node-generating" : ""}${(data.hasError as boolean) ? " node-error-blink" : ""}`}
+      className={`video-node-card node-card w-full${animBusy ? " node-generating" : ""}${(data.hasError as boolean) ? " node-error-blink" : ""}`}
       style={{ minWidth: 320, minHeight: 280 }}
       onMouseEnter={() => setHovering(true)}
       onMouseLeave={closeAll}
@@ -949,9 +962,7 @@ export default function VideoGeneratorNode({ id, data, selected }: NodeProps<Vid
             {generations.map((entry, i) => (
               <div key={i} style={{ minWidth: "100%", height: "100%", flexShrink: 0, position: "relative", background: "#090B0D" }}>
                 {entry === null ? (
-                  <div className="absolute inset-0 flex items-center justify-center">
-                    <div className="w-5 h-5 rounded-full border-2 border-[#2a2a2a] border-t-[#666] animate-spin" />
-                  </div>
+                  <div className="absolute inset-0" style={{ background: "#090B0D" }} />
                 ) : typeof entry === "object" ? (
                   <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 px-4 text-center z-20">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
@@ -1030,13 +1041,22 @@ export default function VideoGeneratorNode({ id, data, selected }: NodeProps<Vid
           <>
             <div
               className="absolute top-2 left-2 flex items-center gap-1.5 h-7 px-3 rounded-full z-20 pointer-events-none select-none"
-              style={{ background: "rgba(0,0,0,0.58)", backdropFilter: "blur(10px)", border: "1px solid rgba(255,255,255,0.08)" }}
+              style={{ background: "rgba(0,0,0,0.58)", backdropFilter: "blur(10px)", border: isPending ? "1px solid rgba(255,255,255,0.08)" : "1px solid rgba(168,85,247,0.25)" }}
             >
-              <svg width="10" height="10" viewBox="0 0 10 10" fill="none" style={{ animation: "spin 0.9s linear infinite", flexShrink: 0 }}>
-                <circle cx="5" cy="5" r="4" stroke="rgba(255,255,255,0.18)" strokeWidth="1.5" />
-                <path d="M5 1 A4 4 0 0 1 9 5" stroke="rgba(255,255,255,0.8)" strokeWidth="1.5" strokeLinecap="round" />
-              </svg>
-              <span className="text-[11px] text-[#ccc] font-medium">{phaseLabel || "Generating…"}</span>
+              {isPending ? (
+                <svg width="10" height="10" viewBox="0 0 10 10" fill="none" style={{ animation: "spin 0.9s linear infinite", flexShrink: 0 }}>
+                  <circle cx="5" cy="5" r="4" stroke="rgba(255,255,255,0.18)" strokeWidth="1.5" />
+                  <path d="M5 1 A4 4 0 0 1 9 5" stroke="rgba(255,255,255,0.5)" strokeWidth="1.5" strokeLinecap="round" />
+                </svg>
+              ) : (
+                <svg width="10" height="10" viewBox="0 0 10 10" fill="none" style={{ animation: "spin 0.9s linear infinite", flexShrink: 0 }}>
+                  <circle cx="5" cy="5" r="4" stroke="rgba(168,85,247,0.25)" strokeWidth="1.5" />
+                  <path d="M5 1 A4 4 0 0 1 9 5" stroke="#a855f7" strokeWidth="1.5" strokeLinecap="round" />
+                </svg>
+              )}
+              <span className="text-[11px] font-medium" style={{ color: isPending ? "#888" : "#a855f7" }}>
+                {isPending ? "Pending" : (phaseLabel || "Generating…")}
+              </span>
             </div>
             <button
               onMouseDown={(e) => e.stopPropagation()}
@@ -1294,7 +1314,7 @@ export default function VideoGeneratorNode({ id, data, selected }: NodeProps<Vid
               </div>{/* end pills wrapper */}
 
               {/* Generate button — always right */}
-              <GenerateButton onClick={generate} busy={busy} disabled={promptOverLimit || kieKeySet === false} />
+              <GenerateButton onClick={generate} busy={animBusy} disabled={promptOverLimit || kieKeySet === false || busy} />
             </div>
           );
         })()}

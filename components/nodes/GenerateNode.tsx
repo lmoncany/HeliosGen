@@ -51,6 +51,7 @@ function ratioRect(value: string) {
 
 const STATUS_DOT: Record<string, string> = {
   idle: "bg-[#2A1A14]",
+  pending: "bg-gray-500",
   running: "bg-amber-400 animate-pulse",
   done: "bg-[#ff3df5]",
   error: "bg-red-500",
@@ -180,6 +181,7 @@ export default function GenerateNode({ id, data, selected }: NodeProps<GenerateN
 
   const updateNodeInternals = useUpdateNodeInternals();
   const cardRef = useRef<HTMLDivElement>(null);
+  const pendingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Instant hide on deselect
   const prevSelectedRef = useRef(selected);
@@ -305,6 +307,10 @@ export default function GenerateNode({ id, data, selected }: NodeProps<GenerateN
   }, [data.imageUrl, isSaving]);
 
   const handleCancel = useCallback(() => {
+    if (pendingTimerRef.current !== null) {
+      clearTimeout(pendingTimerRef.current);
+      pendingTimerRef.current = null;
+    }
     setLoading(false);
     const storeNode = useWorkflowStore.getState().nodes.find((n) => n.id === id);
     const gens = ((storeNode?.data?.generations as GenEntry[] | undefined) ?? [])
@@ -381,10 +387,12 @@ export default function GenerateNode({ id, data, selected }: NodeProps<GenerateN
   // "auto" has no fixed pixel dimensions — treat as 1:1 for the CSS ratio
   const [rw, rh] = aspectRatio === "auto" ? [1, 1] : aspectRatio.split(":").map(Number);
   const cssRatio = `${rw} / ${rh}`;
-  const busy = loading || status === "running";
-  const phaseLabel = useGeneratingPhase(busy);
+  const isPending = status === "pending";
+  const animBusy = loading || status === "running";
+  const busy = animBusy || isPending;
+  const phaseLabel = useGeneratingPhase(animBusy);
 
-  useGeneratingBorderAnimation(cardRef, busy);
+  useGeneratingBorderAnimation(cardRef, animBusy);
 
   const [natW, natH] = (() => {
     const r = data.imageNaturalRatio as string | undefined;
@@ -615,31 +623,38 @@ export default function GenerateNode({ id, data, selected }: NodeProps<GenerateN
       return;
     }
 
-    setLoading(true);
+    // Set PENDING state — gives user 3 seconds to cancel before the API call
     const prevGens = [...(((useWorkflowStore.getState().nodes.find(n => n.id === id)?.data?.generations) as GenEntry[] | undefined) ?? [])] as GenEntry[];
     const loadingGens = [...prevGens, null] as GenEntry[];
-    updateNodeData(id, { status: "running", imageUrl: undefined, imageNaturalRatio: undefined, errorMsg: undefined, taskId: undefined, generations: loadingGens, currentGenIdx: loadingGens.length - 1 });
-    try {
-      const res = await fetch("/api/generate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${data.session!.access_token}` },
-        body: JSON.stringify(payload),
-      });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error);
+    updateNodeData(id, { status: "pending", imageUrl: undefined, imageNaturalRatio: undefined, errorMsg: undefined, taskId: undefined, generations: loadingGens, currentGenIdx: loadingGens.length - 1 });
 
-      // Both Kie and Azure now return { taskId } — polling useEffect handles the rest
-      updateNodeData(id, { taskId: json.taskId });
-    } catch (e: unknown) {
-      const errMsg = e instanceof Error ? e.message : String(e);
-      const storeNode = useWorkflowStore.getState().nodes.find(n => n.id === id);
-      const gens = [...((storeNode?.data?.generations as GenEntry[] | undefined) ?? [])] as GenEntry[];
-      const slot = storeNode?.data?.currentGenIdx as number ?? gens.length - 1;
-      gens[slot] = { error: errMsg };
-      updateNodeData(id, { status: "error", errorMsg: errMsg, generations: gens, currentGenIdx: slot });
-    } finally {
-      setLoading(false);
-    }
+    const accessToken = data.session!.access_token;
+    pendingTimerRef.current = setTimeout(async () => {
+      pendingTimerRef.current = null;
+      setLoading(true);
+      updateNodeData(id, { status: "running" });
+      try {
+        const res = await fetch("/api/generate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}` },
+          body: JSON.stringify(payload),
+        });
+        const json = await res.json();
+        if (!res.ok) throw new Error(json.error);
+
+        // Both Kie and Azure now return { taskId } — polling useEffect handles the rest
+        updateNodeData(id, { taskId: json.taskId });
+      } catch (e: unknown) {
+        const errMsg = e instanceof Error ? e.message : String(e);
+        const storeNode = useWorkflowStore.getState().nodes.find(n => n.id === id);
+        const gens = [...((storeNode?.data?.generations as GenEntry[] | undefined) ?? [])] as GenEntry[];
+        const slot = storeNode?.data?.currentGenIdx as number ?? gens.length - 1;
+        gens[slot] = { error: errMsg };
+        updateNodeData(id, { status: "error", errorMsg: errMsg, generations: gens, currentGenIdx: slot });
+      } finally {
+        setLoading(false);
+      }
+    }, 3000);
   }, [id, nodes, edges, model, aspectRatio, quality, data.azureQuality, debugMode, connectedPromptNodeId, updateNodeData, flashEdgeError, kieKeySet, addToast]);
 
   // Pipeline runner trigger — called by Run Pipeline button
@@ -647,7 +662,7 @@ export default function GenerateNode({ id, data, selected }: NodeProps<GenerateN
   useEffect(() => { generateRef.current = generate; }, [generate]);
   useEffect(() => {
     if (!data.pendingGenerate) return;
-    updateNodeData(id, { pendingGenerate: false, status: "running" });
+    updateNodeData(id, { pendingGenerate: false });
     generateRef.current();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data.pendingGenerate]);
@@ -656,7 +671,7 @@ export default function GenerateNode({ id, data, selected }: NodeProps<GenerateN
   return (
     <div
       ref={cardRef}
-      className={`node-card w-full${busy ? " node-generating" : ""}${(data.hasError as boolean) ? " node-error-blink" : ""}`}
+      className={`node-card w-full${animBusy ? " node-generating" : ""}${(data.hasError as boolean) ? " node-error-blink" : ""}`}
       style={{ minWidth: 280 }}
       onMouseEnter={() => setHovering(true)}
       onMouseLeave={() => { setHovering(false); closeDropdowns(); }}
@@ -761,13 +776,22 @@ export default function GenerateNode({ id, data, selected }: NodeProps<GenerateN
           <>
             <div
               className="absolute top-2 left-2 flex items-center gap-1.5 h-7 px-3 rounded-full z-20 pointer-events-none select-none"
-              style={{ background: "rgba(0,0,0,0.58)", backdropFilter: "blur(10px)", border: "1px solid rgba(255,255,255,0.08)" }}
+              style={{ background: "rgba(0,0,0,0.58)", backdropFilter: "blur(10px)", border: isPending ? "1px solid rgba(255,255,255,0.08)" : "1px solid rgba(168,85,247,0.25)" }}
             >
-              <svg width="10" height="10" viewBox="0 0 10 10" fill="none" style={{ animation: "spin 0.9s linear infinite", flexShrink: 0 }}>
-                <circle cx="5" cy="5" r="4" stroke="rgba(255,255,255,0.18)" strokeWidth="1.5" />
-                <path d="M5 1 A4 4 0 0 1 9 5" stroke="rgba(255,255,255,0.8)" strokeWidth="1.5" strokeLinecap="round" />
-              </svg>
-              <span className="text-[11px] text-[#ccc] font-medium">{phaseLabel || "Generating…"}</span>
+              {isPending ? (
+                <svg width="10" height="10" viewBox="0 0 10 10" fill="none" style={{ animation: "spin 0.9s linear infinite", flexShrink: 0 }}>
+                  <circle cx="5" cy="5" r="4" stroke="rgba(255,255,255,0.18)" strokeWidth="1.5" />
+                  <path d="M5 1 A4 4 0 0 1 9 5" stroke="rgba(255,255,255,0.5)" strokeWidth="1.5" strokeLinecap="round" />
+                </svg>
+              ) : (
+                <svg width="10" height="10" viewBox="0 0 10 10" fill="none" style={{ animation: "spin 0.9s linear infinite", flexShrink: 0 }}>
+                  <circle cx="5" cy="5" r="4" stroke="rgba(168,85,247,0.25)" strokeWidth="1.5" />
+                  <path d="M5 1 A4 4 0 0 1 9 5" stroke="#a855f7" strokeWidth="1.5" strokeLinecap="round" />
+                </svg>
+              )}
+              <span className="text-[11px] font-medium" style={{ color: isPending ? "#888" : "#a855f7" }}>
+                {isPending ? "Pending" : (phaseLabel || "Generating…")}
+              </span>
             </div>
             <button
               onMouseDown={(e) => e.stopPropagation()}
@@ -796,9 +820,7 @@ export default function GenerateNode({ id, data, selected }: NodeProps<GenerateN
             {generations.map((entry, i) => (
               <div key={i} style={{ minWidth: "100%", height: "100%", position: "relative", flexShrink: 0 }}>
                 {entry === null ? (
-                  <div className="absolute inset-0 flex items-center justify-center" style={{ background: "#090B0D" }}>
-                    <div className="w-5 h-5 rounded-full border-2 border-[#2a2a2a] border-t-[#666] animate-spin" />
-                  </div>
+                  <div className="absolute inset-0" style={{ background: "#090B0D" }} />
                 ) : typeof entry === "object" && !Array.isArray(entry) ? (
                   <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 px-4 text-center z-20" style={{ background: "#090B0D" }}>
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
@@ -1063,7 +1085,7 @@ export default function GenerateNode({ id, data, selected }: NodeProps<GenerateN
           </div>{/* end pills wrapper */}
 
           {/* Generate button — always right */}
-          <GenerateButton onClick={generate} busy={busy} disabled={promptOverLimit || kieKeySet === false} />
+          <GenerateButton onClick={generate} busy={animBusy} disabled={promptOverLimit || kieKeySet === false || busy} />
         </div>
       </div>
 

@@ -55,7 +55,7 @@ export function usePipelineRunner(scopeNodeIds?: string[]) {
     // Mark once we see activity (pendingGenerate or running)
     const anyActive = currentWave.some(id => {
       const node = nodes.find(n => n.id === id);
-      return node?.data?.pendingGenerate || node?.data?.status === "running";
+      return node?.data?.pendingGenerate || node?.data?.status === "pending" || node?.data?.status === "running";
     });
     if (anyActive) waveEverActive.current = true;
 
@@ -65,7 +65,7 @@ export function usePipelineRunner(scopeNodeIds?: string[]) {
     const allDone = currentWave.every(id => {
       const node = nodes.find(n => n.id === id);
       if (!node) return true;
-      return !node.data.pendingGenerate && node.data.status !== "running";
+      return !node.data.pendingGenerate && node.data.status !== "pending" && node.data.status !== "running";
     });
 
     if (!allDone) return;
