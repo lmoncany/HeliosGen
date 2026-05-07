@@ -178,6 +178,8 @@ interface WorkflowStore {
   setResetPasswordModalOpen: (v: boolean) => void;
   showDashboard:             boolean;
   setShowDashboard:          (v: boolean) => void;
+  globalMuted:               boolean;
+  setGlobalMuted:            (v: boolean) => void;
   saveViewport: (viewport: { x: number; y: number; zoom: number }) => void;
   loadSpacesFromDB: (spaces: Space[]) => void;
 }
@@ -571,6 +573,8 @@ export const useWorkflowStore = create<WorkflowStore>()(
         setResetPasswordModalOpen: (v) => set({ resetPasswordModalOpen: v }),
         showDashboard:             true,
         setShowDashboard:          (v) => set({ showDashboard: v }),
+        globalMuted:               true,
+        setGlobalMuted:            (v) => set({ globalMuted: v }),
       };
     },
     {

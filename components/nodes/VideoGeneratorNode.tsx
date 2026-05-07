@@ -201,7 +201,8 @@ export default function VideoGeneratorNode({ id, data, selected }: NodeProps<Vid
   const [durOpen, setDurOpen] = useState(false);
   const [modeOpen, setModeOpen] = useState(false);
   const [grokResOpen, setGrokResOpen] = useState(false);
-  const [muted, setMuted] = useState(true);
+  const muted = useWorkflowStore((s) => s.globalMuted);
+  const setGlobalMuted = useWorkflowStore((s) => s.setGlobalMuted);
   const [hovering, setHovering] = useState(false);
   const [progress, setProgress] = useState(0);
   const [currentSec, setCurrentSec] = useState(0);
@@ -1029,7 +1030,7 @@ export default function VideoGeneratorNode({ id, data, selected }: NodeProps<Vid
             </div>
             <button
               onMouseDown={(e) => e.stopPropagation()}
-              onClick={(e) => { e.stopPropagation(); setMuted((m) => !m); }}
+              onClick={(e) => { e.stopPropagation(); setGlobalMuted(!muted); }}
               className="shrink-0 pointer-events-auto opacity-70 hover:opacity-100 transition-opacity"
               title={muted ? "Unmute" : "Mute"}
             >

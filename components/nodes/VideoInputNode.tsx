@@ -60,7 +60,8 @@ export default function VideoInputNode({ id, data, selected }: NodeProps<VideoIn
   const [hoveredSrcHandle, setHoveredSrcHandle] = useState<string | null>(null);
   const [uploading, setUploading]   = useState(false);
   const [uploadErr, setUploadErr]   = useState<string | null>(null);
-  const [muted, setMuted]           = useState(true);
+  const muted = useWorkflowStore((s) => s.globalMuted);
+  const setGlobalMuted = useWorkflowStore((s) => s.setGlobalMuted);
   const [hovering, setHovering]     = useState(false);
   const [progress, setProgress]     = useState(0);
   const [currentSec, setCurrentSec] = useState(0);
@@ -736,7 +737,7 @@ export default function VideoInputNode({ id, data, selected }: NodeProps<VideoIn
               {viewMode === "video" && (
                 <button
                   onMouseDown={(e) => e.stopPropagation()}
-                  onClick={(e) => { e.stopPropagation(); setMuted((m) => !m); }}
+                  onClick={(e) => { e.stopPropagation(); setGlobalMuted(!muted); }}
                   className="absolute top-2 right-2 w-7 h-7 rounded-full bg-black/40 backdrop-blur-sm flex items-center justify-center opacity-0 group-hover/player:opacity-100 transition-opacity pointer-events-auto z-10 node-slide-reveal"
                   title={muted ? "Unmute" : "Mute"}
                 >

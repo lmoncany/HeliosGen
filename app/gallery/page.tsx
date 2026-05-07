@@ -3733,22 +3733,6 @@ function GalleryCard({
               <svg width="14" height="14" viewBox="0 0 24 24" fill="#fff" stroke="none"><polygon points="5 3 19 12 5 21 5 3" /></svg>
             </div>
           )}
-          {/* Mute toggle — top-left, visible on hover, global state */}
-          <button
-            className="gallery-mute-btn gallery-action-btn"
-            onClick={e => { e.stopPropagation(); onToggleMute?.(); }}
-            title={videoMuted ? "Unmute" : "Mute"}
-          >
-            {videoMuted ? (
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/>
-              </svg>
-            ) : (
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>
-              </svg>
-            )}
-          </button>
         </>
       ) : (
         <>
@@ -3836,6 +3820,23 @@ function GalleryCard({
 
       {/* ── Top-right icon buttons ── */}
       <div className="gallery-actions-top">
+        {isVideo && (
+          <button
+            className="gallery-action-btn"
+            onClick={e => { e.stopPropagation(); onToggleMute?.(); }}
+            title={videoMuted ? "Unmute" : "Mute"}
+          >
+            {videoMuted ? (
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/>
+              </svg>
+            ) : (
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>
+              </svg>
+            )}
+          </button>
+        )}
         {item.prompt && onCopyPrompt && (
           <button className="gallery-action-btn" title={copied ? "Copied!" : "Copy prompt"} onClick={handleCopy}>
             {copied ? (
@@ -4631,15 +4632,6 @@ const GALLERY_CSS = `
     opacity: 0; transition: opacity 180ms ease; pointer-events: none;
   }
   .gallery-item:hover .gallery-play-icon { opacity: 1; }
-  .gallery-mute-btn {
-    position: absolute; top: 8px; left: 8px;
-    opacity: 0; transition: opacity 180ms ease;
-    pointer-events: none; z-index: 5;
-  }
-  .gallery-item:hover .gallery-mute-btn {
-    opacity: 1;
-    pointer-events: auto;
-  }
   .gallery-checkbox {
     position: absolute;
     top: 8px;
