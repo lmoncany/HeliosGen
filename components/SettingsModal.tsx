@@ -166,6 +166,7 @@ function ModelRow({
   category,
   value,
   onChange,
+  azureSupported,
 }: {
   id: string;
   name: string;
@@ -173,6 +174,7 @@ function ModelRow({
   category: string;
   value: ProviderId;
   onChange: (v: ProviderId) => void;
+  azureSupported?: boolean;
 }) {
   return (
     <div
@@ -212,8 +214,8 @@ function ModelRow({
         </div>
       </div>
 
-      {/* Provider toggle */}
-      <ProviderToggle modelId={id} value={value} onChange={onChange} />
+      {/* Provider toggle — only for Azure-supported models */}
+      {azureSupported && <ProviderToggle modelId={id} value={value} onChange={onChange} />}
     </div>
   );
 }
@@ -258,6 +260,7 @@ function ModelGroup({
               category={m.category}
               value={providers[m.id] ?? "kie"}
               onChange={(v) => onProviderChange(m.id, v)}
+              azureSupported={m.hasAzureDeployment}
             />
             {/* Deployment name — shown only for Azure-capable models when Azure is selected */}
             {m.hasAzureDeployment && (providers[m.id] ?? "kie") === "azure" && (

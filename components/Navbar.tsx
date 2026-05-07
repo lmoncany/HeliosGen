@@ -20,8 +20,6 @@ function NavbarInner() {
   const avatarRef = useRef<HTMLButtonElement>(null);
 
   const setAuthModalOpen = useWorkflowStore((s) => s.setAuthModalOpen);
-  const debugMode = useWorkflowStore((s) => s.debugMode);
-  const toggleDebug = useWorkflowStore((s) => s.toggleDebug);
   const setSettingsOpen = useWorkflowStore((s) => s.setSettingsOpen);
   const setShowDashboard = useWorkflowStore((s) => s.setShowDashboard);
   const setKieKeySet = useWorkflowStore((s) => s.setKieKeySet);
@@ -166,13 +164,6 @@ function NavbarInner() {
                   </div>
                 )}
                 <div className="tnav-dropdown-body">
-                  <DropdownItem
-                    icon={<DebugIcon active={debugMode} />}
-                    onClick={() => { toggleDebug(); setMenuOpen(false); }}
-                    active={debugMode}
-                  >
-                    Debug
-                  </DropdownItem>
                   <DropdownItem
                     icon={<GearIcon />}
                     onClick={() => { setSettingsOpen(true); setMenuOpen(false); }}
@@ -548,15 +539,6 @@ function SignOutIcon() {
   );
 }
 
-function DebugIcon({ active }: { active: boolean }) {
-  return (
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"
-      style={{ color: active ? "#f59e0b" : undefined }}>
-      <path d="M12 22c4.97 0 9-4.48 9-10S16.97 2 12 2 3 6.48 3 12s4.03 10 9 10z" />
-      <path d="M12 8v4M12 16h.01" />
-    </svg>
-  );
-}
 
 function GearIcon() {
   return (
