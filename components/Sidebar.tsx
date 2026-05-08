@@ -192,7 +192,7 @@ export default function Sidebar() {
       {/* Brand */}
       <div className="px-4 py-4 border-b border-[#1A100C]">
         <span className="text-white text-sm font-medium tracking-tight">
-          AI Workflow
+          HeliosGen
         </span>
       </div>
 

@@ -15,7 +15,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "AI Workflow Builder",
+  title: "HeliosGen",
   description: "Build AI image & video generation workflows visually",
 };
 

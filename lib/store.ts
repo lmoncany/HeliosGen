@@ -1,5 +1,17 @@
 import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
+
+// Migration: move saved data from old localStorage key to new key.
+// Always overwrite — the old key is the source of truth if it still exists,
+// because the new key may only contain an empty placeholder written before
+// the DB load restored the real workflows.
+if (typeof window !== "undefined") {
+  const old = localStorage.getItem("ai-workflow");
+  if (old) {
+    localStorage.setItem("heliosgen", old);
+    localStorage.removeItem("ai-workflow");
+  }
+}
 import { edgeStyle } from "./edgeStyles";
 import {
   Node,
@@ -539,12 +551,18 @@ export const useWorkflowStore = create<WorkflowStore>()(
               return localTs >= dbTs ? local : dbSp;
             });
 
-            // Add any local-only spaces not in the DB (created offline)
+            // Add local-only spaces that have actual content (created offline).
+            // Skip empty placeholder spaces — those are just initialization artifacts
+            // created before the DB load completed.
             const dbIds = new Set(dbSpaces.map((sp) => sp.id));
             for (const sp of s.spaces) {
-              if (!dbIds.has(sp.id)) merged.push(sp);
+              if (!dbIds.has(sp.id) && (sp.nodes.length > 0 || sp.edges.length > 0)) {
+                merged.push(sp);
+              }
             }
 
+            // If the current active space isn't in the merged set (e.g. it was an
+            // empty placeholder), fall back to the first real DB space.
             const activeId = merged.find((sp) => sp.id === s.activeSpaceId)?.id ?? merged[0].id;
             const active   = merged.find((sp) => sp.id === activeId)!;
             return {
@@ -581,7 +599,7 @@ export const useWorkflowStore = create<WorkflowStore>()(
       };
     },
     {
-      name: "ai-workflow",
+      name: "heliosgen",
       storage: createJSONStorage(() => localStorage),
       partialize: (s) => ({
         spaces: s.spaces.map((sp) => ({

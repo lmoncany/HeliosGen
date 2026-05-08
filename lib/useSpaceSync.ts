@@ -40,6 +40,7 @@ export function useSpaceSync() {
         nodes:        row.data?.nodes        ?? [],
         edges:        row.data?.edges        ?? [],
         nodeCounters: row.data?.nodeCounters ?? {},
+        viewport:     row.data?.viewport,
         createdAt:    row.data?.createdAt    ?? Date.parse(row.created_at),
         updatedAt:    row.data?.updatedAt    ?? row.data?.createdAt ?? Date.parse(row.created_at),
       }));
@@ -72,6 +73,7 @@ export function useSpaceSync() {
           })),
           edges:        sp.edges,
           nodeCounters: sp.nodeCounters,
+          viewport:     sp.viewport,
           createdAt:    sp.createdAt,
           updatedAt:    sp.updatedAt ?? sp.createdAt,
         },
