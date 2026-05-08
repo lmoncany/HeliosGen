@@ -1515,11 +1515,26 @@ function GalleryInner() {
 
       {/* ── Grid ── */}
       <div ref={gridOuterRef} style={{ flex: 1, overflowY: "auto", paddingBottom: "260px" }}>
-        {loading || containerWidth === 0 || needsProbing ? (
-          /* Skeleton — shown while loading, before container is measured, or while probing upload dimensions */
+        {loading || containerWidth === 0 ? (
+          /* Skeleton — shown while loading or before container is measured */
           <div style={{ display: "grid", gridTemplateColumns: `repeat(${zoom}, 1fr)`, gap: "3px", padding: "3px", alignItems: "start" }}>
             {Array.from({ length: zoom * 3 }).map((_, i) => (
               <div key={i} className="gallery-skeleton" style={{ aspectRatio: i % 3 === 1 ? "4 / 5" : i % 5 === 0 ? "16 / 9" : "1 / 1" }} />
+            ))}
+          </div>
+        ) : needsProbing ? (
+          /* Probing skeletons — real item count and aspect ratios while upload dims are being measured */
+          <div style={{ padding: "3px" }}>
+            {justifiedRows.map((row, rowIdx) => (
+              <div key={rowIdx} style={{ display: "flex", height: row.height, gap: `${GALLERY_GAP}px`, marginBottom: rowIdx < justifiedRows.length - 1 ? `${GALLERY_GAP}px` : 0 }}>
+                {row.items.map((layoutItem) => (
+                  <div
+                    key={layoutItem.kind === "gallery" ? layoutItem.item.id : layoutItem.pg.id}
+                    className="gallery-skeleton"
+                    style={{ width: layoutItem.width, flex: "0 0 auto", height: "100%", borderRadius: "6px" }}
+                  />
+                ))}
+              </div>
             ))}
           </div>
         ) : filteredItems.length === 0 && (sourceFilter !== "generated" || pendingGens.filter(pg => pg.tab == null || pg.tab === tab).length === 0) ? (
