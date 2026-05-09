@@ -55,6 +55,8 @@ export interface NodeData extends Record<string, unknown> {
   // grok imagine settings
   grokMode?: string;
   grokResolution?: string;
+  // seed (for models that support it)
+  seed?: number;
   // error
   errorMsg?: string;
   // validation

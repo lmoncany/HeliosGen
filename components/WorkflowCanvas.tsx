@@ -773,6 +773,23 @@ export default function WorkflowCanvas() {
       }
     }
 
+    // HappyHorse: startFrame and resource are mutually exclusive
+    if (connection.targetHandle === "startFrame" || connection.targetHandle === "resource") {
+      const targetNode = nodes.find((n) => n.id === connection.target);
+      if (targetNode?.type === "videoGeneratorNode") {
+        const videoModelId = (targetNode.data?.videoModel as string | undefined) ?? "";
+        if (videoModelId === "happyhorse") {
+          const conflictHandle = connection.targetHandle === "startFrame" ? "resource" : "startFrame";
+          const toRemove = edges.filter(
+            (e) => e.target === connection.target && e.targetHandle === conflictHandle
+          );
+          if (toRemove.length > 0) {
+            onEdgesChange(toRemove.map((e) => ({ type: "remove" as const, id: e.id })));
+          }
+        }
+      }
+    }
+
     const h = connection.targetHandle;
     if (h !== "resource" && h !== "videoRef") return;
 

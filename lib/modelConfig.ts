@@ -255,6 +255,8 @@ export interface VideoModel {
   sound: boolean;
   /** When true, prompt is not required to generate */
   promptOptional?: boolean;
+  /** When true, model supports a seed parameter */
+  supportsSeeds?: boolean;
   /**
    * Optional mode selector (Kling: resolution, Grok: style).
    * If omitted, no mode picker is shown.
@@ -320,6 +322,10 @@ export interface VideoModel {
     promptMaxLength?: number;
     /** Any other static fields to include in the input object */
     extra?: Record<string, unknown>;
+    /** When set, seed value is sent under this key */
+    seedKey?: string;
+    /** When true, use HappyHorse multi-endpoint routing */
+    useHappyHorse?: boolean;
   };
 }
 
@@ -421,6 +427,35 @@ export const VIDEO_MODELS: VideoModel[] = [
       referenceAudiosKey: "reference_audio_urls",
       promptMaxLength: 20000,
       extra: { web_search: false },
+    },
+  },
+  // ── Alibaba HappyHorse ───────────────────────────────────────────────────────
+  {
+    id: "happyhorse",
+    apiId: "happyhorse/text-to-video",
+    name: "HappyHorse",
+    provider: "Alibaba",
+    ratios: ["16:9", "9:16", "1:1", "4:3", "3:4"],
+    durations: [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+    defaultDuration: 5,
+    defaultRatio: "16:9",
+    handles: ["prompt", "startFrame", "resource"],
+    sound: false,
+    promptOptional: true,
+    supportsSeeds: true,
+    maxResources: 9,
+    resolutions: ["720p", "1080p"],
+    defaultResolution: "1080p",
+    apiInput: {
+      aspectRatioKey: "aspect_ratio",
+      durationKey: "duration",
+      durationMin: 3,
+      durationMax: 15,
+      resolutionKey: "resolution",
+      referenceImagesKey: "reference_image",
+      seedKey: "seed",
+      useHappyHorse: true,
+      promptMaxLength: 5000,
     },
   },
   // ── Kling motion control ─────────────────────────────────────────────────────

@@ -191,57 +191,62 @@ function PendingGenTile({ pg, onCancel }: { pg: PendingGen; onCancel: () => void
   const phaseLabel = useGeneratingPhase(!pg.prePending);
   return (
     <>
-      {/* Top-left: phase label */}
+      {/* Top: phase label + cancel — same row, wraps to next line if too narrow */}
       <div style={{
-        position: "absolute", top: 8, left: 8,
-        display: "flex", alignItems: "center", gap: "6px",
-        height: "26px", padding: "0 10px", borderRadius: "999px", zIndex: 5,
-        background: "rgba(0,0,0,0.58)", backdropFilter: "blur(10px)",
-        border: pg.prePending ? "1px solid rgba(255,255,255,0.08)" : "1px solid rgba(168,85,247,0.25)",
-        pointerEvents: "none",
+        position: "absolute", top: 8, left: 8, right: 8,
+        display: "flex", flexWrap: "wrap", alignItems: "center", gap: "5px",
+        zIndex: 5,
       }}>
-        {pg.prePending ? (
-          <svg width="9" height="9" viewBox="0 0 10 10" fill="none" style={{ animation: "spin 0.9s linear infinite", flexShrink: 0 }}>
-            <circle cx="5" cy="5" r="4" stroke="rgba(255,255,255,0.18)" strokeWidth="1.5" />
-            <path d="M5 1 A4 4 0 0 1 9 5" stroke="rgba(255,255,255,0.5)" strokeWidth="1.5" strokeLinecap="round" />
-          </svg>
-        ) : (
-          <svg width="9" height="9" viewBox="0 0 10 10" fill="none" style={{ animation: "spin 0.9s linear infinite", flexShrink: 0 }}>
-            <circle cx="5" cy="5" r="4" stroke="rgba(168,85,247,0.25)" strokeWidth="1.5" />
-            <path d="M5 1 A4 4 0 0 1 9 5" stroke="#a855f7" strokeWidth="1.5" strokeLinecap="round" />
-          </svg>
-        )}
-        <span style={{ fontSize: "11px", color: pg.prePending ? "#888" : "#a855f7", fontWeight: 500 }}>
-          {pg.prePending ? "Pending" : (phaseLabel || "Generating…")}
-        </span>
-      </div>
-
-      {/* Top-right: cancel button */}
-      <button
-        onClick={onCancel}
-        style={{
-          position: "absolute", top: 8, right: 8,
+        {/* Phase pill */}
+        <div style={{
           display: "flex", alignItems: "center", gap: "6px",
-          height: "26px", padding: "0 10px", borderRadius: "999px", zIndex: 5,
+          height: "26px", padding: "0 10px", borderRadius: "999px",
           background: "rgba(0,0,0,0.58)", backdropFilter: "blur(10px)",
-          border: "1px solid rgba(255,255,255,0.08)", cursor: "pointer",
-          transition: "background 140ms",
-        }}
-        onMouseEnter={e => (e.currentTarget.style.background = "rgba(255,255,255,0.1)")}
-        onMouseLeave={e => (e.currentTarget.style.background = "rgba(0,0,0,0.58)")}
-      >
-        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.7)" strokeWidth="2" strokeLinecap="round">
-          <circle cx="12" cy="12" r="9" />
-          <path d="m6 6 12 12" />
-        </svg>
-        <span style={{ fontSize: "11px", color: "#ccc", fontWeight: 500 }}>Cancel</span>
-      </button>
+          border: pg.prePending ? "1px solid rgba(255,255,255,0.08)" : "1px solid rgba(168,85,247,0.25)",
+          pointerEvents: "none", flexShrink: 0,
+        }}>
+          {pg.prePending ? (
+            <svg width="9" height="9" viewBox="0 0 10 10" fill="none" style={{ animation: "spin 0.9s linear infinite", flexShrink: 0 }}>
+              <circle cx="5" cy="5" r="4" stroke="rgba(255,255,255,0.18)" strokeWidth="1.5" />
+              <path d="M5 1 A4 4 0 0 1 9 5" stroke="rgba(255,255,255,0.5)" strokeWidth="1.5" strokeLinecap="round" />
+            </svg>
+          ) : (
+            <svg width="9" height="9" viewBox="0 0 10 10" fill="none" style={{ animation: "spin 0.9s linear infinite", flexShrink: 0 }}>
+              <circle cx="5" cy="5" r="4" stroke="rgba(168,85,247,0.25)" strokeWidth="1.5" />
+              <path d="M5 1 A4 4 0 0 1 9 5" stroke="#a855f7" strokeWidth="1.5" strokeLinecap="round" />
+            </svg>
+          )}
+          <span style={{ fontSize: "11px", color: pg.prePending ? "#888" : "#a855f7", fontWeight: 500 }}>
+            {pg.prePending ? "Pending" : (phaseLabel || "Generating…")}
+          </span>
+        </div>
 
+        {/* Cancel pill */}
+        <button
+          onClick={onCancel}
+          style={{
+            flexShrink: 0,
+            display: "flex", alignItems: "center", gap: "5px",
+            height: "26px", padding: "0 10px", borderRadius: "999px",
+            background: "rgba(0,0,0,0.58)", backdropFilter: "blur(10px)",
+            border: "1px solid rgba(255,255,255,0.08)", cursor: "pointer",
+            transition: "background 140ms",
+          }}
+          onMouseEnter={e => (e.currentTarget.style.background = "rgba(255,255,255,0.1)")}
+          onMouseLeave={e => (e.currentTarget.style.background = "rgba(0,0,0,0.58)")}
+        >
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.7)" strokeWidth="2" strokeLinecap="round">
+            <circle cx="12" cy="12" r="9" />
+            <path d="m6 6 12 12" />
+          </svg>
+          <span style={{ fontSize: "11px", color: "#ccc", fontWeight: 500 }}>Cancel</span>
+        </button>
+      </div>
 
       {/* Bottom: prompt */}
       {pg.prompt && (
         <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, padding: "24px 10px 10px", background: "linear-gradient(to top, rgba(0,0,0,0.6) 0%, transparent 100%)" }}>
-          <p style={{ fontSize: "11px", color: "rgba(255,255,255,0.35)", overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis" }}>{pg.prompt}</p>
+          <p style={{ margin: 0, fontSize: "11px", color: "rgba(255,255,255,0.35)", overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis" }}>{pg.prompt}</p>
         </div>
       )}
     </>
@@ -292,6 +297,7 @@ function GalleryInner() {
   const [mode, setMode] = useState<string>(() => loadSettings(tab)?.mode ?? "");
   const [resolution, setResolution] = useState<string>("");
   const [sound, setSound] = useState<boolean>(() => loadSettings(tab)?.sound ?? false);
+  const [seed, setSeed] = useState<number | undefined>(0);
   const [durPickerOpen, setDurPickerOpen] = useState(false);
   const [durPickerClosing, setDurPickerClosing] = useState(false);
   const [durPickerPos, setDurPickerPos] = useState<{ left: number; bottom: number } | null>(null);
@@ -326,6 +332,8 @@ function GalleryInner() {
 
   const [removingIds, setRemovingIds] = useState<Set<string>>(new Set());
   const [videoMuted, setVideoMuted] = useState(true);
+  const [refPreview, setRefPreview] = useState<{ url: string; mediaKind: "image" | "video" | "audio" } | null>(null);
+  const [hoveredRefId, setHoveredRefId] = useState<string | null>(null);
 
   // Media picker
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -384,6 +392,14 @@ function GalleryInner() {
     return () => { refImages.forEach(r => URL.revokeObjectURL(r.objectUrl)); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Close ref preview on Escape
+  useEffect(() => {
+    if (!refPreview) return;
+    const handler = (e: KeyboardEvent) => { if (e.key === "Escape") setRefPreview(null); };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [refPreview]);
 
   // Persist pendingGens so generating/failed jobs survive page refresh
   useEffect(() => {
@@ -759,12 +775,16 @@ function GalleryInner() {
 
     if (isSingle) {
       const [entry] = newEntries;
-      if (target === "startFrame") setVidStartFrame(entry);
-      else if (target === "endFrame") setVidEndFrame(entry);
+      if (target === "startFrame") {
+        setVidStartFrame(entry);
+        if (modelId === "happyhorse") setVidResources([]);
+      } else if (target === "endFrame") setVidEndFrame(entry);
       else setVidVideoRef(entry);
     } else {
-      if (target === "resource")       setVidResources(prev => [...prev, ...newEntries]);
-      else if (target === "referenceVideo") setVidRefVideos(prev => [...prev, ...newEntries]);
+      if (target === "resource") {
+        if (modelId === "happyhorse") setVidStartFrame(null);
+        setVidResources(prev => [...prev, ...newEntries]);
+      } else if (target === "referenceVideo") setVidRefVideos(prev => [...prev, ...newEntries]);
       else                             setVidRefAudios(prev => [...prev, ...newEntries]);
     }
 
@@ -833,6 +853,7 @@ function GalleryInner() {
 
     if (pickerTarget === "resource") {
       if (isDup(vidResources)) { showDup(); return; }
+      if (modelId === "happyhorse") setVidStartFrame(null);
       setVidResources(prev => [...prev, { id: crypto.randomUUID(), objectUrl: url, cdnUrl: url, uploading: false, error: false }]);
       return;
     }
@@ -842,8 +863,10 @@ function GalleryInner() {
       return;
     }
     const entry: RefImage = { id: crypto.randomUUID(), objectUrl: url, cdnUrl: url, uploading: false, error: false };
-    if (pickerTarget === "startFrame")    setVidStartFrame(entry);
-    else if (pickerTarget === "endFrame") setVidEndFrame(entry);
+    if (pickerTarget === "startFrame") {
+      setVidStartFrame(entry);
+      if (modelId === "happyhorse") setVidResources([]);
+    } else if (pickerTarget === "endFrame") setVidEndFrame(entry);
     else if (pickerTarget === "videoRef") setVidVideoRef(entry);
   };
 
@@ -881,8 +904,10 @@ function GalleryInner() {
           ...(isAzure ? { azureBaseUrl, azureDeployment, azureQuality: quality } : {}),
         }),
       });
-      const d = await res.json() as { taskId?: string; error?: string };
-      if (!res.ok) throw new Error(d.error ?? "Failed");
+      const text = await res.text();
+      let d: { taskId?: string; error?: string } = {};
+      try { d = JSON.parse(text); } catch { throw new Error(res.ok ? "Invalid server response" : `Server error ${res.status}`); }
+      if (!res.ok) throw new Error(d.error ?? `Server error ${res.status}`);
       return d.taskId!;
     } else {
       const vm = VIDEO_MODELS.find(m => m.id === modelId);
@@ -920,8 +945,8 @@ function GalleryInner() {
           prompt,
           aspectRatio,
           duration,
-          sound: vm?.sound ? sound : false,
-          mode: mode || vm?.defaultMode || "pro",
+          ...(vm?.sound ? { sound } : {}),
+          ...(vm?.modes?.length ? { mode: mode || vm.defaultMode || "pro" } : {}),
           resolution: vm && "resolutions" in vm && vm.resolutions?.length ? resolution || vm.defaultResolution : undefined,
           ...(startFrameUrl               ? { startFrameUrl }               : {}),
           ...(endFrameUrl                 ? { endFrameUrl }                 : {}),
@@ -930,10 +955,13 @@ function GalleryInner() {
           ...(referenceImageUrls?.length  ? { referenceImageUrls }          : {}),
           ...(referenceVideoUrls?.length  ? { referenceVideoUrls }          : {}),
           ...(referenceAudioUrls?.length  ? { referenceAudioUrls }          : {}),
+          ...(vm?.supportsSeeds && seed ? { seed } : {}),
         }),
       });
-      const d = await res.json() as { taskId?: string; error?: string };
-      if (!res.ok) throw new Error(d.error ?? "Failed");
+      const text = await res.text();
+      let d: { taskId?: string; error?: string } = {};
+      try { d = JSON.parse(text); } catch { throw new Error(res.ok ? "Invalid server response" : `Server error ${res.status}`); }
+      if (!res.ok) throw new Error(d.error ?? `Server error ${res.status}`);
       return d.taskId!;
     }
   };
@@ -1815,25 +1843,30 @@ function GalleryInner() {
             }}>
               {refImages.map(img => {
                 const isRemoving = removingIds.has(img.id);
+                const isHovered = hoveredRefId === img.id;
                 return (
-                  <div key={img.id} data-refimg-id={img.id} style={{
-                    position: "relative",
-                    width: "88px",
-                    height: "80px",
-                    borderRadius: "10px",
-                    overflow: "hidden",
-                    background: "#1A1C1F",
-                    flexShrink: 0,
-                    border: img.error ? "1px solid rgba(248,113,113,0.4)" : "1px solid rgba(255,255,255,0.08)",
-                    // Entry: spring animation on mount
-                    animation: isRemoving ? "none" : "refImgIn 260ms cubic-bezier(0.16,1,0.3,1)",
-                    // Exit: CSS transition driven by React state (same values as DOM manipulation — no conflict)
-                    ...(isRemoving ? {
-                      transition: "opacity 170ms cubic-bezier(0.4,0,1,1), transform 170ms cubic-bezier(0.4,0,1,1)",
-                      opacity: 0,
-                      transform: "translateY(-10px) scale(0.92)",
-                    } : {}),
-                  }}>
+                  <div
+                    key={img.id}
+                    data-refimg-id={img.id}
+                    onMouseEnter={() => setHoveredRefId(img.id)}
+                    onMouseLeave={() => setHoveredRefId(null)}
+                    style={{
+                      position: "relative",
+                      width: "88px",
+                      height: "80px",
+                      borderRadius: "10px",
+                      overflow: "hidden",
+                      background: "#1A1C1F",
+                      flexShrink: 0,
+                      border: img.error ? "1px solid rgba(248,113,113,0.4)" : "1px solid rgba(255,255,255,0.08)",
+                      animation: isRemoving ? "none" : "refImgIn 260ms cubic-bezier(0.16,1,0.3,1)",
+                      ...(isRemoving ? {
+                        transition: "opacity 170ms cubic-bezier(0.4,0,1,1), transform 170ms cubic-bezier(0.4,0,1,1)",
+                        opacity: 0,
+                        transform: "translateY(-10px) scale(0.92)",
+                      } : {}),
+                    }}
+                  >
                     {/* Thumbnail */}
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img
@@ -1841,6 +1874,23 @@ function GalleryInner() {
                       alt=""
                       style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
                     />
+                    {/* Hover fullscreen overlay */}
+                    {isHovered && !img.uploading && !img.error && (
+                      <div
+                        onClick={() => setRefPreview({ url: img.objectUrl, mediaKind: "image" })}
+                        style={{
+                          position: "absolute", inset: 0,
+                          background: "rgba(0,0,0,0.35)",
+                          display: "flex", alignItems: "center", justifyContent: "center",
+                          cursor: "zoom-in",
+                          transition: "background 120ms",
+                        }}
+                      >
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.9)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/>
+                        </svg>
+                      </div>
+                    )}
                     {/* Upload overlay */}
                     {img.uploading && (
                       <div style={{
@@ -1898,6 +1948,7 @@ function GalleryInner() {
                         padding: 0,
                         fontSize: "12px",
                         transition: "background 120ms",
+                        zIndex: 2,
                       }}
                       onMouseEnter={e => { e.currentTarget.style.background = "rgba(0,0,0,0.9)"; }}
                       onMouseLeave={e => { e.currentTarget.style.background = "rgba(0,0,0,0.7)"; }}
@@ -1967,7 +2018,11 @@ function GalleryInner() {
               | { kind: "element-add"; countLeft: number };
             const slots: VidSlot[] = [];
             const useElems = !!(vidModel?.apiInput.useKlingElements);
+            const isHappyHorse = vidModel?.id === "happyhorse";
             for (const h of vidRefHandles) {
+              // HappyHorse: hide startFrame when characters are attached, hide resource when startFrame is attached
+              if (isHappyHorse && h === "startFrame" && vidResources.length > 0) continue;
+              if (isHappyHorse && h === "resource" && vidStartFrame) continue;
               if (h === "startFrame") {
                 if (vidStartFrame) slots.push({ kind: "filled", target: h, mediaKind: "image", label: "Start Frame", ref: vidStartFrame });
                 else               slots.push({ kind: "add",    target: h, mediaKind: "image", label: "Start Frame", countLeft: 1 });
@@ -1983,9 +2038,10 @@ function GalleryInner() {
                   if (vidElements.length < 3) slots.push({ kind: "element-add", countLeft: 3 - vidElements.length });
                 } else {
                   const maxRes = vidModel?.maxResources ?? 3;
-                  vidResources.forEach(r => slots.push({ kind: "filled", target: h, mediaKind: "image", label: "Image", ref: r }));
+                  const resLabel = vidModel?.id === "happyhorse" ? "Character" : "Image";
+                  vidResources.forEach(r => slots.push({ kind: "filled", target: h, mediaKind: "image", label: resLabel, ref: r }));
                   if (vidResources.length < maxRes)
-                    slots.push({ kind: "add", target: h, mediaKind: "image", label: "Image", countLeft: maxRes - vidResources.length });
+                    slots.push({ kind: "add", target: h, mediaKind: "image", label: resLabel, countLeft: maxRes - vidResources.length });
                 }
               } else if (h === "referenceVideo") {
                 const maxRefVid = vidModel?.maxReferenceVideos ?? 3;
@@ -2006,14 +2062,35 @@ function GalleryInner() {
                   if (slot.kind === "element-filled") {
                     const el = slot.element;
                     const thumb = el.imageUrls[0];
+                    const elemHovId = `elem-${el.id}`;
                     return (
-                      <div key={el.id} style={{
-                        position: "relative", width: "88px", height: "80px",
-                        borderRadius: "10px", overflow: "hidden", flexShrink: 0,
-                        background: "#1a1c1f", border: "1px solid rgba(255,255,255,0.12)",
-                      }}>
+                      <div
+                        key={el.id}
+                        onMouseEnter={() => setHoveredRefId(elemHovId)}
+                        onMouseLeave={() => setHoveredRefId(null)}
+                        style={{
+                          position: "relative", width: "88px", height: "80px",
+                          borderRadius: "10px", overflow: "hidden", flexShrink: 0,
+                          background: "#1a1c1f", border: "1px solid rgba(255,255,255,0.12)",
+                        }}
+                      >
                         {/* eslint-disable-next-line @next/next/no-img-element */}
                         <img src={thumb} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
+                        {hoveredRefId === elemHovId && (
+                          <div
+                            onClick={() => setRefPreview({ url: thumb, mediaKind: "image" })}
+                            style={{
+                              position: "absolute", inset: 0,
+                              background: "rgba(0,0,0,0.35)",
+                              display: "flex", alignItems: "center", justifyContent: "center",
+                              cursor: "zoom-in", zIndex: 1,
+                            }}
+                          >
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.9)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/>
+                            </svg>
+                          </div>
+                        )}
                         {el.imageUrls.length > 1 && (
                           <div style={{ position: "absolute", top: "5px", left: "5px", background: "rgba(0,0,0,0.65)", borderRadius: "4px", padding: "1px 5px", fontSize: "9px", fontWeight: 700, color: "rgba(255,255,255,0.85)", letterSpacing: "0.04em" }}>
                             {el.imageUrls.length}
@@ -2027,6 +2104,7 @@ function GalleryInner() {
                           borderRadius: "50%", background: "rgba(0,0,0,0.7)", border: "1px solid rgba(255,255,255,0.15)",
                           color: "rgba(255,255,255,0.85)", cursor: "pointer",
                           display: "flex", alignItems: "center", justifyContent: "center", padding: 0, transition: "background 120ms",
+                          zIndex: 2,
                         }}
                           onMouseEnter={e => { e.currentTarget.style.background = "rgba(0,0,0,0.9)"; }}
                           onMouseLeave={e => { e.currentTarget.style.background = "rgba(0,0,0,0.7)"; }}>
@@ -2082,13 +2160,19 @@ function GalleryInner() {
 
                   if (slot.kind === "filled") {
                     const r = slot.ref;
+                    const slotHovId = `slot-${r.id}`;
                     return (
-                      <div key={r.id} style={{
+                      <div
+                        key={r.id}
+                        onMouseEnter={() => setHoveredRefId(slotHovId)}
+                        onMouseLeave={() => setHoveredRefId(null)}
+                        style={{
                           position: "relative", width: "88px", height: "80px",
                           borderRadius: "10px", overflow: "hidden", flexShrink: 0,
                           background: "#1a1c1f",
                           border: r.error ? "1px solid rgba(248,113,113,0.4)" : "1px solid rgba(255,255,255,0.12)",
-                        }}>
+                        }}
+                      >
                         {mediaKind === "image" ? (
                           // eslint-disable-next-line @next/next/no-img-element
                           <img src={thumbSrc(r.objectUrl)} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
@@ -2104,6 +2188,22 @@ function GalleryInner() {
                         ) : (
                           <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(255,255,255,0.04)", color: "rgba(255,255,255,0.5)" }}>
                             <MediaIcon />
+                          </div>
+                        )}
+                        {/* Hover fullscreen overlay */}
+                        {hoveredRefId === slotHovId && !r.uploading && !r.error && mediaKind !== "audio" && (
+                          <div
+                            onClick={() => setRefPreview({ url: r.objectUrl, mediaKind })}
+                            style={{
+                              position: "absolute", inset: 0,
+                              background: "rgba(0,0,0,0.35)",
+                              display: "flex", alignItems: "center", justifyContent: "center",
+                              cursor: "zoom-in", zIndex: 1,
+                            }}
+                          >
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.9)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/>
+                            </svg>
                           </div>
                         )}
                         <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, padding: "12px 5px 4px", background: "linear-gradient(to top, rgba(0,0,0,0.75) 0%, transparent 100%)", textAlign: "center" }}>
@@ -2124,6 +2224,7 @@ function GalleryInner() {
                           borderRadius: "50%", background: "rgba(0,0,0,0.7)", border: "1px solid rgba(255,255,255,0.15)",
                           color: "rgba(255,255,255,0.85)", cursor: "pointer",
                           display: "flex", alignItems: "center", justifyContent: "center", padding: 0, transition: "background 120ms",
+                          zIndex: 2,
                         }}
                           onMouseEnter={e => { e.currentTarget.style.background = "rgba(0,0,0,0.9)"; }}
                           onMouseLeave={e => { e.currentTarget.style.background = "rgba(0,0,0,0.7)"; }}>
@@ -2424,6 +2525,37 @@ function GalleryInner() {
                   </button>
                 )}
 
+                {/* Seed (video, models that support it) */}
+                {isVideo && vidModel?.supportsSeeds && (
+                  <div style={{
+                    display: "flex", alignItems: "center", gap: "6px",
+                    height: "36px", padding: "0 11px",
+                    borderRadius: "8px",
+                    border: "1px solid rgba(255,255,255,0.1)",
+                    background: "rgba(255,255,255,0.05)",
+                    flexShrink: 0,
+                  }}>
+                    <span style={{ fontSize: "12px", color: "rgba(255,255,255,0.45)", userSelect: "none", whiteSpace: "nowrap" }}>Seed</span>
+                    <input
+                      type="number"
+                      min={0}
+                      max={2147483647}
+                      placeholder="—"
+                      value={seed ?? 0}
+                      onChange={(e) => setSeed(e.target.value === "" ? 0 : Math.max(0, Math.min(2147483647, parseInt(e.target.value, 10))))}
+                      disabled={submitting}
+                      className="seed-input"
+                      style={{
+                        width: "72px", background: "transparent", border: "none", outline: "none",
+                        color: "#fff", fontSize: "12px", fontFamily: "inherit",
+                        textAlign: "right", fontVariantNumeric: "tabular-nums",
+                        cursor: submitting ? "not-allowed" : "text",
+                        MozAppearance: "textfield", appearance: "textfield",
+                      }}
+                    />
+                  </div>
+                )}
+
                 {/* Count stepper (image only) — last control */}
                 {!isVideo && (
                   <div style={{
@@ -2647,6 +2779,61 @@ function GalleryInner() {
 
       {lightboxItem && (
         <Lightbox item={lightboxItem} onClose={() => setLightboxItem(null)} />
+      )}
+
+      {/* Ref media preview modal */}
+      {refPreview && (
+        <div
+          onClick={() => setRefPreview(null)}
+          style={{
+            position: "fixed", inset: 0, zIndex: 99000,
+            background: "rgba(0,0,0,0.82)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            animation: "fadeIn 150ms ease",
+          }}
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            style={{
+              position: "relative",
+              maxWidth: "90vw", maxHeight: "90vh",
+              borderRadius: "12px", overflow: "hidden",
+              boxShadow: "0 24px 80px rgba(0,0,0,0.8)",
+              animation: "dropIn 160ms cubic-bezier(0.16,1,0.3,1)",
+            }}
+          >
+            {refPreview.mediaKind === "video" ? (
+              <video
+                src={refPreview.url}
+                controls
+                autoPlay
+                style={{ display: "block", maxWidth: "90vw", maxHeight: "90vh" }}
+              />
+            ) : (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={refPreview.url}
+                alt=""
+                style={{ display: "block", maxWidth: "90vw", maxHeight: "90vh", objectFit: "contain" }}
+              />
+            )}
+            <button
+              onClick={() => setRefPreview(null)}
+              style={{
+                position: "absolute", top: "10px", right: "10px",
+                width: "32px", height: "32px", borderRadius: "50%",
+                background: "rgba(0,0,0,0.7)", border: "1px solid rgba(255,255,255,0.15)",
+                color: "rgba(255,255,255,0.9)", cursor: "pointer",
+                display: "flex", alignItems: "center", justifyContent: "center",
+                padding: 0,
+              }}
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+                <path d="M18 6 6 18M6 6l12 12"/>
+              </svg>
+            </button>
+          </div>
+        </div>
       )}
 
       {/* Duration picker popover — portal so it escapes overflow/transform ancestors */}
@@ -3364,6 +3551,12 @@ function ProviderIcon({ provider }: { provider: string }) {
               <rect width="16" height="14" fill="white" />
             </clipPath>
           </defs>
+        </svg>
+      );
+    case "Alibaba":
+      return (
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+          <path d="M9.39589 9.99064C10.2791 8.81304 11.9431 7.16184 11.9943 5.99704C12.0967 4.48664 10.5735 3.98744 8.99909 4.00024C7.89829 4.01304 6.77189 4.33304 6.00389 4.60184C3.32869 5.54904 1.66469 7.04664 0.60229 8.72344C-0.51131 10.3746 -0.14011 11.949 2.21509 12.0002C4.01989 11.9234 5.19749 11.4242 6.42629 10.797C6.43909 10.797 3.03429 11.7698 1.79269 11.053C1.66469 10.9762 1.52389 10.8738 1.48549 10.5922C1.47269 10.0034 2.45829 9.38904 3.00869 9.19704V8.17304C3.41829 8.32664 3.85349 8.41624 4.31429 8.41624C5.19749 8.41624 6.00389 8.09624 6.63109 7.57144C6.65669 7.66104 6.66949 7.76344 6.65669 7.86584H6.89989C6.92549 7.59704 6.78469 7.39224 6.78469 7.39224C6.56709 7.03384 6.17029 7.04664 6.17029 7.04664C6.17029 7.04664 6.37509 7.13624 6.52869 7.35384C5.95269 7.84024 5.21029 8.12184 4.40389 8.12184C4.05829 8.12184 3.72549 8.07064 3.41829 7.96824L4.22469 7.16184L4.00709 6.57304C5.63269 6.00984 6.98949 5.57464 9.21669 5.17784L8.70469 4.80664L8.96069 4.65304C10.3047 5.02424 11.1879 5.29304 11.1367 6.00984C11.1111 6.12504 11.0727 6.26584 11.0087 6.41944C10.6247 7.18744 9.45989 8.48024 8.98629 9.01784C8.67909 9.37624 8.37189 9.72184 8.15429 10.0546C7.93669 10.3874 7.79589 10.7074 7.78309 11.0018C7.80869 13.3442 14.6695 9.91384 16.0007 9.00504C14.0423 9.84984 11.9303 10.6562 9.60069 10.8098C8.94789 10.8482 9.02469 10.5026 9.39589 9.99064Z" />
         </svg>
       );
     default:
@@ -4237,6 +4430,7 @@ function EmptyState({ tab }: { tab: Tab }) {
 const GALLERY_CSS = `
   .picker-scroll { scrollbar-width: none; }
   .picker-scroll::-webkit-scrollbar { display: none; }
+  .seed-input::-webkit-inner-spin-button, .seed-input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
   @keyframes spin { to { transform: rotate(360deg); } }
   @keyframes dlRingSpin {
     from { stroke-dashoffset: 75.4; transform: rotate(-90deg); }
@@ -4246,6 +4440,10 @@ const GALLERY_CSS = `
   @keyframes dropIn {
     from { opacity: 0; transform: translateY(6px) scale(0.97); }
     to   { opacity: 1; transform: translateY(0)   scale(1);    }
+  }
+  @keyframes fadeIn {
+    from { opacity: 0; }
+    to   { opacity: 1; }
   }
   @keyframes shimmer {
     0%   { background-position: -800px 0; }

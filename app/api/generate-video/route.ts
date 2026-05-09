@@ -27,6 +27,7 @@ async function getUserId(req: NextRequest): Promise<string | null> {
 }
 
 export async function POST(req: NextRequest) {
+  try {
   const {
     videoModel      = "kling-3.0",
     prompt,
@@ -43,6 +44,7 @@ export async function POST(req: NextRequest) {
     aspectRatio     = "16:9",
     mode            = "pro",
     resolution      = "480p",
+    seed,
     debugOnly       = false,
   } = await req.json();
 
@@ -108,6 +110,50 @@ export async function POST(req: NextRequest) {
     if (apiInput.referenceVideosKey && r2RefVideos.length > 0) input[apiInput.referenceVideosKey]  = r2RefVideos;
     if (apiInput.referenceAudiosKey && r2RefAudios.length > 0) input[apiInput.referenceAudiosKey]  = r2RefAudios;
     if (apiInput.extra)                                        Object.assign(input, apiInput.extra);
+
+  } else if (apiInput.useHappyHorse) {
+    // ── HappyHorse (Alibaba) — routes to text/image/reference endpoint ────────
+    const refImageUrls = (
+      await Promise.all(
+        (rawRefImages as string[]).map((u) => ensureR2(u, "references").catch(() => null))
+      )
+    ).filter((u): u is string => u !== null);
+
+    const startFrameUrl = rawStartFrame
+      ? await ensureR2(rawStartFrame, "references").catch(() => rawStartFrame)
+      : undefined;
+
+    const maybeSeed = seed !== undefined && seed !== null && Number(seed) > 0 ? Number(seed) : undefined;
+
+    if (refImageUrls.length > 0) {
+      effectiveApiId = "happyhorse/reference-to-video";
+      input = {
+        prompt: prompt ?? "",
+        reference_image: refImageUrls.slice(0, 9),
+        [apiInput.aspectRatioKey!]: aspectRatio,
+        [apiInput.durationKey!]:    clampedDuration,
+      };
+      if (apiInput.resolutionKey) input[apiInput.resolutionKey] = resolution;
+      if (maybeSeed !== undefined && apiInput.seedKey) input[apiInput.seedKey] = maybeSeed;
+    } else if (startFrameUrl) {
+      effectiveApiId = "happyhorse/image-to-video";
+      input = {
+        image_urls:             [startFrameUrl],
+        [apiInput.durationKey!]: clampedDuration,
+      };
+      if (prompt?.trim()) input.prompt = prompt;
+      // resolution is determined by the input image — do not send it
+      if (maybeSeed !== undefined && apiInput.seedKey) input[apiInput.seedKey] = maybeSeed;
+    } else {
+      effectiveApiId = "happyhorse/text-to-video";
+      input = {
+        prompt: prompt ?? "",
+        [apiInput.aspectRatioKey!]: aspectRatio,
+        [apiInput.durationKey!]:    clampedDuration,
+      };
+      if (apiInput.resolutionKey) input[apiInput.resolutionKey] = resolution;
+      if (maybeSeed !== undefined && apiInput.seedKey) input[apiInput.seedKey] = maybeSeed;
+    }
 
   } else if (apiInput.referenceImagesKey) {
     // ── Reference-image-based models (Grok Imagine) ───────────────────────────
@@ -200,18 +246,30 @@ export async function POST(req: NextRequest) {
   }
 
   // Submit task to kie.ai
+  const kieBody = { model: effectiveApiId, callBackUrl, input };
+  console.log("[generate-video] sending to kie.ai:", JSON.stringify(kieBody));
   const createRes = await fetch(`${KIE_BASE}/api/v1/jobs/createTask`, {
     method:  "POST",
     headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-    body:    JSON.stringify({ model: effectiveApiId, callBackUrl, input }),
+    body:    JSON.stringify(kieBody),
   });
 
   if (!createRes.ok) {
-    return NextResponse.json({ error: await createRes.text() }, { status: 500 });
+    const errText = await createRes.text();
+    console.error("[generate-video] kie.ai HTTP error:", createRes.status, errText);
+    return NextResponse.json({ error: errText }, { status: 500 });
   }
 
-  const created = await createRes.json();
+  const createdText = await createRes.text();
+  console.log("[generate-video] kie.ai response:", createdText);
+  let created: { code?: number; msg?: string; data?: { taskId?: string } };
+  try {
+    created = JSON.parse(createdText);
+  } catch {
+    return NextResponse.json({ error: `Upstream returned non-JSON: ${createdText.slice(0, 200)}` }, { status: 500 });
+  }
   if (created.code !== 200) {
+    console.error("[generate-video] kie.ai API error:", created.code, created.msg, "input:", JSON.stringify(input));
     return NextResponse.json({ error: created.msg ?? "Task creation failed" }, { status: 500 });
   }
 
@@ -253,4 +311,9 @@ export async function POST(req: NextRequest) {
   });
 
   return NextResponse.json({ taskId });
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error("[generate-video] unhandled error:", msg);
+    return NextResponse.json({ error: msg }, { status: 500 });
+  }
 }

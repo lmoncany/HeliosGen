@@ -351,6 +351,7 @@ export default function VideoGeneratorNode({ id, data, selected }: NodeProps<Vid
   const duration = (data.duration as number) ?? cfg.defaultDuration;
   const aspectRatio = (data.aspectRatio as string) ?? cfg.defaultRatio;
   const sound = (data.sound as boolean) ?? false;
+  const seed = (data.seed as number | undefined) ?? 0;
   const status = (data.status as string) ?? "idle";
   const prompt = (data.prompt as string) ?? "";
   const isPending = status === "pending";
@@ -491,6 +492,21 @@ export default function VideoGeneratorNode({ id, data, selected }: NodeProps<Vid
     edges.filter((e) => e.target === id).map((e) => e.targetHandle).filter(Boolean) as string[]
   );
 
+  // HappyHorse: startFrame and resource are mutually exclusive — hide the other once one is connected
+  if (cfg.id === "happyhorse") {
+    if (connectedHandles.has("startFrame")) activeHandles.delete("resource");
+    if (connectedHandles.has("resource"))   activeHandles.delete("startFrame");
+  }
+
+  // When the mutual-exclusion above shifts handle positions, edges stay anchored to stale
+  // coords until React Flow re-measures. Re-measure after the DOM repaints.
+  const hhConnKey = `${connectedHandles.has("startFrame") ? 1 : 0}${connectedHandles.has("resource") ? 1 : 0}`;
+  useEffect(() => {
+    const raf = requestAnimationFrame(() => updateNodeInternals(id));
+    return () => cancelAnimationFrame(raf);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, hhConnKey, updateNodeInternals]);
+
   // Compute bottom-anchored positions — active handles stack together with no gaps.
   const activeInOrder = HANDLE_ORDER.filter((hid) => activeHandles.has(hid));
   const N = activeInOrder.length;
@@ -503,7 +519,9 @@ export default function VideoGeneratorNode({ id, data, selected }: NodeProps<Vid
     let label = h.label;
     let className = h.className;
     if (h.id === "resource" && cfg.maxResources)
-      label = `Reference images (up to ${cfg.maxResources})`;
+      label = cfg.id === "happyhorse"
+        ? `Characters (up to ${cfg.maxResources})`
+        : `Reference images (up to ${cfg.maxResources})`;
     if (h.id === "referenceVideo" && cfg.maxReferenceVideos)
       label = `Reference videos (up to ${cfg.maxReferenceVideos})`;
     if (h.id === "audioRef" && cfg.maxReferenceAudios)
@@ -726,9 +744,9 @@ export default function VideoGeneratorNode({ id, data, selected }: NodeProps<Vid
       prompt: finalPrompt,
       aspectRatio,
       duration,
-      mode,
+      ...(cfg.modes?.length ? { mode } : {}),
       resolution,
-      sound,
+      ...(cfg.sound ? { sound } : {}),
       startFrameUrl: finalStartFrameUrl,
       endFrameUrl: finalEndFrameUrl,
       videoRefUrl: finalVideoRefUrl,
@@ -738,6 +756,7 @@ export default function VideoGeneratorNode({ id, data, selected }: NodeProps<Vid
         : undefined,
       referenceVideoUrls: upstream.referenceVideoUrls.slice(0, maxRefVideos),
       referenceAudioUrls: upstream.referenceAudioUrls.slice(0, maxRefAudios),
+      ...(cfg.supportsSeeds && seed ? { seed } : {}),
     };
 
     if (debugMode) {
@@ -778,8 +797,10 @@ export default function VideoGeneratorNode({ id, data, selected }: NodeProps<Vid
           headers: { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}` },
           body: JSON.stringify(payload),
         });
-        const json = await res.json();
-        if (!res.ok) throw new Error(json.error);
+        const text = await res.text();
+        let json: { taskId?: string; error?: string } = {};
+        try { json = JSON.parse(text); } catch { throw new Error(res.ok ? "Invalid server response" : `Server error ${res.status}`); }
+        if (!res.ok) throw new Error(json.error ?? `Server error ${res.status}`);
         // Store taskId — the polling useEffect above will wait for completion
         updateNodeData(id, { taskId: json.taskId });
       } catch (e: unknown) {
@@ -793,7 +814,7 @@ export default function VideoGeneratorNode({ id, data, selected }: NodeProps<Vid
         setLoading(false);
       }
     }, 3000);
-  }, [id, nodes, edges, prompt, sound, duration, aspectRatio, videoModelId,
+  }, [id, nodes, edges, prompt, sound, seed, duration, aspectRatio, videoModelId,
     mode, resolution, cfg, debugMode, textEdge, updateNodeData, setAuthModalOpen, flashEdgeError, kieKeySet, addToast]);
 
   // Pipeline runner trigger — called by Run Pipeline button
@@ -1303,6 +1324,29 @@ export default function VideoGeneratorNode({ id, data, selected }: NodeProps<Vid
                 </button>
               )}
 
+              {/* Seed input */}
+              {cfg.supportsSeeds && (
+                <div
+                  className="flex items-center gap-1.5 rounded-full px-2 py-1"
+                  style={{ background: "rgba(0,0,0,0.45)", backdropFilter: "blur(10px)", WebkitBackdropFilter: "blur(10px)", border: "1px solid rgba(255,255,255,0.07)" }}
+                  onMouseDown={(e) => e.stopPropagation()}
+                >
+                  <span className="text-[11px] text-white/70 shrink-0 select-none">Seed</span>
+                  <input
+                    type="number"
+                    min={0}
+                    max={2147483647}
+                    placeholder="—"
+                    value={seed}
+                    onChange={(e) => {
+                      const v = e.target.value === "" ? 0 : Math.max(0, Math.min(2147483647, parseInt(e.target.value, 10)));
+                      updateNodeData(id, { seed: isNaN(v) ? 0 : v });
+                    }}
+                    className="nodrag w-12 bg-transparent border-none outline-none text-[11px] text-white/90 text-right tabular-nums [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                  />
+                </div>
+              )}
+
               {/* Img ref indicator */}
               {activeHandles.has("resource") && hasResource && (
                 <div className="flex items-center gap-1 px-2 py-1 rounded-full" style={{ background: "rgba(0,0,0,0.45)", backdropFilter: "blur(10px)", WebkitBackdropFilter: "blur(10px)", border: "1px solid rgba(255,255,255,0.07)" }}>
@@ -1600,6 +1644,8 @@ function NodeProviderIcon({ provider }: { provider: string }) {
       return <svg className="text-purple-400" width="11" height="11" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" clipRule="evenodd" d="M16.7522 2.86984L16.818 2.93745L16.8199 2.93552C18.087 4.25441 17.7236 6.90443 15.8863 9.90864L19.5 13.6567L19.3447 13.9703C18.7372 15.1986 17.9147 16.2992 16.9193 17.216C15.608 18.43 14.0251 19.2853 12.3143 19.7044L12.2522 19.7198L12.1634 19.7417L12.0994 19.7565L11.9584 19.7887L11.8416 19.8126L11.754 19.8299C11.6609 19.8493 11.5634 19.8673 11.4683 19.884L11.3888 19.8963L11.3286 19.904C11.2429 19.916 11.1576 19.9272 11.0727 19.9375C9.64831 20.1036 8.20616 19.9376 6.8516 19.4517C5.49703 18.9658 4.2643 18.1723 3.24348 17.1291L3.18385 17.0692C1.91429 15.7503 2.27391 13.0983 4.11366 10.0922L0.5 6.34416L0.65528 6.03054C1.26118 4.80131 2.0846 3.70115 3.08261 2.78741C4.10242 1.8473 5.28649 1.11848 6.57081 0.640344C6.86894 0.528933 7.18075 0.431691 7.48696 0.34926C7.73931 0.279139 7.9944 0.220054 8.25155 0.172163C8.33851 0.154131 8.43665 0.135456 8.53168 0.118712C10.0139 -0.12084 11.5297 0.00325476 12.9574 0.481036C14.385 0.958817 15.6847 1.77698 16.7522 2.86984ZM15.5304 3.03083H15.5267L15.5304 3.03276C14.3025 2.63864 12.354 3.27555 10.2944 4.68267C11.8615 4.22994 13.377 4.46435 14.3565 5.48057C15.2845 6.44462 15.5385 7.90777 15.187 9.44497C15.1704 9.52697 15.1497 9.61005 15.1248 9.69419C16.8062 7.05706 17.3441 4.58993 16.2795 3.48807C16.262 3.4682 16.2433 3.44949 16.2236 3.43204L16.2155 3.42431L16.2037 3.41336L16.1683 3.38503C16.153 3.37215 16.1371 3.3597 16.1205 3.34768L16.0944 3.32836C15.9242 3.19657 15.7334 3.09594 15.5304 3.03083ZM14.6876 8.95876C14.4708 10.2995 13.7559 11.6545 12.672 12.777C11.5913 13.9001 10.282 14.642 8.98696 14.8687C7.77516 15.0812 6.72981 14.8043 6.04472 14.0959C5.36149 13.3868 5.09441 12.3069 5.29938 11.044C5.51615 9.7045 6.22919 8.3489 7.30807 7.22771C7.30807 7.22771 7.30994 7.22771 7.31429 7.22127L7.31801 7.21483C8.40062 6.09944 9.70497 5.3595 10.9969 5.13539C12.2087 4.92287 13.2516 5.1985 13.9391 5.90818C14.6224 6.61657 14.8894 7.69847 14.6845 8.9594H14.6882L14.6876 8.95876ZM3.70621 3.51061C2.88113 4.26712 2.1865 5.16395 1.65217 6.16255L1.64596 6.16449L4.78137 9.40762C5.04127 9.02837 5.31475 8.65932 5.60124 8.30124C5.70311 8.17567 5.80807 8.04558 5.91553 7.91614L5.95652 7.86784L6.10559 7.69525C6.10994 7.69139 6.11429 7.68301 6.11429 7.68301L6.14161 7.65082L6.1559 7.63343L6.23292 7.54456C6.27226 7.49819 6.31284 7.45247 6.35466 7.40739C6.35466 7.40288 6.36087 7.39644 6.36087 7.39644L6.42795 7.32045L6.47578 7.26893C6.47785 7.26592 6.4795 7.26507 6.4795 7.26507C6.48385 7.26249 6.48385 7.25863 6.48385 7.25863C6.48675 7.25562 6.48965 7.25176 6.49255 7.24703L6.50124 7.23609C6.50882 7.23006 6.51569 7.22314 6.52174 7.21548L6.53354 7.2026C6.55901 7.17619 6.58944 7.14528 6.61677 7.11437C6.63126 7.09591 6.64783 7.07745 6.66646 7.05899L6.69193 7.03194C6.69627 7.0255 6.70807 7.01326 6.70807 7.01326L6.7559 6.96432L6.84907 6.86901L6.88012 6.83488L6.91491 6.79688C7.5863 6.09838 8.30377 5.44917 9.06211 4.85397L9.16149 4.77862H9.16211V4.77798L9.16335 4.77733L9.26273 4.70134C9.37371 4.61505 9.48551 4.53068 9.59814 4.44825C9.71822 4.36325 9.8383 4.27953 9.95838 4.1971C11.587 3.0714 13.182 2.39586 14.4839 2.26191C12.7422 1.17239 10.6864 0.752921 8.6764 1.07697C8.58944 1.09114 8.50621 1.10595 8.41677 1.12462C8.36025 1.13493 8.31118 1.14523 8.26149 1.15554L8.23168 1.16198C7.77515 1.25942 7.3258 1.39004 6.88696 1.55288C5.71551 1.9877 4.63519 2.65238 3.70621 3.51061ZM3.87888 16.6531C4.05279 16.7905 4.25093 16.8949 4.47329 16.9661H4.46894C5.70497 17.3577 7.64596 16.7188 9.69814 15.3156C8.13292 15.7664 6.6205 15.532 5.64099 14.5157C4.71739 13.5562 4.46335 12.0885 4.81304 10.5513C4.83043 10.4693 4.85093 10.3863 4.87453 10.3021C3.19379 12.9399 2.65714 15.4064 3.7205 16.5089C3.77062 16.56 3.8235 16.6082 3.87888 16.6531ZM18.346 13.8389V13.8402C17.8108 14.8373 17.1168 15.7333 16.2932 16.4902C15.0606 17.625 13.5707 18.4173 11.9627 18.7931L11.9429 18.7983L11.8894 18.8112C11.8291 18.8281 11.7679 18.8418 11.7062 18.8524C11.666 18.8614 11.6251 18.8693 11.5832 18.8762C11.4967 18.8936 11.4097 18.9087 11.3224 18.9213L11.2497 18.9342L11.1671 18.9451C11.1008 18.9545 11.0329 18.9631 10.9634 18.9709C9.06697 19.1922 7.15308 18.7592 5.51801 17.7389C6.77143 17.6108 8.29752 16.9764 9.86273 15.9274L9.95217 15.8668L10.0416 15.8057L10.1634 15.7206H10.164L10.3994 15.5545C10.5128 15.4721 10.6246 15.3877 10.7348 15.3014C10.8035 15.2503 10.871 15.1994 10.9373 15.1488C11.6946 14.5518 12.4122 13.9025 13.0851 13.2052C13.1012 13.1881 13.1164 13.1713 13.1304 13.155L13.1491 13.1331C13.1822 13.1009 13.2133 13.0693 13.2422 13.0384L13.2894 12.9895C13.2894 12.9895 13.3019 12.9766 13.3037 12.9702L13.3217 12.9521L13.3292 12.9438L13.3832 12.8884L13.4248 12.8433C13.4389 12.8296 13.4528 12.815 13.4665 12.7995L13.4776 12.7866C13.4837 12.7792 13.4906 12.7725 13.4981 12.7667L13.5075 12.7551L13.5161 12.7441C13.5161 12.7441 13.5224 12.7377 13.5261 12.7358L13.5429 12.7171L13.5596 12.6984L13.5758 12.6823C13.5584 12.7012 13.5418 12.7209 13.5261 12.7416L13.5646 12.6997L13.5652 12.6984C13.5921 12.6684 13.6188 12.6396 13.6453 12.6121C13.6453 12.6121 13.6453 12.6057 13.6516 12.6057C13.688 12.5653 13.7234 12.5245 13.7578 12.4833L13.828 12.4022C13.8372 12.396 13.8447 12.3873 13.8497 12.3771L13.8894 12.3275L13.8994 12.3152C13.9478 12.2616 13.9952 12.2073 14.0416 12.1523L14.0901 12.0943C14.1679 12.0003 14.2453 11.9057 14.3224 11.8103L14.4155 11.6951L14.4447 11.6577C14.482 11.6092 14.5188 11.562 14.5553 11.516C14.5863 11.4774 14.6168 11.4379 14.6466 11.3975C14.8451 11.1367 15.0377 10.8711 15.2242 10.6009L18.346 13.8389ZM18.346 13.8389C18.346 13.8368 18.3472 13.835 18.3497 13.8338V13.8441L18.346 13.8402H18.3472L18.346 13.8389Z" /></svg>;
     case "Bytedance":
       return <svg className="text-purple-400" width="11" height="11" viewBox="0 0 16 16" fill="currentColor"><path d="M3.1544 12.1539L0.533203 12.8092V1.19824L3.1544 1.85354V12.1539Z" /><path d="M15.8225 12.8333L13.1963 13.4886V0.518555L15.8225 1.169V12.8333Z" /><path d="M7.31261 12.5083L4.69141 13.1636V6.32422L7.31261 6.97947V12.5083Z" /><path d="M9.02539 5.3096L11.6516 4.6543V11.4937L9.02539 10.8384V5.3096Z" /></svg>;
+    case "Alibaba":
+      return <svg className="text-purple-400" width="11" height="11" viewBox="0 0 16 16" fill="currentColor"><path d="M9.39589 9.99064C10.2791 8.81304 11.9431 7.16184 11.9943 5.99704C12.0967 4.48664 10.5735 3.98744 8.99909 4.00024C7.89829 4.01304 6.77189 4.33304 6.00389 4.60184C3.32869 5.54904 1.66469 7.04664 0.60229 8.72344C-0.51131 10.3746 -0.14011 11.949 2.21509 12.0002C4.01989 11.9234 5.19749 11.4242 6.42629 10.797C6.43909 10.797 3.03429 11.7698 1.79269 11.053C1.66469 10.9762 1.52389 10.8738 1.48549 10.5922C1.47269 10.0034 2.45829 9.38904 3.00869 9.19704V8.17304C3.41829 8.32664 3.85349 8.41624 4.31429 8.41624C5.19749 8.41624 6.00389 8.09624 6.63109 7.57144C6.65669 7.66104 6.66949 7.76344 6.65669 7.86584H6.89989C6.92549 7.59704 6.78469 7.39224 6.78469 7.39224C6.56709 7.03384 6.17029 7.04664 6.17029 7.04664C6.17029 7.04664 6.37509 7.13624 6.52869 7.35384C5.95269 7.84024 5.21029 8.12184 4.40389 8.12184C4.05829 8.12184 3.72549 8.07064 3.41829 7.96824L4.22469 7.16184L4.00709 6.57304C5.63269 6.00984 6.98949 5.57464 9.21669 5.17784L8.70469 4.80664L8.96069 4.65304C10.3047 5.02424 11.1879 5.29304 11.1367 6.00984C11.1111 6.12504 11.0727 6.26584 11.0087 6.41944C10.6247 7.18744 9.45989 8.48024 8.98629 9.01784C8.67909 9.37624 8.37189 9.72184 8.15429 10.0546C7.93669 10.3874 7.79589 10.7074 7.78309 11.0018C7.80869 13.3442 14.6695 9.91384 16.0007 9.00504C14.0423 9.84984 11.9303 10.6562 9.60069 10.8098C8.94789 10.8482 9.02469 10.5026 9.39589 9.99064Z"/></svg>;
     default:
       return null;
   }
