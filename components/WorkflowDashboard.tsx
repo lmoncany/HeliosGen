@@ -5,6 +5,164 @@ import NextImage from "next/image";
 import { useWorkflowStore, Space } from "@/lib/store";
 import { timeAgo } from "@/lib/useSpaceSync";
 
+// ── CSS ───────────────────────────────────────────────────────────────────────
+
+const CSS = `
+  .wsd-card {
+    position: relative;
+    background: #110a1c;
+    border: 1px solid rgba(168,85,247,0.10);
+    border-radius: 14px;
+    overflow: hidden;
+    cursor: pointer;
+    transition: transform 220ms ease, box-shadow 220ms ease, border-color 220ms ease;
+  }
+  .wsd-card:hover {
+    transform: translateY(-2px);
+    border-color: rgba(192,132,252,0.40);
+    box-shadow: 0 0 0 1px rgba(168,85,247,0.20),
+                0 18px 50px rgba(168,85,247,0.18),
+                0 4px 16px rgba(0,0,0,0.5);
+  }
+  .wsd-card:hover .wsd-actions { opacity: 1; transform: translateY(0); }
+  .wsd-card:hover .wsd-thumbs-overlay { opacity: 1; }
+  .wsd-card:hover .wsd-arrow { opacity: 1; transform: translateX(0); }
+
+  .wsd-actions {
+    position: absolute; top: 10px; right: 10px;
+    display: inline-flex; gap: 4px;
+    opacity: 0; transform: translateY(-4px);
+    transition: all 180ms ease;
+    z-index: 3;
+  }
+  .wsd-act {
+    width: 28px; height: 28px; border-radius: 7px;
+    display: grid; place-items: center;
+    background: rgba(8,4,16,0.78);
+    color: #E9DFFF;
+    border: 1px solid rgba(255,255,255,0.07);
+    backdrop-filter: blur(10px);
+    cursor: pointer;
+    transition: all 140ms ease;
+  }
+  .wsd-act:hover { color: white; border-color: rgba(192,132,252,0.45); background: rgba(20,10,32,0.85); }
+
+  .wsd-thumbs {
+    position: relative;
+    aspect-ratio: 4/3;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: 1fr 1fr;
+    gap: 2px;
+    background: #06030c;
+  }
+  .wsd-thumbs-overlay {
+    position: absolute; inset: 0;
+    background: linear-gradient(180deg, rgba(168,85,247,0) 60%, rgba(124,58,237,0.28) 100%);
+    opacity: 0; transition: opacity 220ms ease;
+    pointer-events: none; z-index: 1;
+  }
+
+  .wsd-foot {
+    padding: 12px 14px 14px;
+    display: flex; align-items: center; gap: 12px;
+    border-top: 1px solid rgba(168,85,247,0.08);
+    background: linear-gradient(180deg, rgba(20,12,32,0.6) 0%, rgba(14,8,22,0.85) 100%);
+  }
+  .wsd-arrow {
+    width: 30px; height: 30px; border-radius: 8px;
+    display: grid; place-items: center;
+    background: rgba(168,85,247,0.12);
+    border: 1px solid rgba(168,85,247,0.22);
+    color: #D8B4FE;
+    opacity: 0; transform: translateX(-4px);
+    transition: all 220ms ease;
+    flex-shrink: 0;
+  }
+
+  .wsd-new {
+    position: relative;
+    background:
+      radial-gradient(120% 80% at 30% 0%, rgba(168,85,247,0.12) 0%, rgba(168,85,247,0) 60%),
+      radial-gradient(120% 80% at 80% 100%, rgba(236,72,153,0.10) 0%, rgba(236,72,153,0) 60%),
+      #110a1c;
+    border: 1px dashed rgba(192,132,252,0.30);
+    border-radius: 14px;
+    overflow: hidden;
+    cursor: pointer;
+    display: flex; flex-direction: column;
+    transition: all 220ms ease;
+  }
+  .wsd-new:hover {
+    border-color: rgba(192,132,252,0.55);
+    background:
+      radial-gradient(120% 80% at 30% 0%, rgba(168,85,247,0.20) 0%, rgba(168,85,247,0) 60%),
+      radial-gradient(120% 80% at 80% 100%, rgba(236,72,153,0.16) 0%, rgba(236,72,153,0) 60%),
+      #110a1c;
+    box-shadow: 0 0 0 1px rgba(168,85,247,0.20), 0 18px 50px rgba(168,85,247,0.20);
+    transform: translateY(-2px);
+  }
+  .wsd-new-art {
+    flex: 1; aspect-ratio: 4/3;
+    display: grid; place-items: center;
+    position: relative;
+  }
+  .wsd-new-art::before {
+    content:""; position:absolute; inset: 14px;
+    background-image:
+      linear-gradient(rgba(192,132,252,0.06) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(192,132,252,0.06) 1px, transparent 1px);
+    background-size: 16px 16px;
+    mask-image: radial-gradient(closest-side, black 30%, transparent 75%);
+    -webkit-mask-image: radial-gradient(closest-side, black 30%, transparent 75%);
+  }
+  .wsd-plus-orb {
+    position: relative;
+    width: 56px; height: 56px; border-radius: 50%;
+    background: linear-gradient(135deg, #A855F7 0%, #EC4899 100%);
+    display: grid; place-items: center;
+    color: white;
+    box-shadow: 0 0 0 1px rgba(255,255,255,0.18) inset,
+                0 0 0 6px rgba(168,85,247,0.10),
+                0 12px 30px rgba(168,85,247,0.45);
+  }
+  .wsd-plus-orb::after {
+    content:""; position:absolute; inset:-10px; border-radius: 50%;
+    background: linear-gradient(135deg, #A855F7 0%, #EC4899 100%);
+    filter: blur(20px); opacity: 0.45; z-index:-1;
+  }
+
+  .wsd-new-btn {
+    appearance: none; border: 0; cursor: pointer;
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 9px 14px;
+    background: linear-gradient(135deg, #A855F7 0%, #EC4899 100%);
+    color: white; font-size: 12px; font-weight: 600; border-radius: 10px;
+    box-shadow: 0 0 0 1px rgba(255,255,255,0.18) inset,
+                0 8px 24px rgba(168,85,247,0.45),
+                0 2px 6px rgba(236,72,153,0.30);
+    position: relative;
+    transition: filter 140ms ease, transform 140ms ease;
+    white-space: nowrap; font-family: inherit;
+  }
+  .wsd-new-btn::after {
+    content:""; position:absolute; inset:-3px; border-radius: 13px;
+    background: linear-gradient(135deg, #A855F7 0%, #EC4899 100%);
+    filter: blur(14px); opacity: 0.4; z-index: -1;
+  }
+  .wsd-new-btn:hover { filter: brightness(1.08); transform: translateY(-1px); }
+
+  @keyframes wsd-live-pulse { 0%,100% { opacity: 0.4 } 50% { opacity: 1 } }
+  .wsd-live-dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: #C084FC; box-shadow: 0 0 8px #C084FC;
+    animation: wsd-live-pulse 1.4s ease-in-out infinite;
+    display: inline-block; flex-shrink: 0;
+  }
+
+
+`;
+
 // ── Media collection ──────────────────────────────────────────────────────────
 
 type MediaItem = { type: "image"; url: string } | { type: "video"; url: string };
@@ -24,118 +182,54 @@ function collectMedia(space: Space): MediaItem[] {
   return items;
 }
 
-// ── Single media cell ─────────────────────────────────────────────────────────
+// ── 4-cell thumbnail mosaic ───────────────────────────────────────────────────
 
-function MediaCell({ item, sizes }: { item: MediaItem; sizes: string }) {
-  if (item.type === "video") {
-    return (
-      <video
-        src={item.url}
-        muted
-        loop
-        playsInline
-        autoPlay
-        preload="metadata"
-        style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
-      />
-    );
-  }
-  return (
-    <NextImage
-      src={item.url}
-      alt=""
-      fill
-      sizes={sizes}
-      style={{ objectFit: "cover" }}
-    />
-  );
-}
-
-// ── Mosaic preview ────────────────────────────────────────────────────────────
-
-function SpacePreview({ space }: { space: Space }) {
+function ThumbnailMosaic({ space }: { space: Space }) {
   const media = collectMedia(space).slice(0, 4);
-
-  if (media.length === 0) {
-    return (
-      <div
-        className="absolute inset-0 flex items-center justify-center"
-        style={{ background: "#0A0C0E" }}
-      >
-        <svg
-          width="32"
-          height="32"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="rgba(255,255,255,0.08)"
-          strokeWidth="1.5"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        >
-          <rect x="3" y="3" width="7" height="7" rx="1" />
-          <rect x="14" y="3" width="7" height="7" rx="1" />
-          <rect x="14" y="14" width="7" height="7" rx="1" />
-          <path d="M6.5 10v4M10 6.5h4M17.5 14v-3.5H10" />
-        </svg>
-      </div>
-    );
-  }
-
-  if (media.length === 1) {
-    return (
-      <div className="absolute inset-0 overflow-hidden">
-        <MediaCell item={media[0]} sizes="(max-width: 768px) calc(100vw - 80px), 440px" />
-      </div>
-    );
-  }
-
-  if (media.length === 2) {
-    return (
-      <div className="absolute inset-0 overflow-hidden flex">
-        <div style={{ flex: 1, borderRight: "1px solid rgba(0,0,0,0.5)", overflow: "hidden", position: "relative" }}>
-          <MediaCell item={media[0]} sizes="(max-width: 768px) calc(50vw - 40px), 220px" />
-        </div>
-        <div style={{ flex: 1, overflow: "hidden", position: "relative" }}>
-          <MediaCell item={media[1]} sizes="(max-width: 768px) calc(50vw - 40px), 220px" />
-        </div>
-      </div>
-    );
-  }
-
-  if (media.length === 3) {
-    return (
-      <div className="absolute inset-0 overflow-hidden flex">
-        <div style={{ flex: "0 0 50%", borderRight: "1px solid rgba(0,0,0,0.5)", overflow: "hidden", position: "relative" }}>
-          <MediaCell item={media[0]} sizes="(max-width: 768px) calc(50vw - 40px), 220px" />
-        </div>
-        <div style={{ flex: 1, display: "flex", flexDirection: "column" }}>
-          <div style={{ flex: 1, borderBottom: "1px solid rgba(0,0,0,0.5)", overflow: "hidden", position: "relative" }}>
-            <MediaCell item={media[1]} sizes="(max-width: 768px) calc(25vw - 20px), 110px" />
-          </div>
-          <div style={{ flex: 1, overflow: "hidden", position: "relative" }}>
-            <MediaCell item={media[2]} sizes="(max-width: 768px) calc(25vw - 20px), 110px" />
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   return (
-    <div
-      className="absolute inset-0 overflow-hidden"
-      style={{
-        display: "grid",
-        gridTemplateColumns: "1fr 1fr",
-        gridTemplateRows: "1fr 1fr",
-        gap: "1px",
-        background: "rgba(0,0,0,0.5)",
-      }}
-    >
-      {media.map((item, i) => (
-        <div key={i} style={{ overflow: "hidden", position: "relative" }}>
-          <MediaCell item={item} sizes="(max-width: 768px) calc(25vw - 20px), 160px" />
-        </div>
-      ))}
+    <div className="wsd-thumbs">
+      {Array.from({ length: 4 }).map((_, i) => {
+        const item = media[i];
+        return (
+          <div
+            key={i}
+            style={{
+              position: "relative",
+              overflow: "hidden",
+              background: item ? "#1a1028" : "linear-gradient(135deg, #16091f 0%, #0c0418 100%)",
+              ...(item ? {} : { display: "grid", placeItems: "center", color: "#50456A" }),
+            }}
+          >
+            {item ? (
+              item.type === "video" ? (
+                <video
+                  src={item.url}
+                  muted
+                  loop
+                  playsInline
+                  autoPlay
+                  preload="metadata"
+                  style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+                />
+              ) : (
+                <NextImage
+                  src={item.url}
+                  alt=""
+                  fill
+                  sizes="160px"
+                  style={{ objectFit: "cover" }}
+                />
+              )
+            ) : (
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.5 }}>
+                <rect x="3" y="3" width="18" height="18" rx="2" />
+                <path d="M3 16l5-5 4 4 3-3 6 6" />
+              </svg>
+            )}
+          </div>
+        );
+      })}
+      <div className="wsd-thumbs-overlay" />
     </div>
   );
 }
@@ -174,20 +268,18 @@ function CardMenu({ spaceId, onOpen, onStartRename, onDelete, onClose }: CardMen
     <button
       onClick={(e) => { e.stopPropagation(); if (!disabled) action(); }}
       disabled={disabled}
-      className="flex items-center gap-3 w-full px-4 py-3 text-left transition-colors"
       style={{
-        color: disabled ? "rgba(255,255,255,0.2)" : danger ? "#ff6b6b" : "#e8e8e6",
-        fontSize: "15px",
-        fontWeight: 450,
-        background: "transparent",
-        border: "none",
-        cursor: disabled ? "not-allowed" : "pointer",
-        opacity: disabled ? 0.5 : 1,
+        display: "flex", alignItems: "center", gap: "10px", width: "100%",
+        padding: "8px 12px", background: "transparent", border: "none",
+        color: disabled ? "rgba(255,255,255,0.2)" : danger ? "#f87171" : "#E9DFFF",
+        fontSize: "13px", fontWeight: 450, cursor: disabled ? "not-allowed" : "pointer",
+        opacity: disabled ? 0.5 : 1, fontFamily: "inherit", textAlign: "left",
+        transition: "background 120ms",
       }}
-      onMouseEnter={(e) => { if (!disabled) (e.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.06)"; }}
+      onMouseEnter={(e) => { if (!disabled) (e.currentTarget as HTMLElement).style.background = "rgba(168,85,247,0.08)"; }}
       onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
     >
-      <span style={{ color: disabled ? "rgba(255,255,255,0.2)" : danger ? "#ff6b6b" : "rgba(255,255,255,0.45)", flexShrink: 0 }}>
+      <span style={{ color: disabled ? "rgba(255,255,255,0.2)" : danger ? "#f87171" : "#7E6F9C", flexShrink: 0 }}>
         {icon}
       </span>
       {label}
@@ -200,11 +292,11 @@ function CardMenu({ spaceId, onOpen, onStartRename, onDelete, onClose }: CardMen
       onClick={(e) => e.stopPropagation()}
       style={{
         position: "absolute",
-        bottom: "calc(100% + 6px)",
+        top: "calc(100% + 6px)",
         right: 0,
-        width: "200px",
-        background: "#1A1D20",
-        border: "1px solid rgba(255,255,255,0.08)",
+        width: "186px",
+        background: "#110a1c",
+        border: "1px solid rgba(168,85,247,0.18)",
         borderRadius: "12px",
         boxShadow: "0 16px 48px rgba(0,0,0,0.8), 0 2px 8px rgba(0,0,0,0.4)",
         overflow: "hidden",
@@ -212,10 +304,10 @@ function CardMenu({ spaceId, onOpen, onStartRename, onDelete, onClose }: CardMen
       }}
     >
       {item("Open", <OpenIcon />, () => { onClose(); onOpen(); })}
-      <div style={{ height: "1px", background: "rgba(255,255,255,0.06)", margin: "0 12px" }} />
+      <div style={{ height: "1px", background: "rgba(168,85,247,0.10)", margin: "0 10px" }} />
       {item("Rename", <RenameIcon />, () => { onClose(); onStartRename(); })}
       {item("Duplicate", <DuplicateIcon />, () => { duplicateSpace(spaceId); onClose(); })}
-      <div style={{ height: "1px", background: "rgba(255,255,255,0.06)", margin: "0 12px" }} />
+      <div style={{ height: "1px", background: "rgba(168,85,247,0.10)", margin: "0 10px" }} />
       {item("Delete", <DeleteIcon />, () => { onClose(); onDelete(); }, true, spaces.length <= 1)}
     </div>
   );
@@ -245,46 +337,34 @@ function DeleteConfirmModal({
     <div
       onClick={onCancel}
       style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(0,0,0,0.6)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        zIndex: 1000,
-        backdropFilter: "blur(4px)",
+        position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)",
+        display: "flex", alignItems: "center", justifyContent: "center",
+        zIndex: 1000, backdropFilter: "blur(8px)",
       }}
     >
       <div
         onClick={(e) => e.stopPropagation()}
         style={{
-          background: "#141618",
-          border: "1px solid rgba(255,255,255,0.08)",
-          borderRadius: "16px",
-          padding: "24px",
-          width: "320px",
+          background: "#110a1c",
+          border: "1px solid rgba(168,85,247,0.18)",
+          borderRadius: "16px", padding: "24px", width: "320px",
           boxShadow: "0 24px 64px rgba(0,0,0,0.8)",
         }}
       >
         <p style={{ fontSize: "15px", fontWeight: 600, color: "#fff", margin: "0 0 8px" }}>
           Delete workflow?
         </p>
-        <p style={{ fontSize: "13px", color: "rgba(255,255,255,0.45)", margin: "0 0 24px", lineHeight: 1.5 }}>
+        <p style={{ fontSize: "13px", color: "#7E6F9C", margin: "0 0 24px", lineHeight: 1.5 }}>
           &ldquo;{spaceName}&rdquo; will be permanently deleted. This cannot be undone.
         </p>
         <div style={{ display: "flex", gap: "8px", justifyContent: "flex-end" }}>
           <button
             onClick={onCancel}
             style={{
-              padding: "8px 16px",
-              borderRadius: "8px",
-              border: "1px solid rgba(255,255,255,0.1)",
-              background: "transparent",
-              color: "rgba(255,255,255,0.6)",
-              fontSize: "13px",
-              fontWeight: 500,
-              cursor: "pointer",
-              fontFamily: "inherit",
+              padding: "8px 16px", borderRadius: "8px",
+              border: "1px solid rgba(168,85,247,0.22)", background: "transparent",
+              color: "#B7A8D4", fontSize: "13px", fontWeight: 500,
+              cursor: "pointer", fontFamily: "inherit",
             }}
           >
             Cancel
@@ -292,15 +372,9 @@ function DeleteConfirmModal({
           <button
             onClick={onConfirm}
             style={{
-              padding: "8px 16px",
-              borderRadius: "8px",
-              border: "none",
-              background: "#ef4444",
-              color: "#fff",
-              fontSize: "13px",
-              fontWeight: 600,
-              cursor: "pointer",
-              fontFamily: "inherit",
+              padding: "8px 16px", borderRadius: "8px", border: "none",
+              background: "#ef4444", color: "#fff", fontSize: "13px", fontWeight: 600,
+              cursor: "pointer", fontFamily: "inherit",
             }}
           >
             Delete
@@ -315,7 +389,6 @@ function DeleteConfirmModal({
 // ── Space card ────────────────────────────────────────────────────────────────
 
 function SpaceCard({ space, onOpen }: { space: Space; onOpen: () => void }) {
-  const [hovered, setHovered] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [draft, setDraft] = useState(space.name);
@@ -343,46 +416,41 @@ function SpaceCard({ space, onOpen }: { space: Space; onOpen: () => void }) {
   };
 
   return (
-    <div
+    <article
+      className="wsd-card"
       onClick={() => { if (!renaming && !menuOpen) onOpen(); }}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-      style={{
-        background: "#0D1012",
-        border: `1px solid ${hovered ? "rgba(255,255,255,0.12)" : "rgba(255,255,255,0.06)"}`,
-        borderRadius: "12px",
-        overflow: "visible",
-        boxShadow: hovered ? "0 8px 32px rgba(0,0,0,0.5)" : "none",
-        transform: hovered ? "translateY(-1px)" : "none",
-        transition: "all 150ms ease",
-        cursor: renaming ? "default" : "pointer",
-        position: "relative",
-      }}
     >
-      {/* Thumbnail */}
-      <div
-        style={{
-          position: "relative",
-          width: "100%",
-          aspectRatio: "16/9",
-          background: "#0A0C0E",
-          borderRadius: "11px 11px 0 0",
-          overflow: "hidden",
-        }}
-      >
-        <SpacePreview space={space} />
+      {/* Hover action buttons */}
+      <div className="wsd-actions" onClick={(e) => e.stopPropagation()}>
+        <button className="wsd-act" aria-label="Star">
+          <StarIcon />
+        </button>
+        <div style={{ position: "relative" }}>
+          <button
+            className="wsd-act"
+            aria-label="More"
+            onClick={(e) => { e.stopPropagation(); setMenuOpen((o) => !o); }}
+          >
+            <MoreHorizIcon />
+          </button>
+          {menuOpen && (
+            <CardMenu
+              spaceId={space.id}
+              spaceName={space.name}
+              onOpen={onOpen}
+              onStartRename={startRename}
+              onDelete={() => setConfirmDelete(true)}
+              onClose={() => setMenuOpen(false)}
+            />
+          )}
+        </div>
       </div>
 
-      {/* Info row */}
-      <div
-        style={{
-          padding: "10px 12px",
-          display: "flex",
-          alignItems: "flex-start",
-          gap: "8px",
-          overflow: "visible",
-        }}
-      >
+      {/* Thumbnails */}
+      <ThumbnailMosaic space={space} />
+
+      {/* Footer */}
+      <div className="wsd-foot">
         <div style={{ minWidth: 0, flex: 1 }}>
           {renaming ? (
             <input
@@ -397,72 +465,41 @@ function SpaceCard({ space, onOpen }: { space: Space; onOpen: () => void }) {
               onClick={(e) => e.stopPropagation()}
               autoFocus
               style={{
-                width: "100%",
-                background: "transparent",
-                border: "none",
-                color: "#fff",
-                fontSize: "13px",
-                fontWeight: 500,
-                outline: "none",
-                padding: "0 0 1px",
-                fontFamily: "inherit",
+                width: "100%", background: "transparent", border: "none",
+                color: "#fff", fontSize: "14px", fontWeight: 600,
+                outline: "none", padding: 0, fontFamily: "inherit",
+                letterSpacing: "-0.01em", marginBottom: "6px", display: "block",
               }}
             />
           ) : (
-            <p style={{ fontSize: "13px", color: "#fff", fontWeight: 500, margin: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            <div style={{
+              fontSize: "14px", fontWeight: 600, color: "#fff",
+              letterSpacing: "-0.01em", marginBottom: "6px",
+              whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+            }}>
               {space.name}
-            </p>
+            </div>
           )}
-          <p style={{ fontSize: "11px", color: "rgba(255,255,255,0.3)", margin: "3px 0 0" }}>
-            {timeAgo(new Date(ts))}
+          <div style={{
+            display: "inline-flex", alignItems: "center", gap: "8px",
+            fontFamily: "var(--font-geist-mono), monospace",
+            fontSize: "10px", fontWeight: 500, color: "#7E6F9C",
+            letterSpacing: "0.06em", textTransform: "uppercase",
+          }}>
+            <span>{timeAgo(new Date(ts))}</span>
             {generatorCount > 0 && (
-              <span style={{ marginLeft: "8px", color: "rgba(255,255,255,0.18)" }}>
-                {generatorCount} generator{generatorCount > 1 ? "s" : ""}
-              </span>
+              <>
+                <span style={{ width: "3px", height: "3px", borderRadius: "50%", background: "#50456A", display: "inline-block", flexShrink: 0 }} />
+                <span>
+                  <b style={{ color: "#D8B4FE", fontWeight: 500 }}>{generatorCount}</b>
+                  {" "}generator{generatorCount > 1 ? "s" : ""}
+                </span>
+              </>
             )}
-          </p>
+          </div>
         </div>
-
-        {/* Three-dot button + menu */}
-        <div
-          style={{ position: "relative", flexShrink: 0 }}
-          onClick={(e) => e.stopPropagation()}
-        >
-          <button
-            onClick={(e) => { e.stopPropagation(); setMenuOpen((o) => !o); }}
-            style={{
-              width: "28px",
-              height: "28px",
-              borderRadius: "8px",
-              background: menuOpen ? "rgba(255,255,255,0.1)" : "transparent",
-              border: "none",
-              cursor: "pointer",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              color: menuOpen ? "#fff" : "rgba(255,255,255,0.4)",
-              transition: "background 120ms, color 120ms",
-              opacity: hovered || menuOpen ? 1 : 0,
-            }}
-            onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.08)"; (e.currentTarget as HTMLElement).style.color = "#fff"; }}
-            onMouseLeave={(e) => {
-              (e.currentTarget as HTMLElement).style.background = menuOpen ? "rgba(255,255,255,0.1)" : "transparent";
-              (e.currentTarget as HTMLElement).style.color = menuOpen ? "#fff" : "rgba(255,255,255,0.4)";
-            }}
-          >
-            <DotsIcon />
-          </button>
-
-          {menuOpen && (
-            <CardMenu
-              spaceId={space.id}
-              spaceName={space.name}
-              onOpen={onOpen}
-              onStartRename={startRename}
-              onDelete={() => setConfirmDelete(true)}
-              onClose={() => setMenuOpen(false)}
-            />
-          )}
+        <div className="wsd-arrow">
+          <ArrowRightIcon />
         </div>
       </div>
 
@@ -473,68 +510,35 @@ function SpaceCard({ space, onOpen }: { space: Space; onOpen: () => void }) {
           onCancel={() => setConfirmDelete(false)}
         />
       )}
-    </div>
+    </article>
   );
 }
 
-// ── Create new card ───────────────────────────────────────────────────────────
+// ── Create card ───────────────────────────────────────────────────────────────
 
 function CreateCard({ onCreate }: { onCreate: () => void }) {
-  const [hovered, setHovered] = useState(false);
-
   return (
     <div
+      className="wsd-new"
+      role="button"
+      tabIndex={0}
       onClick={onCreate}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-      style={{
-        background: hovered ? "#0D1012" : "#090B0D",
-        border: `1px dashed ${hovered ? "rgba(255,61,245,0.4)" : "rgba(255,255,255,0.08)"}`,
-        borderRadius: "12px",
-        overflow: "hidden",
-        transform: hovered ? "translateY(-1px)" : "none",
-        transition: "all 150ms ease",
-        cursor: "pointer",
-      }}
+      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") onCreate(); }}
     >
-      {/* Thumbnail */}
-      <div
-        style={{
-          position: "relative",
-          width: "100%",
-          aspectRatio: "16/9",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-        }}
-      >
-        <div
-          style={{
-            width: "36px",
-            height: "36px",
-            borderRadius: "50%",
-            background: hovered ? "rgba(255,61,245,0.12)" : "rgba(255,255,255,0.04)",
-            border: `1px solid ${hovered ? "rgba(255,61,245,0.3)" : "rgba(255,255,255,0.07)"}`,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            transition: "all 150ms ease",
-          }}
-        >
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke={hovered ? "#ff3df5" : "rgba(255,255,255,0.3)"} strokeWidth="1.5" strokeLinecap="round">
-            <path d="M8 3v10M3 8h10" />
+      <div className="wsd-new-art">
+        <div className="wsd-plus-orb">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" style={{ width: 22, height: 22, strokeWidth: 2 }}>
+            <path d="M12 5v14M5 12h14" />
           </svg>
         </div>
       </div>
-
-      {/* Label */}
-      <div style={{ padding: "10px 12px" }}>
-        <p style={{ fontSize: "13px", fontWeight: 500, margin: 0, color: hovered ? "#fff" : "rgba(255,255,255,0.45)" }}>
+      <div style={{ padding: "12px 14px 14px", borderTop: "1px solid rgba(168,85,247,0.10)" }}>
+        <div style={{ fontSize: "14px", fontWeight: 600, color: "#fff", letterSpacing: "-0.01em", marginBottom: "4px" }}>
           New workflow
-        </p>
-        <p style={{ fontSize: "11px", margin: "3px 0 0", color: "rgba(255,255,255,0.2)" }}>
-          Start from scratch
-        </p>
+        </div>
+        <div style={{ fontSize: "11px", fontWeight: 500, color: "#7E6F9C" }}>
+          Start from scratch · or pick a template
+        </div>
       </div>
     </div>
   );
@@ -558,34 +562,74 @@ export default function WorkflowDashboard() {
     setShowDashboard(false);
   };
 
-  const sorted = [...spaces].sort(
-    (a, b) => (b.updatedAt ?? b.createdAt) - (a.updatedAt ?? a.createdAt)
-  );
+  const sorted = [...spaces]
+    .sort((a, b) => (b.updatedAt ?? b.createdAt) - (a.updatedAt ?? a.createdAt));
 
   return (
-    <div className="flex-1 overflow-y-auto" style={{ background: "#1A1A1C" }}>
-      <div style={{ maxWidth: "1400px", margin: "0 auto", padding: "48px 40px" }}>
-        <div style={{ marginBottom: "40px" }}>
-          <h1 style={{ fontSize: "22px", fontWeight: 600, color: "#fff", margin: 0, letterSpacing: "-0.02em" }}>
-            My Workflows
-          </h1>
-          <p style={{ fontSize: "13px", color: "rgba(255,255,255,0.35)", margin: "6px 0 0" }}>
-            {spaces.length} workspace{spaces.length !== 1 ? "s" : ""}
-          </p>
-        </div>
+    <div
+      style={{
+        flex: 1,
+        overflowY: "auto",
+        position: "relative",
+        background:
+          "radial-gradient(ellipse 800px 700px at -10% -5%, rgba(168,85,247,0.22) 0%, rgba(168,85,247,0) 65%)," +
+          "radial-gradient(ellipse 900px 800px at 110% 55%, rgba(236,72,153,0.11) 0%, rgba(236,72,153,0) 65%)," +
+          "#0a0612",
+      }}
+    >
+      <style>{CSS}</style>
 
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))",
-            gap: "20px",
-          }}
-        >
+      <div style={{ paddingBottom: "80px" }}>
+
+        {/* ── Page header ── */}
+        <section style={{
+          padding: "28px 32px 20px",
+          display: "flex", alignItems: "flex-end", gap: "24px",
+          flexWrap: "wrap", rowGap: "16px",
+        }}>
+          <div>
+            <h1 style={{
+              margin: 0,
+              fontSize: "28px", fontWeight: 600, lineHeight: 1.1, letterSpacing: "-0.02em",
+              background: "linear-gradient(135deg, #ffffff 0%, #E9DFFF 60%, #D8B4FE 100%)",
+              WebkitBackgroundClip: "text", backgroundClip: "text",
+              WebkitTextFillColor: "transparent",
+            }}>
+              My Workflows
+            </h1>
+            <div style={{
+              marginTop: "10px",
+              display: "inline-flex", alignItems: "center", gap: "8px",
+              fontFamily: "var(--font-geist-mono), monospace",
+              fontSize: "11px", fontWeight: 500, color: "#7E6F9C",
+              letterSpacing: "0.06em", textTransform: "uppercase",
+            }}>
+              <b style={{ color: "#D8B4FE", fontWeight: 500 }}>{spaces.length}</b>
+              <span>workspace{spaces.length !== 1 ? "s" : ""}</span>
+            </div>
+          </div>
+
+          <div style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", paddingBottom: "2px" }}>
+            <button className="wsd-new-btn" onClick={handleCreate}>
+              <PlusIcon />
+              New workflow
+            </button>
+          </div>
+        </section>
+
+        {/* ── Grid ── */}
+        <section style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))",
+          gap: "18px",
+          padding: "0 32px",
+        }}>
           <CreateCard onCreate={handleCreate} />
           {sorted.map((sp) => (
             <SpaceCard key={sp.id} space={sp} onOpen={() => openSpace(sp.id)} />
           ))}
-        </div>
+        </section>
+
       </div>
     </div>
   );
@@ -593,9 +637,17 @@ export default function WorkflowDashboard() {
 
 // ── Icons ─────────────────────────────────────────────────────────────────────
 
-function DotsIcon() {
+function StarIcon() {
   return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+    </svg>
+  );
+}
+
+function MoreHorizIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" stroke="none">
       <circle cx="5" cy="12" r="2" />
       <circle cx="12" cy="12" r="2" />
       <circle cx="19" cy="12" r="2" />
@@ -603,9 +655,25 @@ function DotsIcon() {
   );
 }
 
+function ArrowRightIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M5 12h14M13 5l7 7-7 7" />
+    </svg>
+  );
+}
+
+function PlusIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+      <path d="M12 5v14M5 12h14" />
+    </svg>
+  );
+}
+
 function OpenIcon() {
   return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
       <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
       <polyline points="15 3 21 3 21 9" />
       <line x1="10" y1="14" x2="21" y2="3" />
@@ -615,7 +683,7 @@ function OpenIcon() {
 
 function RenameIcon() {
   return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
       <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
       <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
     </svg>
@@ -624,7 +692,7 @@ function RenameIcon() {
 
 function DuplicateIcon() {
   return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
       <rect x="9" y="9" width="13" height="13" rx="2" />
       <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
     </svg>
@@ -633,7 +701,7 @@ function DuplicateIcon() {
 
 function DeleteIcon() {
   return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
       <polyline points="3 6 5 6 21 6" />
       <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
       <path d="M10 11v6M14 11v6" />
