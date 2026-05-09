@@ -733,12 +733,37 @@ export default function VideoInputNode({ id, data, selected }: NodeProps<VideoIn
                 </div>
               )}
 
-              {/* Mute button — only in video mode */}
+              {/* Play/pause button — top right */}
+              {viewMode === "video" && (
+                <button
+                  onMouseDown={(e) => e.stopPropagation()}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const v = videoRef.current;
+                    if (!v) return;
+                    if (v.paused) v.play().catch(() => {}); else v.pause();
+                  }}
+                  className="absolute top-2 right-2 w-7 h-7 rounded-full bg-black/40 backdrop-blur-sm flex items-center justify-center opacity-0 group-hover/player:opacity-100 transition-opacity pointer-events-auto z-10 node-slide-reveal"
+                  title={isPlaying ? "Pause" : "Play"}
+                >
+                  {isPlaying ? (
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="white">
+                      <rect x="6" y="4" width="4" height="16" /><rect x="14" y="4" width="4" height="16" />
+                    </svg>
+                  ) : (
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="white">
+                      <polygon points="5 3 19 12 5 21 5 3" />
+                    </svg>
+                  )}
+                </button>
+              )}
+
+              {/* Mute button — bottom right, left of trim */}
               {viewMode === "video" && (
                 <button
                   onMouseDown={(e) => e.stopPropagation()}
                   onClick={(e) => { e.stopPropagation(); setGlobalMuted(!muted); }}
-                  className="absolute top-2 right-2 w-7 h-7 rounded-full bg-black/40 backdrop-blur-sm flex items-center justify-center opacity-0 group-hover/player:opacity-100 transition-opacity pointer-events-auto z-10 node-slide-reveal"
+                  className="absolute bottom-2 right-11 w-7 h-7 rounded-full bg-black/40 backdrop-blur-sm flex items-center justify-center opacity-0 group-hover/player:opacity-100 transition-opacity pointer-events-auto z-10 node-slide-reveal"
                   title={muted ? "Unmute" : "Mute"}
                 >
                   {muted ? (

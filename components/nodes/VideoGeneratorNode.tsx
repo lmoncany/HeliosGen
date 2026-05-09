@@ -205,6 +205,7 @@ export default function VideoGeneratorNode({ id, data, selected }: NodeProps<Vid
   const muted = useWorkflowStore((s) => s.globalMuted);
   const setGlobalMuted = useWorkflowStore((s) => s.setGlobalMuted);
   const [hovering, setHovering] = useState(false);
+  const [isPlaying, setIsPlaying] = useState(false);
   const [progress, setProgress] = useState(0);
   const [currentSec, setCurrentSec] = useState(0);
   const [isSaving, setIsSaving] = useState(false);
@@ -1020,6 +1021,8 @@ export default function VideoGeneratorNode({ id, data, selected }: NodeProps<Vid
                     loop
                     playsInline
                     muted={i !== currentGenIdx || muted || !hovering}
+                    onPlay={i === currentGenIdx ? () => setIsPlaying(true) : undefined}
+                    onPause={i === currentGenIdx ? () => setIsPlaying(false) : undefined}
                     onLoadedMetadata={i === currentGenIdx ? handleVideoMeta : undefined}
                     onTimeUpdate={i === currentGenIdx ? (e) => {
                       const v = e.currentTarget;
@@ -1094,7 +1097,31 @@ export default function VideoGeneratorNode({ id, data, selected }: NodeProps<Vid
           </>
         )}
 
-        {/* Player bar — timer + progress + mute at very bottom */}
+        {/* Mute button — top right, shown on hover when video is ready */}
+        {typeof generations[currentGenIdx] === "string" && (
+          <button
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={(e) => { e.stopPropagation(); setGlobalMuted(!muted); }}
+            className="absolute top-2 right-2 w-7 h-7 rounded-full bg-black/40 backdrop-blur-sm flex items-center justify-center opacity-0 group-hover/player:opacity-100 transition-opacity pointer-events-auto z-20 node-slide-reveal"
+            title={muted ? "Unmute" : "Mute"}
+          >
+            {muted ? (
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+                <line x1="23" y1="9" x2="17" y2="15" />
+                <line x1="17" y1="9" x2="23" y2="15" />
+              </svg>
+            ) : (
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+                <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
+                <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
+              </svg>
+            )}
+          </button>
+        )}
+
+        {/* Player bar — timer + progress + play/pause at very bottom */}
         {typeof generations[currentGenIdx] === "string" && (
           <div
             className="absolute bottom-0 left-0 right-0 flex items-center gap-2 px-2.5 h-9 opacity-0 group-hover/player:opacity-100 transition-opacity z-20"
@@ -1115,21 +1142,22 @@ export default function VideoGeneratorNode({ id, data, selected }: NodeProps<Vid
             </div>
             <button
               onMouseDown={(e) => e.stopPropagation()}
-              onClick={(e) => { e.stopPropagation(); setGlobalMuted(!muted); }}
+              onClick={(e) => {
+                e.stopPropagation();
+                const v = videoRef.current;
+                if (!v) return;
+                if (v.paused) v.play().catch(() => {}); else v.pause();
+              }}
               className="shrink-0 pointer-events-auto opacity-70 hover:opacity-100 transition-opacity"
-              title={muted ? "Unmute" : "Mute"}
+              title={isPlaying ? "Pause" : "Play"}
             >
-              {muted ? (
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
-                  <line x1="23" y1="9" x2="17" y2="15" />
-                  <line x1="17" y1="9" x2="23" y2="15" />
+              {isPlaying ? (
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="white">
+                  <rect x="6" y="4" width="4" height="16" /><rect x="14" y="4" width="4" height="16" />
                 </svg>
               ) : (
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
-                  <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
-                  <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="white">
+                  <polygon points="5 3 19 12 5 21 5 3" />
                 </svg>
               )}
             </button>
