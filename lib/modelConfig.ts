@@ -334,7 +334,7 @@ export interface VideoModel {
 export const VIDEO_MODELS: VideoModel[] = [
   // ── Google ──────────────────────────────────────────────────────────────────
   {
-    id: "google-veo-3-lite",
+    id: "veo3_lite",
     apiId: "veo3_lite",
     name: "Veo 3.1 Lite",
     provider: "Google",
@@ -359,7 +359,7 @@ export const VIDEO_MODELS: VideoModel[] = [
     },
   },
   {
-    id: "google-veo-3-fast",
+    id: "veo3_fast",
     apiId: "veo3_fast",
     name: "Veo 3.1 Fast",
     provider: "Google",
@@ -385,7 +385,7 @@ export const VIDEO_MODELS: VideoModel[] = [
     },
   },
   {
-    id: "google-veo-3-quality",
+    id: "veo3",
     apiId: "veo3",
     name: "Veo 3.1 Quality",
     provider: "Google",

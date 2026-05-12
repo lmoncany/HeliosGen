@@ -461,7 +461,7 @@ export default function VideoGeneratorNode({ id, data, selected }: NodeProps<Vid
   useEffect(() => {
     const raf = requestAnimationFrame(() => updateNodeInternals(id));
     return () => cancelAnimationFrame(raf);
-  }, [id, videoModelId, updateNodeInternals]);
+  }, [id, videoModelId, veoMode, updateNodeInternals]);
 
   // ── Poll job-status while a taskId is pending ────────────────────────────
   useEffect(() => {
@@ -508,6 +508,18 @@ export default function VideoGeneratorNode({ id, data, selected }: NodeProps<Vid
   }, [data.taskId, status, id, updateNodeData]);
 
   const activeHandles = new Set<string>(cfg.handles);
+  const isVeo = videoModelId === "veo3" || videoModelId === "veo3_fast" || videoModelId === "veo3_lite";
+  const veoMode = (data.veoMode as "frames" | "references" | undefined) ?? "frames";
+
+  if (isVeo) {
+    if (veoMode === "frames") {
+      activeHandles.delete("resource");
+    } else if (veoMode === "references") {
+      activeHandles.delete("startFrame");
+      activeHandles.delete("endFrame");
+    }
+  }
+
   const connectedHandles = new Set(
     edges.filter((e) => e.target === id).map((e) => e.targetHandle).filter(Boolean) as string[]
   );
@@ -844,8 +856,34 @@ export default function VideoGeneratorNode({ id, data, selected }: NodeProps<Vid
       }
     }
 
+    const isVeo = videoModelId === "veo3" || videoModelId === "veo3_fast" || videoModelId === "veo3_lite";
+    const veoMode = (data.veoMode as "frames" | "references" | undefined) ?? "frames";
+
+    const veoImageUrls: string[] = [];
+    let generationType: string | undefined = undefined;
+
+    if (isVeo) {
+      if (veoMode === "frames") {
+        if (upstream.startFrameUrl) veoImageUrls.push(upstream.startFrameUrl);
+        if (upstream.endFrameUrl)   veoImageUrls.push(upstream.endFrameUrl);
+        generationType = veoImageUrls.length > 0 ? "FIRST_AND_LAST_FRAMES_2_VIDEO" : "TEXT_2_VIDEO";
+      } else if (veoMode === "references") {
+        veoImageUrls.push(...orderedResources.map(r => r.url).slice(0, 3));
+        generationType = "REFERENCE_2_VIDEO";
+      }
+    }
+
     // Build full payload first so debug log matches what gets sent
-    const payload: Record<string, unknown> = {
+    const payload: Record<string, unknown> = isVeo ? {
+      model: videoModelId,
+      prompt: finalPrompt,
+      aspect_ratio: aspectRatio,
+      generationType,
+      imageUrls: veoImageUrls,
+      enableTranslation: true,
+      enableFallback: false,
+      watermark: "",
+    } : {
       videoModel: videoModelId,
       prompt: finalPrompt,
       aspectRatio,
@@ -1637,6 +1675,18 @@ export default function VideoGeneratorNode({ id, data, selected }: NodeProps<Vid
                 </button>
               )}
 
+              {/* Veo mode toggle */}
+              {isVeo && (videoModelId === "veo3" || videoModelId === "veo3_fast") && (
+                <button
+                  onMouseDown={(e) => e.stopPropagation()}
+                  onClick={() => updateNodeData(id, { veoMode: veoMode === "frames" ? "references" : "frames" })}
+                  className="flex items-center gap-1.5 rounded-full px-2 py-1 transition-colors"
+                  style={{ background: "rgba(0,0,0,0.45)", backdropFilter: "blur(10px)", WebkitBackdropFilter: "blur(10px)", border: "1px solid rgba(255,255,255,0.07)" }}
+                >
+                  <ToggleSwitch on={veoMode === "references"} activeColor="#fb923c" />
+                  <span className="text-[11px] text-white/70">{veoMode === "references" ? "References" : "Frames"}</span>
+                </button>
+              )}
               {/* Seed input */}
               {cfg.supportsSeeds && (
                 <div

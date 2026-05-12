@@ -177,9 +177,27 @@ export default function PromptNode({ id, data, selected }: NodeProps<PromptNodeT
 
   const mentionableNodes = nodes.filter((n) => {
     if (n.id === id || n.type === "promptNode") return false;
-    return edges.some(
+    const sharedEdges = edges.filter(
       (e) => e.source === n.id && downstreamTargetIds.includes(e.target)
     );
+    if (sharedEdges.length === 0) return false;
+
+    // Veo filtering: if any target is a Veo model, ensure the node is connected to a compatible handle
+    for (const e of sharedEdges) {
+      const target = nodes.find((tn) => tn.id === e.target);
+      if (!target) continue;
+      const vModel = (target.data?.videoModel as string) || (target.data?.model as string);
+      const isVeo = vModel === "veo3" || vModel === "veo3_fast" || vModel === "veo3_lite";
+      if (isVeo) {
+        const vMode = (target.data?.veoMode as string) ?? "frames";
+        if (vMode === "frames" && e.targetHandle === "resource") return false;
+        if (vMode === "references" && (e.targetHandle === "startFrame" || e.targetHandle === "endFrame")) return false;
+        // Also Veo doesn't use video/audio handles in the current KIE integration
+        if (e.targetHandle === "videoRef" || e.targetHandle === "referenceVideo" || e.targetHandle === "audioRef") return false;
+      }
+    }
+
+    return true;
   });
 
   const knownLabels = mentionableNodes.map((n) => n.data.label as string).filter(Boolean);

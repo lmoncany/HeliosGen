@@ -48,6 +48,7 @@ interface TaggedImage {
   label: string;
   refId: string;
   url: string;
+  kind?: "image" | "video" | "audio";
 }
 
 interface KlingElement {
@@ -60,9 +61,10 @@ interface KlingElement {
 function resolveGalleryMentions(
   text: string,
   tagged: TaggedImage[],
-): { resolvedPrompt: string; extraUrls: string[] } {
-  if (!tagged.length) return { resolvedPrompt: text, extraUrls: [] };
-  type Span = { start: number; end: number; url: string };
+  tagFormat: "default" | "grok" = "default",
+): { resolvedPrompt: string; extraUrls: string[]; extraAssets: { url: string; kind: "image" | "video" | "audio" }[] } {
+  if (!tagged.length) return { resolvedPrompt: text, extraUrls: [], extraAssets: [] };
+  type Span = { start: number; end: number; url: string; kind: "image" | "video" | "audio" };
   const spans: Span[] = [];
   const claimed = new Set<number>();
   for (const t of [...tagged].sort((a, b) => b.label.length - a.label.length)) {
@@ -71,25 +73,27 @@ function resolveGalleryMentions(
     let m: RegExpExecArray | null;
     while ((m = re.exec(text)) !== null) {
       if (!claimed.has(m.index)) {
-        spans.push({ start: m.index, end: m.index + m[0].length, url: t.url });
+        spans.push({ start: m.index, end: m.index + m[0].length, url: t.url, kind: t.kind || "image" });
         claimed.add(m.index);
       }
     }
   }
   spans.sort((a, b) => a.start - b.start);
-  if (!spans.length) return { resolvedPrompt: text, extraUrls: [] };
+  if (!spans.length) return { resolvedPrompt: text, extraUrls: [], extraAssets: [] };
   const extraUrls: string[] = [];
+  const extraAssets: { url: string; kind: "image" | "video" | "audio" }[] = [];
   let resolvedPrompt = "";
   let lastEnd = 0;
   let n = 1;
   for (const span of spans) {
     resolvedPrompt += text.slice(lastEnd, span.start);
-    resolvedPrompt += `<<<image ${n++}>>>`;
+    resolvedPrompt += tagFormat === "grok" ? `@image${n++} ` : `<<<image ${n++}>>>`;
     extraUrls.push(span.url);
+    extraAssets.push({ url: span.url, kind: span.kind });
     lastEnd = span.end;
   }
   resolvedPrompt += text.slice(lastEnd);
-  return { resolvedPrompt, extraUrls };
+  return { resolvedPrompt, extraUrls, extraAssets };
 }
 
 function renderGalleryMentions(
@@ -316,6 +320,7 @@ function GalleryInner() {
   const pendingGensRef = useRef(pendingGens);
   useEffect(() => { pendingGensRef.current = pendingGens; }, [pendingGens]);
   const [submitting, setSubmitting] = useState(false);
+  const [veoMode, setVeoMode] = useState<"frames" | "references">("frames");
   const [genError, setGenError] = useState<string>("");
   const debugMode   = useWorkflowStore((s) => s.debugMode);
   const addToast    = useWorkflowStore((s) => s.addToast);
@@ -913,36 +918,87 @@ function GalleryInner() {
       const vm = VIDEO_MODELS.find(m => m.id === modelId);
       const handles = vm?.handles ?? [];
 
+      const { resolvedPrompt, extraAssets } = resolveGalleryMentions(prompt, taggedImages, vm?.resourceTagFormat ?? "default");
+
       const startFrameUrl = handles.includes("startFrame") && vidStartFrame?.cdnUrl ? vidStartFrame.cdnUrl : undefined;
       const endFrameUrl   = handles.includes("endFrame")   && vidEndFrame?.cdnUrl   ? vidEndFrame.cdnUrl   : undefined;
       const videoRefUrl   = handles.includes("videoRef")   && vidVideoRef?.cdnUrl   ? vidVideoRef.cdnUrl   : undefined;
 
       const useElements = !!(vm?.apiInput.useKlingElements);
 
+      const taggedImageUrls = extraAssets.filter(a => a.kind === "image").map(a => a.url);
+      const taggedVideoUrls = extraAssets.filter(a => a.kind === "video").map(a => a.url);
+      const taggedAudioUrls = extraAssets.filter(a => a.kind === "audio").map(a => a.url);
+
+      const extraImageSet = new Set(taggedImageUrls);
+      const extraVideoSet = new Set(taggedVideoUrls);
+      const extraAudioSet = new Set(taggedAudioUrls);
+
       // Non-kling resource models send referenceImageUrls
       const resourceUrls = handles.includes("resource") && !useElements
-        ? vidResources.filter(r => r.cdnUrl && !r.error).map(r => r.cdnUrl!)
+        ? vidResources.filter(r => r.cdnUrl && !r.error && !extraImageSet.has(r.cdnUrl!)).map(r => r.cdnUrl!)
         : [];
-      const referenceImageUrls = !useElements && resourceUrls.length ? resourceUrls : undefined;
+      const referenceImageUrls = !useElements && (taggedImageUrls.length > 0 || resourceUrls.length > 0)
+        ? [...taggedImageUrls, ...resourceUrls]
+        : undefined;
 
       // Kling: send structured elements
-      const klingElements = useElements && handles.includes("resource") && vidElements.length > 0
+      const baseElements = useElements && handles.includes("resource") && vidElements.length > 0
         ? vidElements.map(el => ({ name: el.name, description: el.description, imageUrls: el.imageUrls }))
+        : [];
+      const mentionElements = useElements ? taggedImageUrls.map((url, i) => ({
+        name: `element_${i + 1}`,
+        description: `Mentioned image ${i + 1}`,
+        imageUrls: [url],
+      })) : [];
+      const klingElements = useElements && (mentionElements.length > 0 || baseElements.length > 0)
+        ? [...mentionElements, ...baseElements]
         : undefined;
 
-      const referenceVideoUrls = handles.includes("referenceVideo")
-        ? vidRefVideos.filter(r => r.cdnUrl && !r.error).map(r => r.cdnUrl!)
+      const baseVideoUrls = handles.includes("referenceVideo")
+        ? vidRefVideos.filter(r => r.cdnUrl && !r.error && !extraVideoSet.has(r.cdnUrl!)).map(r => r.cdnUrl!)
+        : [];
+      const referenceVideoUrls = handles.includes("referenceVideo") && (taggedVideoUrls.length > 0 || baseVideoUrls.length > 0)
+        ? [...taggedVideoUrls, ...baseVideoUrls]
         : undefined;
-      const referenceAudioUrls = handles.includes("audioRef")
-        ? vidRefAudios.filter(r => r.cdnUrl && !r.error).map(r => r.cdnUrl!)
+
+      const baseAudioUrls = handles.includes("audioRef")
+        ? vidRefAudios.filter(r => r.cdnUrl && !r.error && !extraAudioSet.has(r.cdnUrl!)).map(r => r.cdnUrl!)
+        : [];
+      const referenceAudioUrls = handles.includes("audioRef") && (taggedAudioUrls.length > 0 || baseAudioUrls.length > 0)
+        ? [...taggedAudioUrls, ...baseAudioUrls]
+        : undefined;
+
+      const isVeo = !!(vm?.apiInput.useGoogleVeo);
+      const veoImageUrls: string[] = [];
+      if (isVeo) {
+        if (veoMode === "frames") {
+          if (startFrameUrl) veoImageUrls.push(startFrameUrl);
+          if (endFrameUrl)   veoImageUrls.push(endFrameUrl);
+        } else if (veoMode === "references") {
+          if (referenceImageUrls) veoImageUrls.push(...referenceImageUrls.slice(0, 3));
+        }
+      }
+
+      const generationType = isVeo 
+        ? (veoMode === "references" ? "REFERENCE_2_VIDEO" : (veoImageUrls.length > 0 ? "FIRST_AND_LAST_FRAMES_2_VIDEO" : "TEXT_2_VIDEO"))
         : undefined;
 
       const res = await fetch("/api/generate-video", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({
+        body: JSON.stringify(isVeo ? {
+          model: modelId,
+          prompt: resolvedPrompt,
+          aspect_ratio: aspectRatio,
+          generationType,
+          imageUrls: veoImageUrls,
+          enableTranslation: true,
+          enableFallback: false,
+          watermark: "",
+        } : {
           videoModel: modelId,
-          prompt,
+          prompt: resolvedPrompt,
           aspectRatio,
           duration,
           ...(vm?.sound ? { sound } : {}),
@@ -994,7 +1050,8 @@ function GalleryInner() {
 
     // ── Debug mode: log + simulate, no real API call ────────────────────────
     if (debugMode) {
-      const { resolvedPrompt: dbgPrompt, extraUrls: dbgExtra } = resolveGalleryMentions(prompt, taggedImages);
+      const dbgVm = isVideo ? VIDEO_MODELS.find(m => m.id === modelId) : undefined;
+      const { resolvedPrompt: dbgPrompt, extraUrls: dbgExtra } = resolveGalleryMentions(prompt, taggedImages, dbgVm?.resourceTagFormat ?? "default");
       const dbgExtraSet = new Set(dbgExtra);
       const dbgRefUrls = refImages.filter(r => r.cdnUrl && !r.error && !dbgExtraSet.has(r.cdnUrl!)).map(r => r.cdnUrl!);
       const dbgAzureBaseUrl    = (() => { try { return localStorage.getItem("aiui-azure-base-url") ?? ""; } catch { return ""; } })();
@@ -1085,16 +1142,59 @@ function GalleryInner() {
 
   // ── @ mention derived + helpers ───────────────────────────────────────────
 
-  const mentionableImages = useMemo(() =>
-    refImages.filter(r => !r.uploading && !r.error && r.cdnUrl),
-    [refImages]);
+  const mentionableAssets = useMemo(() => {
+    if (!isVideo) {
+      return refImages
+        .filter(r => !r.uploading && !r.error && r.cdnUrl)
+        .map((r, i) => ({ ...r, kind: "image" as const, label: `img${i + 1}`, role: `Reference ${i + 1}` }));
+    } else {
+      const isVeo = modelId === "veo3" || modelId === "veo3_fast" || modelId === "veo3_lite";
+      const assets: (RefImage & { kind: "image" | "video" | "audio"; label: string; role: string })[] = [];
+      
+      // Images
+      const imgs: { ref: RefImage; role: string }[] = [];
+      const startOk = vidStartFrame?.cdnUrl && !vidStartFrame.uploading && !vidStartFrame.error;
+      const endOk = vidEndFrame?.cdnUrl && !vidEndFrame.uploading && !vidEndFrame.error;
+      const resOk = vidResources.filter(r => r.cdnUrl && !r.uploading && !r.error);
+
+      if (isVeo) {
+        if (veoMode === "frames") {
+          if (startOk) imgs.push({ ref: vidStartFrame!, role: "Start Frame" });
+          if (endOk) imgs.push({ ref: vidEndFrame!, role: "End Frame" });
+        } else if (veoMode === "references") {
+          resOk.forEach((r, i) => imgs.push({ ref: r, role: `Reference ${i + 1}` }));
+        }
+      } else {
+        if (startOk) imgs.push({ ref: vidStartFrame!, role: "Start Frame" });
+        if (endOk) imgs.push({ ref: vidEndFrame!, role: "End Frame" });
+        resOk.forEach((r, i) => imgs.push({ ref: r, role: `Reference ${i + 1}` }));
+      }
+      assets.push(...imgs.map((item, i) => ({ ...item.ref, kind: "image" as const, label: `img${i + 1}`, role: item.role })));
+
+      // Videos (hide for Veo)
+      if (!isVeo) {
+        const vids: { ref: RefImage; role: string }[] = [];
+        if (vidVideoRef?.cdnUrl && !vidVideoRef.uploading && !vidVideoRef.error) vids.push({ ref: vidVideoRef, role: "Reference Video" });
+        vidRefVideos.filter(r => r.cdnUrl && !r.uploading && !r.error).forEach((r, i) => vids.push({ ref: r, role: `Video ${i + 1}` }));
+        assets.push(...vids.map((item, i) => ({ ...item.ref, kind: "video" as const, label: `vid${i + 1}`, role: item.role })));
+      }
+
+      // Audios (hide for Veo)
+      if (!isVeo) {
+        const auds = vidRefAudios.filter(r => r.cdnUrl && !r.uploading && !r.error);
+        assets.push(...auds.map((r, i) => ({ ...r, kind: "audio" as const, label: `aud${i + 1}`, role: `Audio ${i + 1}` })));
+      }
+
+      return assets;
+    }
+  }, [isVideo, modelId, veoMode, refImages, vidStartFrame, vidEndFrame, vidVideoRef, vidResources, vidRefVideos, vidRefAudios]);
 
   const filteredMentions = useMemo(() => {
     if (mentionQuery === null) return [];
-    return mentionableImages.slice(0, 8);
-  }, [mentionableImages, mentionQuery]);
+    return mentionableAssets.slice(0, 8);
+  }, [mentionableAssets, mentionQuery]);
 
-  const atMenuOpen = !isVideo && mentionQuery !== null && filteredMentions.length > 0;
+  const atMenuOpen = mentionQuery !== null && filteredMentions.length > 0;
 
   useEffect(() => { setMentionSelIdx(0); }, [filteredMentions.length]);
 
@@ -1146,11 +1246,10 @@ function GalleryInner() {
     return () => document.removeEventListener("mousedown", handler);
   }, [atMenuOpen]);
 
-  const insertMention = (ref: RefImage) => {
-    const pos = refImages.findIndex(r => r.id === ref.id);
-    const label = `img${pos + 1}`;
+  const insertMention = (ref: RefImage & { kind?: "image" | "video" | "audio"; label?: string }) => {
+    const label = ref.label || "img1";
     if (!taggedImages.some(t => t.refId === ref.id))
-      setTaggedImages(prev => [...prev, { label, refId: ref.id, url: ref.cdnUrl! }]);
+      setTaggedImages(prev => [...prev, { label, refId: ref.id, url: ref.cdnUrl!, kind: isVideo ? (ref.kind || "image") : "image" }]);
 
     const input = inputRef.current;
     const cursor = input?.selectionStart ?? prompt.length;
@@ -2019,7 +2118,17 @@ function GalleryInner() {
             const slots: VidSlot[] = [];
             const useElems = !!(vidModel?.apiInput.useKlingElements);
             const isHappyHorse = vidModel?.id === "happyhorse";
+            const isVeo = modelId === "veo3" || modelId === "veo3_fast" || modelId === "veo3_lite";
+
             for (const h of vidRefHandles) {
+              // Veo: hide start/end frames when in references mode, hide resource when in frames mode
+              if (isVeo) {
+                if (veoMode === "references" && (h === "startFrame" || h === "endFrame")) continue;
+                if (veoMode === "frames" && h === "resource") continue;
+                // Also hide video/audio handles for Veo as they are not used in current integration
+                if (h === "videoRef" || h === "referenceVideo" || h === "audioRef") continue;
+              }
+
               // HappyHorse: hide startFrame when characters are attached, hide resource when startFrame is attached
               if (isHappyHorse && h === "startFrame" && vidResources.length > 0) continue;
               if (isHappyHorse && h === "resource" && vidStartFrame) continue;
@@ -2292,7 +2401,6 @@ function GalleryInner() {
                   }
                 }}
                 onSelect={e => {
-                  if (isVideo) return;
                   const ta = e.currentTarget;
                   const cursor = ta.selectionStart ?? ta.value.length;
                   const match = ta.value.slice(0, cursor).match(/@(\w*)$/);
@@ -2525,6 +2633,41 @@ function GalleryInner() {
                   </button>
                 )}
 
+                {/* Veo mode toggle (frames vs references) */}
+                {isVideo && (modelId === "veo3" || modelId === "veo3_fast") && (
+                  <button
+                    onClick={() => setVeoMode(m => m === "frames" ? "references" : "frames")}
+                    disabled={submitting}
+                    style={{
+                      display: "flex", alignItems: "center", gap: "7px",
+                      height: "36px", padding: "0 12px",
+                      borderRadius: "8px",
+                      border: "1px solid rgba(255,255,255,0.1)",
+                      background: veoMode === "references" ? "rgba(251,146,60,0.12)" : "rgba(255,255,255,0.05)",
+                      color: veoMode === "references" ? "#fb923c" : "rgba(255,255,255,0.55)",
+                      fontSize: "13px", fontFamily: "inherit",
+                      cursor: submitting ? "not-allowed" : "pointer",
+                      transition: "background 150ms, color 150ms, border-color 150ms",
+                      flexShrink: 0,
+                    }}>
+                    <span style={{
+                      width: "28px", height: "16px", borderRadius: "8px",
+                      background: veoMode === "references" ? "#fb923c" : "rgba(255,255,255,0.18)",
+                      position: "relative", flexShrink: 0,
+                      transition: "background 150ms",
+                    }}>
+                      <span style={{
+                        position: "absolute", top: "2px",
+                        left: veoMode === "references" ? "14px" : "2px",
+                        width: "12px", height: "12px", borderRadius: "50%",
+                        background: veoMode === "references" ? "#401010" : "#ffffff",
+                        transition: "left 150ms",
+                      }} />
+                    </span>
+                    {veoMode === "references" ? "References" : "Frames"}
+                  </button>
+                )}
+
                 {/* Seed (video, models that support it) */}
                 {isVideo && vidModel?.supportsSeeds && (
                   <div style={{
@@ -2697,7 +2840,7 @@ function GalleryInner() {
         >
           <div style={{ padding: "6px 12px 4px", borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
             <span style={{ fontSize: "10px", color: "rgba(255,255,255,0.28)", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 500 }}>
-              Gallery images
+              {isVideo ? "Reference assets" : "Gallery images"}
             </span>
           </div>
           <div style={{ maxHeight: "280px", overflowY: "auto", padding: "4px" }}>
@@ -2731,8 +2874,9 @@ function GalleryInner() {
                   style={{ width: "30px", height: "30px", borderRadius: "6px", objectFit: "cover", flexShrink: 0, background: "#1a1c1f" }}
                 />
                 <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                  Image {idx + 1}
+                  {(ref as any).role} ({(ref as any).label})
                 </span>
+
                 {idx === mentionSelIdx && (
                   <span style={{ marginLeft: "auto", fontSize: "10px", color: "rgba(255,255,255,0.2)", flexShrink: 0 }}>↵</span>
                 )}

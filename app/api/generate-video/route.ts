@@ -28,34 +28,37 @@ async function getUserId(req: NextRequest): Promise<string | null> {
 
 export async function POST(req: NextRequest) {
   try {
+  const body = await req.json();
   const {
-    videoModel      = "kling-3.0",
+    videoModel      = body.model || "kling-3.0",
     prompt,
     startFrameUrl:  rawStartFrame,
     endFrameUrl:    rawEndFrame,
     videoRefUrl:    rawVideoRef,
     resources       = [] as Resource[],
     klingElements   = [] as KlingElementInput[],
-    referenceImageUrls:  rawRefImages     = [] as string[],
+    referenceImageUrls:  rawRefImages     = body.imageUrls || [] as string[],
     referenceVideoUrls:  rawRefVideoUrls  = [] as string[],
     referenceAudioUrls:  rawRefAudioUrls  = [] as string[],
     sound           = false,
     duration        = 5,
-    aspectRatio     = "16:9",
+    aspectRatio     = body.aspect_ratio || "16:9",
     mode            = "pro",
     resolution      = "480p",
     seed,
+    veoMode,
+    generationType: rawGenerationType,
+    callBackUrl:    rawCallBackUrl,
     debugOnly       = false,
-  } = await req.json();
+  } = body;
 
   const userId = await getUserId(req);
   const apiKey = (userId ? await getKieTokenForUser(userId) : null) ?? process.env.KIE_API_TOKEN ?? null;
   if (!apiKey) return NextResponse.json({ error: "No Kie.ai API key configured. Add one in Settings." }, { status: 401 });
 
   const callbackBase = process.env.CALLBACK_BASE_URL;
-  if (!callbackBase) return NextResponse.json({ error: "CALLBACK_BASE_URL not set" }, { status: 500 });
-
-  const callBackUrl = `${callbackBase.replace(/\/$/, "")}/api/callback`;
+  const callBackUrl = rawCallBackUrl || (callbackBase ? `${callbackBase.replace(/\/$/, "")}/api/callback` : undefined);
+  if (!callBackUrl) return NextResponse.json({ error: "callBackUrl or CALLBACK_BASE_URL not set" }, { status: 500 });
 
   const cfg = VIDEO_MODELS.find((m) => m.id === videoModel);
   if (!cfg) return NextResponse.json({ error: `Unknown video model: ${videoModel}` }, { status: 400 });
@@ -168,25 +171,29 @@ export async function POST(req: NextRequest) {
 
     // For veo3.1 lite, if an image is attached use: Image to video, just a text is attached, use text to video.
     // On the two other models (fast/quality), one more element is present: reference.
-    const isLite = cfg.id === "google-veo-3-lite";
+    const isLite = cfg.id === "veo3_lite";
 
-    if (!isLite && refImages.length > 0) {
+    if (veoMode === "references" && !isLite) {
       generationType = "REFERENCE_2_VIDEO";
-      imageUrls.push(...refImages.slice(0, 3));
-    } else if (startFrameUrl || endFrameUrl) {
-      generationType = "FIRST_AND_LAST_FRAMES_2_VIDEO";
-      if (startFrameUrl) imageUrls.push(startFrameUrl);
-      if (endFrameUrl) imageUrls.push(endFrameUrl);
+      if (refImages.length > 0) imageUrls.push(...refImages.slice(0, 3));
+    } else {
+      if (startFrameUrl || endFrameUrl) {
+        generationType = "FIRST_AND_LAST_FRAMES_2_VIDEO";
+        if (startFrameUrl) imageUrls.push(startFrameUrl);
+        if (endFrameUrl) imageUrls.push(endFrameUrl);
+      }
     }
 
-    effectiveApiId = "google/veo";
+    effectiveApiId = cfg.apiId; // Use veo3, veo3_fast, or veo3_lite directly
     input = {
       prompt: prompt ?? "",
-      model: cfg.apiId,
-      generationType,
+      generationType: rawGenerationType || generationType,
       [apiInput.aspectRatioKey!]: aspectRatio,
       [apiInput.resolutionKey!]: resolution,
+      watermark: "",
+      enableFallback: false,
       enableTranslation: true,
+      callBackUrl,
     };
     if (imageUrls.length > 0) input.imageUrls = imageUrls;
     if (apiInput.extra) Object.assign(input, apiInput.extra);
@@ -278,11 +285,13 @@ export async function POST(req: NextRequest) {
 
   // Debug mode — return the exact kie.ai payload without submitting
   if (debugOnly) {
-    return NextResponse.json({ debugPayload: { model: effectiveApiId, callBackUrl, input } });
+    const debugKieBody = { model: effectiveApiId, callBackUrl, input };
+    return NextResponse.json({ debugPayload: debugKieBody });
   }
 
   // Submit task to kie.ai
   const kieBody = { model: effectiveApiId, callBackUrl, input };
+
   console.log("[generate-video] sending to kie.ai:", JSON.stringify(kieBody));
   const createRes = await fetch(`${KIE_BASE}/api/v1/jobs/createTask`, {
     method:  "POST",

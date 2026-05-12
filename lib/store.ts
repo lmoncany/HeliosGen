@@ -52,7 +52,9 @@ export interface NodeData extends Record<string, unknown> {
   sound?: boolean;
   klingMode?: string;
   count?: number;
+  veoMode?: "frames" | "references";
   // grok imagine settings
+
   grokMode?: string;
   grokResolution?: string;
   // seed (for models that support it)
