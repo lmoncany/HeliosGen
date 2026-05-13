@@ -40,6 +40,7 @@ export default function AddNodeMenu({ anchorRect, onClose }: AddNodeMenuProps) {
   const [query, setQuery] = useState("");
   const [focused, setFocused] = useState<string | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [pickerPos, setPickerPos] = useState({ x: 0, y: 0 });
 
   useEffect(() => { searchRef.current?.focus(); }, []);
 
@@ -442,7 +443,10 @@ export default function AddNodeMenu({ anchorRect, onClose }: AddNodeMenuProps) {
                           <rect x="14" y="14" width="7" height="7" rx="1" />
                         </svg>
                       }
-                      onClick={() => setPickerOpen(true)}
+                      onClick={(e: React.MouseEvent) => {
+                        setPickerPos({ x: e.clientX, y: e.clientY });
+                        setPickerOpen(true);
+                      }}
                     />
                   </>
                 )}
@@ -464,6 +468,8 @@ export default function AddNodeMenu({ anchorRect, onClose }: AddNodeMenuProps) {
         mediaKind="any"
         onClose={() => setPickerOpen(false)}
         onPickUrl={handleAssetPick}
+        x={pickerPos.x}
+        y={pickerPos.y}
       />
     </>
   );

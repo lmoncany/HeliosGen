@@ -9,6 +9,10 @@ const SHIMMER_CSS = `
 @keyframes picker-shimmer {
   0%   { background-position: -200% 0; }
   100% { background-position:  200% 0; }
+}
+@keyframes picker-dropIn {
+  0% { opacity: 0; transform: translateY(12px); }
+  100% { opacity: 1; transform: translateY(0); }
 }`;
 
 function PickerImage({ src }: { src: string }) {
@@ -42,23 +46,73 @@ function PickerImage({ src }: { src: string }) {
   );
 }
 
+function mergeByNewest(prev: GalleryItem[], incoming: GalleryItem[]): GalleryItem[] {
+  const seen = new Set(prev.map(i => i.id));
+  const brandNew = incoming.filter(i => !seen.has(i.id));
+  if (brandNew.length === 0) return prev;
+  return [...prev, ...brandNew].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+}
+
 export function MediaPickerModal({
   open,
   mediaKind,
   onClose,
   onPickUrl,
   onUpload,
+  anchorRef,
+  x,
+  y,
 }: {
   open: boolean;
   mediaKind: "image" | "video" | "any";
   onClose: () => void;
   onPickUrl: (url: string, mediaType: "image" | "video") => void;
   onUpload?: () => void;
+  anchorRef?: React.RefObject<HTMLElement | null>;
+  x?: number;
+  y?: number;
 }) {
   const defaultTab: TabId = mediaKind === "image" ? "image-gen" : mediaKind === "video" ? "video-gen" : "uploads";
   const [activeTab, setActiveTab] = useState<TabId>(defaultTab);
   const [sourceItems, setSourceItems] = useState<GalleryItem[]>([]);
   const [fetching, setFetching] = useState(false);
+  const [pos, setPos] = useState({ left: 0, top: 0, bottom: 0, width: 0, isAnchored: false, isCustom: false });
+
+  useEffect(() => {
+    if (!open) return;
+
+    let targetLeft = 0;
+    let targetTop = 0;
+    let targetBottom = 0;
+    let targetWidth = 0;
+    let anchored = false;
+    let custom = false;
+
+    if (anchorRef?.current) {
+      const rect = anchorRef.current.getBoundingClientRect();
+      targetLeft = rect.left;
+      targetBottom = window.innerHeight - rect.top + 6;
+      targetWidth = rect.width;
+      anchored = true;
+    } else if (x !== undefined && y !== undefined) {
+      // Position at cursor
+      const modalW = 860;
+      const modalH = 410;
+      targetLeft = Math.max(12, Math.min(x, window.innerWidth - modalW - 12));
+      targetTop = Math.max(12, Math.min(y, window.innerHeight - modalH - 12));
+      targetWidth = modalW;
+      custom = true;
+    }
+
+    setPos({
+      left: targetLeft,
+      top: targetTop,
+      bottom: targetBottom,
+      width: targetWidth,
+      isAnchored: anchored,
+      isCustom: custom,
+    });
+  }, [open, anchorRef, x, y]);
 
   useEffect(() => {
     if (!open) return;
@@ -88,16 +142,15 @@ export function MediaPickerModal({
           imgRes.ok ? (imgRes.json() as Promise<{ items: GalleryItem[] }>) : Promise.resolve({ items: [] as GalleryItem[] }),
           vidRes.ok ? (vidRes.json() as Promise<{ items: GalleryItem[] }>) : Promise.resolve({ items: [] as GalleryItem[] }),
         ]);
-        setSourceItems(
-          [...imgData.items, ...vidData.items].sort(
-            (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
-          ),
-        );
+        setSourceItems(prev => mergeByNewest(prev, [...imgData.items, ...vidData.items]));
       } else {
         const res = await fetch(`/api/gallery?type=${mediaKind}&page=0`, {
           headers: { Authorization: `Bearer ${token}` },
         });
-        if (res.ok) setSourceItems((await res.json() as { items: GalleryItem[] }).items);
+        if (res.ok) {
+          const data = await res.json() as { items: GalleryItem[] };
+          setSourceItems(prev => mergeByNewest(prev, data.items));
+        }
       }
       setFetching(false);
     })();
@@ -138,10 +191,16 @@ export function MediaPickerModal({
         style={{ position: "absolute", inset: 0, pointerEvents: "auto" }}
       />
       <div style={{
-        position: "relative",
-        width: "min(660px, calc(100vw - 32px))",
-        height: "520px",
-        background: "rgba(14,16,18,0.98)",
+        position: "fixed",
+        left: (pos.isAnchored || pos.isCustom) ? pos.left : "50%",
+        top: pos.isCustom ? pos.top : (pos.isAnchored ? "auto" : "50%"),
+        bottom: pos.isAnchored ? pos.bottom : (pos.isCustom ? "auto" : "auto"),
+        transform: (pos.isAnchored || pos.isCustom) ? "none" : "translate(-50%, -50%)",
+        width: (pos.isAnchored || pos.isCustom) ? pos.width : "min(660px, calc(100vw - 32px))",
+        height: (pos.isAnchored || pos.isCustom) ? `${88 + 0.25 * (pos.width - 64)}px` : "520px",
+        background: "rgba(14,16,18,0.92)",
+        backdropFilter: "blur(24px)",
+        WebkitBackdropFilter: "blur(24px)",
         border: "1px solid rgba(255,255,255,0.09)",
         borderRadius: "18px",
         display: "flex",
@@ -149,6 +208,7 @@ export function MediaPickerModal({
         overflow: "hidden",
         boxShadow: "0 32px 80px rgba(0,0,0,0.9), 0 0 0 1px rgba(255,255,255,0.04)",
         pointerEvents: "auto",
+        animation: "picker-dropIn 160ms cubic-bezier(0.16,1,0.3,1)",
       }}>
         {/* Tab bar */}
         <div style={{ padding: "14px 18px 12px", display: "flex", alignItems: "center", gap: "4px", flexShrink: 0, borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
@@ -190,7 +250,7 @@ export function MediaPickerModal({
               <span style={{ width: "24px", height: "24px", borderRadius: "50%", border: "2px solid rgba(255,255,255,0.1)", borderTopColor: "#ff3df5", display: "inline-block", animation: "spin 0.75s linear infinite" }} />
             </div>
           ) : (
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: "6px" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(8, 1fr)", gap: "4px" }}>
               {onUpload && (
                 <button
                   onClick={onUpload}

@@ -145,7 +145,7 @@ function renderGalleryMentions(
   return <>{parts}</>;
 }
 
-function resizeTextarea(el: HTMLTextAreaElement, maxH = 440) {
+function resizeTextarea(el: HTMLTextAreaElement, maxH = 264) {
   el.style.height = "auto";
   el.style.height = Math.min(el.scrollHeight, maxH) + "px";
 }
@@ -593,14 +593,8 @@ function GalleryInner() {
         setQuality(prev => validQ.includes(prev) ? prev : validQ[0]);
       }
     }
-    if (!("supportsImages" in m) || !m.supportsImages) {
-      setRefImages(prev => { prev.forEach(r => URL.revokeObjectURL(r.objectUrl)); return []; });
-      setTaggedImages([]);
-    }
     if (isVideo) {
-      setVidStartFrame(null); setVidEndFrame(null); setVidResources([]);
-      setVidVideoRef(null); setVidRefVideos([]); setVidRefAudios([]);
-      setVidElements([]);
+      // We don't clear video refs here anymore to allow persistence when switching between video models
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [modelId]);
@@ -892,8 +886,8 @@ function GalleryInner() {
     if (!isVideo) {
       const { resolvedPrompt, extraUrls } = resolveGalleryMentions(prompt, taggedImages);
       const extraUrlSet = new Set(extraUrls);
-      const refUrls = refImages.filter(r => r.cdnUrl && !r.error && !extraUrlSet.has(r.cdnUrl!)).map(r => r.cdnUrl!);
-      const imageUrls = [...new Set([...extraUrls, ...refUrls])];
+      const refUrls = imgModel?.supportsImages ? refImages.filter(r => r.cdnUrl && !r.error && !extraUrlSet.has(r.cdnUrl!)).map(r => r.cdnUrl!) : [];
+      const imageUrls = imgModel?.supportsImages ? [...new Set([...extraUrls, ...refUrls])] : [];
 
       // Read provider settings from localStorage (same keys as GenerateNode)
       const azureBaseUrl    = (() => { try { return localStorage.getItem("aiui-azure-base-url") ?? ""; } catch { return ""; } })();
@@ -1411,7 +1405,7 @@ function GalleryInner() {
     });
   }, [items, selectedIds, hasMore, clearDeletedFromNodes]);
 
-  const GALLERY_GAP = 3;
+  const GALLERY_GAP = 1;
 
   const filteredItems = useMemo(() =>
     sourceFilter === "generated"
@@ -1644,14 +1638,14 @@ function GalleryInner() {
       <div ref={gridOuterRef} style={{ flex: 1, overflowY: "auto", paddingBottom: "260px" }}>
         {loading || containerWidth === 0 ? (
           /* Skeleton — shown while loading or before container is measured */
-          <div style={{ display: "grid", gridTemplateColumns: `repeat(${zoom}, 1fr)`, gap: "3px", padding: "3px", alignItems: "start" }}>
+          <div style={{ display: "grid", gridTemplateColumns: `repeat(${zoom}, 1fr)`, gap: "1px", padding: "1px", alignItems: "start" }}>
             {Array.from({ length: zoom * 3 }).map((_, i) => (
               <div key={i} className="gallery-skeleton" style={{ aspectRatio: i % 3 === 1 ? "4 / 5" : i % 5 === 0 ? "16 / 9" : "1 / 1" }} />
             ))}
           </div>
         ) : needsProbing ? (
           /* Probing skeletons — real item count and aspect ratios while upload dims are being measured */
-          <div style={{ padding: "3px" }}>
+          <div style={{ padding: "1px" }}>
             {justifiedRows.map((row, rowIdx) => (
               <div key={rowIdx} style={{ display: "flex", height: row.height, gap: `${GALLERY_GAP}px`, marginBottom: rowIdx < justifiedRows.length - 1 ? `${GALLERY_GAP}px` : 0 }}>
                 {row.items.map((layoutItem) => (
@@ -1667,7 +1661,7 @@ function GalleryInner() {
         ) : filteredItems.length === 0 && (sourceFilter !== "generated" || pendingGens.filter(pg => pg.tab == null || pg.tab === tab).length === 0) ? (
           <EmptyState tab={tab} />
         ) : (
-          <div ref={gridRef} style={{ padding: "3px" }}>
+          <div ref={gridRef} style={{ padding: "1px" }}>
             {justifiedRows.map((row, rowIdx) => (
               <div key={rowIdx} style={{ display: "flex", height: row.height, gap: `${GALLERY_GAP}px`, marginBottom: rowIdx < justifiedRows.length - 1 ? `${GALLERY_GAP}px` : 0 }}>
                 {row.items.map((layoutItem) => {
@@ -1770,7 +1764,7 @@ function GalleryInner() {
                     );
                   }
                   return (
-                    <div key={layoutItem.item.id} style={{ width: layoutItem.width, flex: "0 0 auto", height: "100%", overflow: "hidden", background: selectedIds.has(layoutItem.item.id) ? "#ffffff" : "transparent", padding: selectedIds.has(layoutItem.item.id) ? "2px" : "0", transition: "background 180ms ease, padding 180ms ease" }}>
+                    <div key={layoutItem.item.id} style={{ width: layoutItem.width, flex: "0 0 auto", height: "100%", overflow: "hidden", background: selectedIds.has(layoutItem.item.id) ? "#ffffff" : "transparent", transition: "background 180ms ease" }}>
                       <GalleryCard
                         item={layoutItem.item}
                         onOpen={() => setLightboxItem(layoutItem.item)}
@@ -1931,453 +1925,143 @@ function GalleryInner() {
           overflow: "hidden",
         }}>
 
-          {/* ── Reference image thumbnails ── */}
-          {!isVideo && (hasRefImgs || canAddImgs) && (
-            <div style={{
-              padding: "14px 16px 0",
-              display: "flex",
-              gap: "10px",
-              flexWrap: "wrap",
-              alignItems: "flex-start",
-            }}>
-              {refImages.map(img => {
-                const isRemoving = removingIds.has(img.id);
-                const isHovered = hoveredRefId === img.id;
-                return (
-                  <div
-                    key={img.id}
-                    data-refimg-id={img.id}
-                    onMouseEnter={() => setHoveredRefId(img.id)}
-                    onMouseLeave={() => setHoveredRefId(null)}
-                    style={{
-                      position: "relative",
-                      width: "88px",
-                      height: "80px",
-                      borderRadius: "10px",
-                      overflow: "hidden",
-                      background: "#1A1C1F",
-                      flexShrink: 0,
-                      border: img.error ? "1px solid rgba(248,113,113,0.4)" : "1px solid rgba(255,255,255,0.08)",
-                      animation: isRemoving ? "none" : "refImgIn 260ms cubic-bezier(0.16,1,0.3,1)",
-                      ...(isRemoving ? {
-                        transition: "opacity 170ms cubic-bezier(0.4,0,1,1), transform 170ms cubic-bezier(0.4,0,1,1)",
-                        opacity: 0,
-                        transform: "translateY(-10px) scale(0.92)",
-                      } : {}),
-                    }}
-                  >
-                    {/* Thumbnail */}
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      src={thumbSrc(img.objectUrl)}
-                      alt=""
-                      style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
-                    />
-                    {/* Hover fullscreen overlay */}
-                    {isHovered && !img.uploading && !img.error && (
-                      <div
-                        onClick={() => setRefPreview({ url: img.objectUrl, mediaKind: "image" })}
-                        style={{
-                          position: "absolute", inset: 0,
-                          background: "rgba(0,0,0,0.35)",
-                          display: "flex", alignItems: "center", justifyContent: "center",
-                          cursor: "zoom-in",
-                          transition: "background 120ms",
-                        }}
-                      >
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.9)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/>
-                        </svg>
-                      </div>
-                    )}
-                    {/* Upload overlay */}
-                    {img.uploading && (
-                      <div style={{
-                        position: "absolute",
-                        inset: 0,
-                        background: "rgba(0,0,0,0.55)",
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                      }}>
-                        <span style={{
-                          width: "18px",
-                          height: "18px",
-                          borderRadius: "50%",
-                          border: "2px solid rgba(255,255,255,0.2)",
-                          borderTopColor: "#ff3df5",
-                          display: "inline-block",
-                          animation: "spin 0.75s linear infinite",
-                        }} />
-                      </div>
-                    )}
-                    {/* Error overlay */}
-                    {img.error && (
-                      <div style={{
-                        position: "absolute",
-                        inset: 0,
-                        background: "rgba(0,0,0,0.55)",
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                      }}>
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#f87171" strokeWidth="2" strokeLinecap="round">
-                          <circle cx="12" cy="12" r="10" /><path d="M12 8v4M12 16h.01" />
-                        </svg>
-                      </div>
-                    )}
-                    {/* X button */}
-                    <button
-                      onClick={() => removeImage(img.id)}
-                      style={{
-                        position: "absolute",
-                        top: "5px",
-                        right: "5px",
-                        width: "20px",
-                        height: "20px",
-                        borderRadius: "50%",
-                        background: "rgba(0,0,0,0.7)",
-                        border: "1px solid rgba(255,255,255,0.15)",
-                        color: "rgba(255,255,255,0.85)",
-                        cursor: "pointer",
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        lineHeight: 1,
-                        padding: 0,
-                        fontSize: "12px",
-                        transition: "background 120ms",
-                        zIndex: 2,
-                      }}
-                      onMouseEnter={e => { e.currentTarget.style.background = "rgba(0,0,0,0.9)"; }}
-                      onMouseLeave={e => { e.currentTarget.style.background = "rgba(0,0,0,0.7)"; }}
-                    >
-                      <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round">
-                        <path d="M18 6 6 18M6 6l12 12" />
-                      </svg>
-                    </button>
-                  </div>
-                );
-              })}
-
-              {/* Add-more button */}
-              {canAddImgs && (
-                <button
-                  onClick={() => openPicker("refImage", "image")}
-                  disabled={submitting}
-                  style={{
-                    width: "88px",
-                    height: "80px",
-                    borderRadius: "10px",
-                    border: "1.5px dashed rgba(255,255,255,0.4)",
-                    background: "rgba(255,255,255,0.025)",
-                    cursor: submitting ? "not-allowed" : "pointer",
-                    display: "flex",
-                    flexDirection: "column",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    gap: "6px",
-                    color: "rgba(255,255,255,0.75)",
-                    flexShrink: 0,
-                    transition: "border-color 140ms, background 140ms, color 140ms",
-                  }}
-                  onMouseEnter={e => {
-                    if (!submitting) {
-                      e.currentTarget.style.borderColor = "rgba(255,255,255,0.6)";
-                      e.currentTarget.style.background = "rgba(255,255,255,0.05)";
-                      e.currentTarget.style.color = "#ffffff";
-                    }
-                  }}
-                  onMouseLeave={e => {
-                    e.currentTarget.style.borderColor = "rgba(255,255,255,0.4)";
-                    e.currentTarget.style.background = "rgba(255,255,255,0.025)";
-                    e.currentTarget.style.color = "rgba(255,255,255,0.75)";
-                  }}
-                >
-                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                    <rect x="3" y="3" width="18" height="18" rx="2" />
-                    <circle cx="8.5" cy="8.5" r="1.5" />
-                    <path d="m21 15-5-5L5 21" />
-                    <path d="M19 3v6M22 6h-6" />
-                  </svg>
-                  <span style={{ fontSize: "10px", letterSpacing: "0.02em" }}>
-                    {maxImgs - refImages.length} left
-                  </span>
-                </button>
-              )}
-            </div>
-          )}
-
-          {/* ── Video reference slots ── */}
-          {isVideo && vidRefHandles.length > 0 && (() => {
-            type VidSlot =
-              | { kind: "filled"; target: "startFrame"|"endFrame"|"resource"|"videoRef"|"referenceVideo"|"audioRef"; mediaKind: "image"|"video"|"audio"; label: string; ref: RefImage }
-              | { kind: "add";    target: "startFrame"|"endFrame"|"resource"|"videoRef"|"referenceVideo"|"audioRef"; mediaKind: "image"|"video"|"audio"; label: string; countLeft: number }
-              | { kind: "element-filled"; element: KlingElement }
-              | { kind: "element-add"; countLeft: number };
-            const slots: VidSlot[] = [];
-            const useElems = !!(vidModel?.apiInput.useKlingElements);
-            const isHappyHorse = vidModel?.id === "happyhorse";
-            const isVeo = modelId === "veo3" || modelId === "veo3_fast" || modelId === "veo3_lite";
-
-            for (const h of vidRefHandles) {
-              // Veo: hide start/end frames when in references mode, hide resource when in frames mode
-              if (isVeo) {
-                if (veoMode === "references" && (h === "startFrame" || h === "endFrame")) continue;
-                if (veoMode === "frames" && h === "resource") continue;
-                // Also hide video/audio handles for Veo as they are not used in current integration
-                if (h === "videoRef" || h === "referenceVideo" || h === "audioRef") continue;
-              }
-
-              // HappyHorse: hide startFrame when characters are attached, hide resource when startFrame is attached
-              if (isHappyHorse && h === "startFrame" && vidResources.length > 0) continue;
-              if (isHappyHorse && h === "resource" && vidStartFrame) continue;
-              if (h === "startFrame") {
-                if (vidStartFrame) slots.push({ kind: "filled", target: h, mediaKind: "image", label: "Start Frame", ref: vidStartFrame });
-                else               slots.push({ kind: "add",    target: h, mediaKind: "image", label: "Start Frame", countLeft: 1 });
-              } else if (h === "endFrame") {
-                if (vidEndFrame)   slots.push({ kind: "filled", target: h, mediaKind: "image", label: "End Frame", ref: vidEndFrame });
-                else               slots.push({ kind: "add",    target: h, mediaKind: "image", label: "End Frame", countLeft: 1 });
-              } else if (h === "videoRef") {
-                if (vidVideoRef)   slots.push({ kind: "filled", target: h, mediaKind: "video", label: "Ref Video", ref: vidVideoRef });
-                else               slots.push({ kind: "add",    target: h, mediaKind: "video", label: "Ref Video", countLeft: 1 });
-              } else if (h === "resource") {
-                if (useElems) {
-                  vidElements.forEach(el => slots.push({ kind: "element-filled", element: el }));
-                  if (vidElements.length < 3) slots.push({ kind: "element-add", countLeft: 3 - vidElements.length });
-                } else {
-                  const maxRes = vidModel?.maxResources ?? 3;
-                  const resLabel = vidModel?.id === "happyhorse" ? "Character" : "Image";
-                  vidResources.forEach(r => slots.push({ kind: "filled", target: h, mediaKind: "image", label: resLabel, ref: r }));
-                  if (vidResources.length < maxRes)
-                    slots.push({ kind: "add", target: h, mediaKind: "image", label: resLabel, countLeft: maxRes - vidResources.length });
-                }
-              } else if (h === "referenceVideo") {
-                const maxRefVid = vidModel?.maxReferenceVideos ?? 3;
-                vidRefVideos.forEach(r => slots.push({ kind: "filled", target: h, mediaKind: "video", label: "Ref Video", ref: r }));
-                if (vidRefVideos.length < maxRefVid)
-                  slots.push({ kind: "add", target: h, mediaKind: "video", label: "Ref Video", countLeft: maxRefVid - vidRefVideos.length });
-              } else if (h === "audioRef") {
-                const maxRefAud = vidModel?.maxReferenceAudios ?? 3;
-                vidRefAudios.forEach(r => slots.push({ kind: "filled", target: h, mediaKind: "audio", label: "Audio", ref: r }));
-                if (vidRefAudios.length < maxRefAud)
-                  slots.push({ kind: "add", target: h, mediaKind: "audio", label: "Audio", countLeft: maxRefAud - vidRefAudios.length });
-              }
-            }
-            return (
-              <div style={{ padding: "14px 16px 0", display: "flex", gap: "10px", flexWrap: "wrap", alignItems: "flex-start" }}>
-                {slots.map((slot, idx) => {
-                  // ── Element-filled slot ──────────────────────────────────────
-                  if (slot.kind === "element-filled") {
-                    const el = slot.element;
-                    const thumb = el.imageUrls[0];
-                    const elemHovId = `elem-${el.id}`;
-                    return (
-                      <div
-                        key={el.id}
-                        onMouseEnter={() => setHoveredRefId(elemHovId)}
-                        onMouseLeave={() => setHoveredRefId(null)}
-                        style={{
-                          position: "relative", width: "88px", height: "80px",
-                          borderRadius: "10px", overflow: "hidden", flexShrink: 0,
-                          background: "#1a1c1f", border: "1px solid rgba(255,255,255,0.12)",
-                        }}
-                      >
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img src={thumb} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
-                        {hoveredRefId === elemHovId && (
-                          <div
-                            onClick={() => setRefPreview({ url: thumb, mediaKind: "image" })}
-                            style={{
-                              position: "absolute", inset: 0,
-                              background: "rgba(0,0,0,0.35)",
-                              display: "flex", alignItems: "center", justifyContent: "center",
-                              cursor: "zoom-in", zIndex: 1,
-                            }}
-                          >
-                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.9)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                              <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/>
-                            </svg>
-                          </div>
-                        )}
-                        {el.imageUrls.length > 1 && (
-                          <div style={{ position: "absolute", top: "5px", left: "5px", background: "rgba(0,0,0,0.65)", borderRadius: "4px", padding: "1px 5px", fontSize: "9px", fontWeight: 700, color: "rgba(255,255,255,0.85)", letterSpacing: "0.04em" }}>
-                            {el.imageUrls.length}
-                          </div>
-                        )}
-                        <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, padding: "12px 5px 4px", background: "linear-gradient(to top, rgba(0,0,0,0.8) 0%, transparent 100%)", textAlign: "center" }}>
-                          <span style={{ fontSize: "9px", fontWeight: 700, letterSpacing: "0.04em", color: "rgba(255,255,255,0.85)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", display: "block", padding: "0 4px" }}>{el.name}</span>
-                        </div>
-                        <button onClick={() => setVidElements(prev => prev.filter(e => e.id !== el.id))} style={{
-                          position: "absolute", top: "5px", right: "5px", width: "20px", height: "20px",
-                          borderRadius: "50%", background: "rgba(0,0,0,0.7)", border: "1px solid rgba(255,255,255,0.15)",
-                          color: "rgba(255,255,255,0.85)", cursor: "pointer",
-                          display: "flex", alignItems: "center", justifyContent: "center", padding: 0, transition: "background 120ms",
-                          zIndex: 2,
-                        }}
-                          onMouseEnter={e => { e.currentTarget.style.background = "rgba(0,0,0,0.9)"; }}
-                          onMouseLeave={e => { e.currentTarget.style.background = "rgba(0,0,0,0.7)"; }}>
-                          <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
-                        </button>
-                      </div>
-                    );
-                  }
-
-                  // ── Element-add slot ─────────────────────────────────────────
-                  if (slot.kind === "element-add") {
-                    return (
-                      <button key={`element-add-${idx}`}
-                        onClick={() => setElementPickerOpen(true)}
-                        disabled={submitting}
-                        style={{
-                          width: "88px", height: "80px", borderRadius: "10px", flexShrink: 0,
-                          border: "1.5px dashed rgba(255,255,255,0.2)", background: "rgba(255,255,255,0.03)",
-                          cursor: submitting ? "not-allowed" : "pointer",
-                          display: "flex", flexDirection: "column", alignItems: "center",
-                          justifyContent: "center", gap: "5px", color: "rgba(255,255,255,0.4)",
-                          transition: "border-color 140ms, background 140ms, color 140ms",
-                        }}
-                        onMouseEnter={e => { if (!submitting) { e.currentTarget.style.borderColor = "rgba(255,255,255,0.4)"; e.currentTarget.style.background = "rgba(255,255,255,0.06)"; e.currentTarget.style.color = "rgba(255,255,255,0.8)"; } }}
-                        onMouseLeave={e => { e.currentTarget.style.borderColor = "rgba(255,255,255,0.2)"; e.currentTarget.style.background = "rgba(255,255,255,0.03)"; e.currentTarget.style.color = "rgba(255,255,255,0.4)"; }}
-                      >
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                          <path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/>
-                          <path d="M20 3v4M22 5h-4"/>
-                        </svg>
-                        <span style={{ fontSize: "10px", fontWeight: 600, letterSpacing: "0.04em", textTransform: "uppercase" as const }}>Element</span>
-                        <span style={{ fontSize: "9px", fontWeight: 500, color: "rgba(255,255,255,0.3)", letterSpacing: "0.03em" }}>{slot.countLeft} left</span>
-                      </button>
-                    );
-                  }
-
-                  // ── Regular filled / add slots ───────────────────────────────
-                  const { target, mediaKind, label } = slot;
-                  const MediaIcon = () => mediaKind === "image" ? (
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                      <rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/>
-                    </svg>
-                  ) : mediaKind === "audio" ? (
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>
-                    </svg>
-                  ) : (
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                      <rect x="2" y="5" width="15" height="14" rx="2"/>
-                      <path d="m17 8 5-3v14l-5-3V8Z"/>
-                    </svg>
-                  );
-
-                  if (slot.kind === "filled") {
-                    const r = slot.ref;
-                    const slotHovId = `slot-${r.id}`;
-                    return (
-                      <div
-                        key={r.id}
-                        onMouseEnter={() => setHoveredRefId(slotHovId)}
-                        onMouseLeave={() => setHoveredRefId(null)}
-                        style={{
-                          position: "relative", width: "88px", height: "80px",
-                          borderRadius: "10px", overflow: "hidden", flexShrink: 0,
-                          background: "#1a1c1f",
-                          border: r.error ? "1px solid rgba(248,113,113,0.4)" : "1px solid rgba(255,255,255,0.12)",
-                        }}
-                      >
-                        {mediaKind === "image" ? (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img src={thumbSrc(r.objectUrl)} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
-                        ) : mediaKind === "video" ? (
-                          <video
-                            src={r.objectUrl}
-                            autoPlay
-                            muted
-                            loop
-                            playsInline
-                            style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
-                          />
-                        ) : (
-                          <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(255,255,255,0.04)", color: "rgba(255,255,255,0.5)" }}>
-                            <MediaIcon />
-                          </div>
-                        )}
-                        {/* Hover fullscreen overlay */}
-                        {hoveredRefId === slotHovId && !r.uploading && !r.error && mediaKind !== "audio" && (
-                          <div
-                            onClick={() => setRefPreview({ url: r.objectUrl, mediaKind })}
-                            style={{
-                              position: "absolute", inset: 0,
-                              background: "rgba(0,0,0,0.35)",
-                              display: "flex", alignItems: "center", justifyContent: "center",
-                              cursor: "zoom-in", zIndex: 1,
-                            }}
-                          >
-                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.9)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                              <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/>
-                            </svg>
-                          </div>
-                        )}
-                        <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, padding: "12px 5px 4px", background: "linear-gradient(to top, rgba(0,0,0,0.75) 0%, transparent 100%)", textAlign: "center" }}>
-                          <span style={{ fontSize: "9px", fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase" as const, color: "rgba(255,255,255,0.7)" }}>{label}</span>
-                        </div>
-                        {r.uploading && (
-                          <div style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,0.55)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                            <span style={{ width: "16px", height: "16px", borderRadius: "50%", border: "2px solid rgba(255,255,255,0.15)", borderTopColor: "rgba(255,255,255,0.8)", display: "inline-block", animation: "spin 0.75s linear infinite" }} />
-                          </div>
-                        )}
-                        {r.error && (
-                          <div style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,0.55)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#f87171" strokeWidth="2" strokeLinecap="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
-                          </div>
-                        )}
-                        <button onClick={() => removeVidRef(r.id, target)} style={{
-                          position: "absolute", top: "5px", right: "5px", width: "20px", height: "20px",
-                          borderRadius: "50%", background: "rgba(0,0,0,0.7)", border: "1px solid rgba(255,255,255,0.15)",
-                          color: "rgba(255,255,255,0.85)", cursor: "pointer",
-                          display: "flex", alignItems: "center", justifyContent: "center", padding: 0, transition: "background 120ms",
-                          zIndex: 2,
-                        }}
-                          onMouseEnter={e => { e.currentTarget.style.background = "rgba(0,0,0,0.9)"; }}
-                          onMouseLeave={e => { e.currentTarget.style.background = "rgba(0,0,0,0.7)"; }}>
-                          <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
-                        </button>
-                      </div>
-                    );
-                  }
-
+          {/* ── Reference image thumbnails (Always visible, integrated) ── */}
+          <div style={{ maxHeight: "200px", overflowY: "auto", borderBottom: "none" }}>
+            {!isVideo && imgModel?.supportsImages && (hasRefImgs || canAddImgs) && (
+              <div style={{ padding: "14px 16px 0", display: "flex", gap: "10px", flexWrap: "wrap", alignItems: "flex-start", paddingBottom: "14px" }}>
+                {refImages.map(img => {
+                  const isRemoving = removingIds.has(img.id);
+                  const isHovered = hoveredRefId === img.id;
                   return (
-                    <button key={`${target}-add-${idx}`}
-                      onClick={() => {
-                        if (mediaKind === "audio") {
-                          vidPickTarget.current = target;
-                          vidAudioInputRef.current?.click();
-                        } else {
-                          openPicker(target as "startFrame" | "endFrame" | "resource" | "videoRef" | "referenceVideo", mediaKind);
-                        }
-                      }}
-                      disabled={submitting}
-                      style={{
-                        width: "88px", height: "80px", borderRadius: "10px", flexShrink: 0,
-                        border: "1.5px dashed rgba(255,255,255,0.2)", background: "rgba(255,255,255,0.03)",
-                        cursor: submitting ? "not-allowed" : "pointer",
-                        display: "flex", flexDirection: "column", alignItems: "center",
-                        justifyContent: "center", gap: "5px", color: "rgba(255,255,255,0.4)",
-                        transition: "border-color 140ms, background 140ms, color 140ms",
-                      }}
-                      onMouseEnter={e => { if (!submitting) { e.currentTarget.style.borderColor = "rgba(255,255,255,0.4)"; e.currentTarget.style.background = "rgba(255,255,255,0.06)"; e.currentTarget.style.color = "rgba(255,255,255,0.8)"; } }}
-                      onMouseLeave={e => { e.currentTarget.style.borderColor = "rgba(255,255,255,0.2)"; e.currentTarget.style.background = "rgba(255,255,255,0.03)"; e.currentTarget.style.color = "rgba(255,255,255,0.4)"; }}
-                    >
-                      <MediaIcon />
-                      <span style={{ fontSize: "10px", fontWeight: 600, letterSpacing: "0.04em", textTransform: "uppercase" as const }}>{label}</span>
-                      <span style={{ fontSize: "9px", fontWeight: 500, color: "rgba(255,255,255,0.3)", letterSpacing: "0.03em" }}>{slot.countLeft} left</span>
-                    </button>
+                    <div key={img.id} onMouseEnter={() => setHoveredRefId(img.id)} onMouseLeave={() => setHoveredRefId(null)} style={{ position: "relative", width: "64px", height: "64px", borderRadius: "8px", overflow: "hidden", background: "#1A1C1F", flexShrink: 0, border: img.error ? "1px solid rgba(248,113,113,0.4)" : "1px solid rgba(255,255,255,0.08)", animation: isRemoving ? "none" : "refImgIn 260ms cubic-bezier(0.16,1,0.3,1)", ...(isRemoving ? { transition: "opacity 170ms, transform 170ms", opacity: 0, transform: "translateY(-10px) scale(0.92)" } : {}) }}>
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={thumbSrc(img.objectUrl)} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
+                      {isHovered && !img.uploading && !img.error && (
+                        <div onClick={() => setRefPreview({ url: img.objectUrl, mediaKind: "image" })} style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,0.35)", display: "flex", alignItems: "center", justifyContent: "center", cursor: "zoom-in" }}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.9)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg></div>
+                      )}
+                      <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, padding: "8px 4px 3px", background: "linear-gradient(to top, rgba(0,0,0,0.8) 0%, transparent 100%)", textAlign: "center" }}><span style={{ fontSize: "8px", fontWeight: 700, letterSpacing: "0.04em", color: "rgba(255,255,255,0.85)", textTransform: "uppercase" }}>Image</span></div>
+                      {img.uploading && (<div style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,0.55)", display: "flex", alignItems: "center", justifyContent: "center" }}><span style={{ width: "14px", height: "14px", borderRadius: "50%", border: "2px solid rgba(255,255,255,0.2)", borderTopColor: "#ff3df5", display: "inline-block", animation: "spin 0.75s linear infinite" }} /></div>)}
+                      {img.error && (<div style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,0.55)", display: "flex", alignItems: "center", justifyContent: "center" }}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#f87171" strokeWidth="2" strokeLinecap="round"><circle cx="12" cy="12" r="10" /><path d="M12 8v4M12 16h.01" /></svg></div>)}
+                      <button onClick={() => removeImage(img.id)} style={{ position: "absolute", top: "3px", right: "3px", width: "16px", height: "16px", borderRadius: "50%", background: "rgba(0,0,0,0.7)", border: "1px solid rgba(255,255,255,0.15)", color: "rgba(255,255,255,0.85)", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", padding: 0, fontSize: "10px", zIndex: 2 }}>
+<svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round"><path d="M18 6 6 18M6 6l12 12" /></svg></button>
+                    </div>
                   );
                 })}
-              </div>
-            );
-          })()}
+                {canAddImgs && (
+                  <button onClick={() => openPicker("refImage", "image")} disabled={submitting} style={{ width: "64px", height: "64px", borderRadius: "8px", border: "1.5px dashed rgba(255,255,255,0.2)", background: "rgba(255,255,255,0.03)", cursor: submitting ? "not-allowed" : "pointer", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: "4px", color: "rgba(255,255,255,0.45)", flexShrink: 0, transition: "all 140ms" }}>
+                    <span style={{ fontSize: "9px", fontWeight: 700, letterSpacing: "0.04em" }}>IMAGE</span>
+                    <span style={{ fontSize: "8px", color: "rgba(255,255,255,0.3)" }}>
+                      {maxImgs - refImages.length} left
+                    </span>
 
+                  </button>
+                )}
+              </div>
+            )}
+            {isVideo && vidRefHandles.length > 0 && (() => {
+              type VidSlot =
+                | { kind: "filled"; target: "startFrame"|"endFrame"|"resource"|"videoRef"|"referenceVideo"|"audioRef"; mediaKind: "image"|"video"|"audio"; label: string; ref: RefImage }
+                | { kind: "add";    target: "startFrame"|"endFrame"|"resource"|"videoRef"|"referenceVideo"|"audioRef"; mediaKind: "image"|"video"|"audio"; label: string; countLeft: number }
+                | { kind: "element-filled"; element: KlingElement }
+                | { kind: "element-add"; countLeft: number };
+              const slots: VidSlot[] = [];
+              const useElems = !!(vidModel?.apiInput.useKlingElements);
+              const isHappyHorse = vidModel?.id === "happyhorse";
+              const isVeo = modelId === "veo3" || modelId === "veo3_fast" || modelId === "veo3_lite";
+              for (const h of vidRefHandles) {
+                if (isVeo) {
+                  if (veoMode === "references" && (h === "startFrame" || h === "endFrame")) continue;
+                  if (veoMode === "frames" && h === "resource") continue;
+                  if (h === "videoRef" || h === "referenceVideo" || h === "audioRef") continue;
+                }
+                if (isHappyHorse && h === "startFrame" && vidResources.length > 0) continue;
+                if (isHappyHorse && h === "resource" && vidStartFrame) continue;
+                if (h === "startFrame") {
+                  if (vidStartFrame) slots.push({ kind: "filled", target: h, mediaKind: "image", label: "Start Frame", ref: vidStartFrame });
+                  else               slots.push({ kind: "add",    target: h, mediaKind: "image", label: "Start Frame", countLeft: 1 });
+                } else if (h === "endFrame") {
+                  if (vidEndFrame)   slots.push({ kind: "filled", target: h, mediaKind: "image", label: "End Frame", ref: vidEndFrame });
+                  else               slots.push({ kind: "add",    target: h, mediaKind: "image", label: "End Frame", countLeft: 1 });
+                } else if (h === "videoRef") {
+                  if (vidVideoRef)   slots.push({ kind: "filled", target: h, mediaKind: "video", label: "Ref Video", ref: vidVideoRef });
+                  else               slots.push({ kind: "add",    target: h, mediaKind: "video", label: "Ref Video", countLeft: 1 });
+                } else if (h === "resource") {
+                  if (useElems) {
+                    vidElements.forEach(el => slots.push({ kind: "element-filled", element: el }));
+                    if (vidElements.length < 3) slots.push({ kind: "element-add", countLeft: 3 - vidElements.length });
+                  } else {
+                    const maxRes = vidModel?.maxResources ?? 3;
+                    const resLabel = vidModel?.id === "happyhorse" ? "Character" : "Image";
+                    vidResources.forEach(r => slots.push({ kind: "filled", target: h, mediaKind: "image", label: resLabel, ref: r }));
+                    if (vidResources.length < maxRes)
+                      slots.push({ kind: "add", target: h, mediaKind: "image", label: resLabel, countLeft: maxRes - vidResources.length });
+                  }
+                } else if (h === "referenceVideo") {
+                  const maxRefVid = vidModel?.maxReferenceVideos ?? 3;
+                  vidRefVideos.forEach(r => slots.push({ kind: "filled", target: h, mediaKind: "video", label: "Ref Video", ref: r }));
+                  if (vidRefVideos.length < maxRefVid)
+                    slots.push({ kind: "add", target: h, mediaKind: "video", label: "Ref Video", countLeft: maxRefVid - vidRefVideos.length });
+                } else if (h === "audioRef") {
+                  const maxRefAud = vidModel?.maxReferenceAudios ?? 3;
+                  vidRefAudios.forEach(r => slots.push({ kind: "filled", target: h, mediaKind: "audio", label: "Audio", ref: r }));
+                  if (vidRefAudios.length < maxRefAud)
+                    slots.push({ kind: "add", target: h, mediaKind: "audio", label: "Audio", countLeft: maxRefAud - vidRefAudios.length });
+                }
+              }
+              return (
+                <div style={{ padding: "14px 16px 14px", display: "flex", gap: "10px", flexWrap: "wrap", alignItems: "flex-start" }}>
+                  {slots.map((slot, idx) => {
+                    if (slot.kind === "element-filled") {
+                      const el = slot.element; const thumb = el.imageUrls[0]; const hovId = `elem-${el.id}`;
+                      return (
+                        <div key={el.id} onMouseEnter={() => setHoveredRefId(hovId)} onMouseLeave={() => setHoveredRefId(null)} style={{ position: "relative", width: "64px", height: "64px", borderRadius: "8px", overflow: "hidden", flexShrink: 0, background: "#1a1c1f", border: "1px solid rgba(255,255,255,0.12)" }}>
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img src={thumb} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
+                          {hoveredRefId === hovId && (
+                            <div onClick={() => setRefPreview({ url: thumb, mediaKind: "image" })} style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,0.35)", display: "flex", alignItems: "center", justifyContent: "center", cursor: "zoom-in", zIndex: 1 }}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.9)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg></div>
+                          )}
+                          <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, padding: "8px 4px 3px", background: "linear-gradient(to top, rgba(0,0,0,0.8) 0%, transparent 100%)", textAlign: "center" }}><span style={{ fontSize: "8px", fontWeight: 700, letterSpacing: "0.04em", color: "rgba(255,255,255,0.85)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", display: "block", padding: "0 4px" }}>{slot.label.toUpperCase()}</span></div>
+                          <button onClick={() => setVidElements(prev => prev.filter(e => e.id !== el.id))} style={{ position: "absolute", top: "3px", right: "3px", width: "16px", height: "16px", borderRadius: "50%", background: "rgba(0,0,0,0.7)", border: "1px solid rgba(255,255,255,0.15)", color: "rgba(255,255,255,0.85)", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", padding: 0, transition: "background 120ms", zIndex: 2 }}><svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+                        </div>
+                        );
+                        }
+                        if (slot.kind === "element-add") {
+                        return (
+                        <button key={`element-add-${idx}`} onClick={() => setElementPickerOpen(true)} disabled={submitting} style={{ width: "64px", height: "64px", borderRadius: "8px", flexShrink: 0, border: "1.5px dashed rgba(255,255,255,0.2)", background: "rgba(255,255,255,0.03)", cursor: submitting ? "not-allowed" : "pointer", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: "2px", color: "rgba(255,255,255,0.4)", transition: "all 140ms" }}>
+                        <span style={{ fontSize: "9px", fontWeight: 700, letterSpacing: "0.04em" }}>ELEM</span>
+                        <span style={{ fontSize: "8px", color: "rgba(255,255,255,0.3)" }}>{slot.countLeft} left</span>
+                        </button>
+                        );
+                        }
+                        if (slot.kind === "filled") {
+                        const r = slot.ref; const hovId = `slot-${r.id}`;
+                        return (
+                        <div key={r.id} onMouseEnter={() => setHoveredRefId(hovId)} onMouseLeave={() => setHoveredRefId(null)} style={{ position: "relative", width: "64px", height: "64px", borderRadius: "8px", overflow: "hidden", flexShrink: 0, background: "#1a1c1f", border: r.error ? "1px solid rgba(248,113,113,0.4)" : "1px solid rgba(255,255,255,0.12)" }}>
+                          {slot.mediaKind === "image" ? <img src={thumbSrc(r.objectUrl)} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} /> : slot.mediaKind === "video" ? <video src={r.objectUrl} autoPlay muted loop playsInline style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} /> : <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(255,255,255,0.04)" }}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg></div>}
+                          {hoveredRefId === hovId && !r.uploading && !r.error && slot.mediaKind !== "audio" && (
+                            <div onClick={() => setRefPreview({ url: r.objectUrl, mediaKind: slot.mediaKind })} style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,0.35)", display: "flex", alignItems: "center", justifyContent: "center", cursor: "zoom-in", zIndex: 1 }}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.9)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg></div>
+                          )}
+                          <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, padding: "8px 4px 3px", background: "linear-gradient(to top, rgba(0,0,0,0.8) 0%, transparent 100%)", textAlign: "center" }}><span style={{ fontSize: "8px", fontWeight: 700, letterSpacing: "0.04em", color: "rgba(255,255,255,0.85)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", display: "block", padding: "0 4px" }}>{slot.label.toUpperCase()}</span></div>
+                          <button onClick={() => removeVidRef(r.id, slot.target)} style={{ position: "absolute", top: "3px", right: "3px", width: "16px", height: "16px", borderRadius: "50%", background: "rgba(0,0,0,0.7)", border: "1px solid rgba(255,255,255,0.15)", color: "rgba(255,255,255,0.85)", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", padding: 0, transition: "background 120ms", zIndex: 2 }}><svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+                        </div>
+                        );
+                        }
+                        return (
+                        <button key={`${slot.target}-add-${idx}`} onClick={() => slot.mediaKind === "audio" ? (vidPickTarget.current = slot.target, vidAudioInputRef.current?.click()) : openPicker(slot.target as any, slot.mediaKind)} disabled={submitting} style={{ width: "64px", height: "64px", borderRadius: "8px", flexShrink: 0, border: "1.5px dashed rgba(255,255,255,0.2)", background: "rgba(255,255,255,0.03)", cursor: submitting ? "not-allowed" : "pointer", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: "2px", color: "rgba(255,255,255,0.4)", transition: "all 140ms" }}>
+                        <span style={{ fontSize: "9px", fontWeight: 700, letterSpacing: "0.04em" }}>{slot.label === "Ref Video" ? "VIDEO" : slot.label === "Audio" ? "AUDIO" : slot.label.toUpperCase()}</span>
+                        <span style={{ fontSize: "8px", color: "rgba(255,255,255,0.3)" }}>{slot.countLeft} left</span>
+                        </button>
+                        );
+                  })}
+                </div>
+              );
+            })()}
+          </div>
+
+          {/* ── Prompt input ── */}
           {/* ── Input + Controls + Generate ── */}
           <div style={{
-            padding: (hasRefImgs || (isVideo && vidRefHandles.length > 0)) ? "12px 14px 14px 16px" : "16px 14px 14px 16px",
+            padding: `${(isVideo && vidRefHandles.length > 0) || (!isVideo && !!imgModel?.supportsImages) ? 0 : 16}px 14px 14px 16px`,
             display: "flex",
             flexDirection: "column",
             gap: "10px",
@@ -2389,7 +2073,7 @@ function GalleryInner() {
                 ref={inputRef}
                 data-prompt-input=""
                 value={prompt}
-                rows={3}
+                rows={1}
                 onChange={e => {
                   const text = e.target.value;
                   const cursor = e.target.selectionStart ?? text.length;
@@ -2435,7 +2119,7 @@ function GalleryInner() {
                   letterSpacing: "-0.01em",
                   padding: 0,
                   resize: "none",
-                  maxHeight: "440px",
+                  maxHeight: "264px",
                   overflowY: "auto",
                   scrollbarWidth: "none",
                 } as React.CSSProperties}
@@ -2514,7 +2198,7 @@ function GalleryInner() {
               )}
             </div>
             {/* Bottom row: controls + generate button — always stays at the bottom, never moves on expand */}
-            <div style={{ display: "flex", alignItems: "flex-end", gap: "12px" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "12px", borderTop: "1px solid rgba(255,255,255,0.05)", paddingTop: "12px", marginTop: "4px" }}>
               {/* Controls group */}
               <div style={{ flex: 1, display: "flex", alignItems: "center", gap: "7px", flexWrap: "wrap" }}>
                 {/* Model picker */}
@@ -2744,74 +2428,60 @@ function GalleryInner() {
                 )}
               </div>{/* end controls group */}
 
-              {/* Character count — same level as controls, left of generate button */}
-              {promptMaxLength !== null && (
-                <div
-                  aria-hidden
+              {/* Character count + Generate button */}
+              <div style={{ display: "flex", alignItems: "center", gap: "12px", flexShrink: 0 }}>
+                {promptMaxLength !== null && (
+                  <div
+                    aria-hidden
+                    style={{
+                      fontSize: "11px",
+                      fontWeight: 600,
+                      fontVariantNumeric: "tabular-nums",
+                      color: promptOverLimit ? "#f87171" : "rgba(255,255,255,0.3)",
+                      pointerEvents: "none",
+                      userSelect: "none",
+                    }}
+                  >
+                    {prompt.length.toLocaleString()}/{promptMaxLength.toLocaleString()}
+                  </div>
+                )}
+
+                <button
+                  onClick={generate}
+                  disabled={!canGenerate}
                   style={{
                     display: "flex",
                     alignItems: "center",
-                    height: "36px",
-                    padding: "0 8px",
-                    borderRadius: 6,
-                    fontSize: 13,
-                    fontWeight: 700,
-                    fontVariantNumeric: "tabular-nums",
-                    lineHeight: 1,
-                    pointerEvents: "none",
-                    userSelect: "none",
-                    flexShrink: 0,
-                    whiteSpace: "nowrap",
-                    color: promptOverLimit ? "#f87171" : "#ffffff",
-                    background: promptOverLimit ? "#3a1010" : "#2a2a2a",
+                    justifyContent: "center",
+                    width: "44px",
+                    height: "44px",
+                    borderRadius: "50%",
+                    border: "none",
+                    background: "#ff3df5",
+                    color: "#060A06",
+                    cursor: !canGenerate ? "not-allowed" : "pointer",
+                    opacity: !canGenerate ? 0.4 : 1,
+                    transition: "all 200ms cubic-bezier(0.16,1,0.3,1)",
+                    transform: !canGenerate ? "scale(0.92)" : "scale(1)",
+                    boxShadow: canGenerate ? "0 4px 12px rgba(255,61,245,0.25)" : "none",
                   }}
+                  onMouseEnter={e => { if (canGenerate) { e.currentTarget.style.background = "#cc00c4"; e.currentTarget.style.transform = "scale(1.08)"; } }}
+                  onMouseLeave={e => { if (canGenerate) { e.currentTarget.style.background = "#ff3df5"; e.currentTarget.style.transform = "scale(1)"; } }}
                 >
-                  {prompt.length.toLocaleString()}/{promptMaxLength.toLocaleString()}
-                </div>
-              )}
-
-              {/* Generate button — last item in the controls row */}
-              <button
-                onClick={generate}
-                disabled={!canGenerate}
-                style={{
-                  display: "flex",
-                  flexDirection: "row",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  gap: "7px",
-                  padding: "0 20px",
-                  height: "72px",
-                  borderRadius: "10px",
-                  border: "none",
-                  background: "#ff3df5",
-                  color: "#060A06",
-                  fontSize: "14px",
-                  fontWeight: 700,
-                  cursor: !canGenerate ? "not-allowed" : "pointer",
-                  opacity: !canGenerate ? 0.45 : 1,
-                  transition: "opacity 150ms, background 150ms",
-                  fontFamily: "inherit",
-                  flexShrink: 0,
-                  letterSpacing: "-0.02em",
-                  whiteSpace: "nowrap",
-                }}
-                onMouseEnter={e => { if (canGenerate) e.currentTarget.style.background = "#cc00c4"; }}
-                onMouseLeave={e => { e.currentTarget.style.background = "#ff3df5"; }}
-              >
-                {submitting ? (
-                  <>
+                  {submitting ? (
                     <span style={{
-                      width: "12px", height: "12px", borderRadius: "50%",
+                      width: "18px", height: "18px", borderRadius: "50%",
                       border: "2px solid rgba(6,10,6,0.25)", borderTopColor: "#060A06",
                       display: "inline-block", animation: "spin 0.75s linear infinite",
                     }} />
-                    Sending…
-                  </>
-                ) : (
-                  <>Generate <svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor" stroke="none" style={{ display: "inline", verticalAlign: "middle" }}><path d="M11.8525 4.21651L11.7221 3.2387C11.6906 3.00226 11.4889 2.82568 11.2504 2.82568C11.0118 2.82568 10.8102 3.00226 10.7786 3.23869L10.6483 4.21651C10.2658 7.0847 8.00939 9.34115 5.14119 9.72358L4.16338 9.85396C3.92694 9.88549 3.75037 10.0872 3.75037 10.3257C3.75037 10.5642 3.92694 10.7659 4.16338 10.7974L5.14119 10.9278C8.00938 11.3102 10.2658 13.5667 10.6483 16.4349L10.7786 17.4127C10.8102 17.6491 11.0118 17.8257 11.2504 17.8257C11.4889 17.8257 11.6906 17.6491 11.7221 17.4127L11.8525 16.4349C12.2349 13.5667 14.4913 11.3102 17.3595 10.9278L18.3374 10.7974C18.5738 10.7659 18.7504 10.5642 18.7504 10.3257C18.7504 10.0872 18.5738 9.88549 18.3374 9.85396L17.3595 9.72358C14.4913 9.34115 12.2349 7.0847 11.8525 4.21651Z" /><path d="M4.6519 14.7568L4.82063 14.2084C4.84491 14.1295 4.91781 14.0757 5.00037 14.0757C5.08292 14.0757 5.15582 14.1295 5.1801 14.2084L5.34883 14.7568C5.56525 15.4602 6.11587 16.0108 6.81925 16.2272L7.36762 16.3959C7.44652 16.4202 7.50037 16.4931 7.50037 16.5757C7.50037 16.6582 7.44652 16.7311 7.36762 16.7554L6.81926 16.9241C6.11587 17.1406 5.56525 17.6912 5.34883 18.3946L5.1801 18.9429C5.15582 19.0218 5.08292 19.0757 5.00037 19.0757C4.91781 19.0757 4.84491 19.0218 4.82063 18.9429L4.65191 18.3946C4.43548 17.6912 3.88486 17.1406 3.18147 16.9241L2.63311 16.7554C2.55421 16.7311 2.50037 16.6582 2.50037 16.5757C2.50037 16.4931 2.55421 16.4202 2.63311 16.3959L3.18148 16.2272C3.88486 16.0108 4.43548 15.4602 4.6519 14.7568Z" /></svg></>
-                )}
-              </button>
+                  ) : (
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round">
+                      <line x1="12" y1="19" x2="12" y2="5" />
+                      <polyline points="5 12 12 5 19 12" />
+                    </svg>
+                  )}
+                </button>
+              </div>
             </div>{/* end bottom row */}
           </div>
         </div>
@@ -3023,6 +2693,7 @@ function GalleryInner() {
         onClose={() => setPickerOpen(false)}
         onPickUrl={handlePickerSelect}
         onUpload={handlePickerUpload}
+        anchorRef={promptBarRef}
       />
 
       <ElementPickerModal
@@ -3784,22 +3455,34 @@ function GalleryCard({
   const [deleting, setDeleting] = useState(false);
   const [cardImgIdx, setCardImgIdx] = useState(0);
   const [naturalRatio, setNaturalRatio] = useState<string | null>(() => naturalRatioCache.get(item.url) ?? null);
+  const [isHovered, setIsHovered] = useState(false);
   const isVideo = item.mediaType === "video";
   const allUrls = item.imageUrls ?? [item.url];
   const displayUrl = allUrls[cardImgIdx] ?? item.url;
 
   useEffect(() => {
-    if (preloaded) return;
     const el = cardRef.current;
     if (!el) return;
     const observer = new IntersectionObserver(
-      ([entry]) => { if (entry.isIntersecting) { setShouldLoad(true); observer.disconnect(); } },
-      { rootMargin: "80px" },
+      ([entry]) => {
+        if (entry.isIntersecting) {
+          setShouldLoad(true);
+          if (isVideo) {
+            videoRef.current?.play().then(() => setPlaying(true)).catch(() => { });
+          }
+        } else {
+          if (isVideo) {
+            videoRef.current?.pause();
+            setPlaying(false);
+          }
+        }
+      },
+      { rootMargin: "80px", threshold: 0.1 },
     );
     observer.observe(el);
     return () => observer.disconnect();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [isVideo]);
 
   const storedRatio = (() => {
     const ar = item.aspect_ratio;
@@ -3855,8 +3538,8 @@ function GalleryCard({
     <div
       ref={cardRef}
       className={`gallery-item${selected ? " gallery-item--selected" : ""}${anySelected ? " gallery-item--anyselected" : ""}`}
-      onMouseEnter={() => { if (isVideo && !anySelected) videoRef.current?.play().then(() => setPlaying(true)).catch(() => { }); }}
-      onMouseLeave={() => { if (isVideo && videoRef.current) { videoRef.current.pause(); setPlaying(false); } }}
+      onMouseEnter={() => setIsHovered(true)}
+      onMouseLeave={() => setIsHovered(false)}
       onClick={anySelected ? onSelect : onOpen}
     >
       {/* ── Checkbox (top-left) ── */}
@@ -3872,12 +3555,12 @@ function GalleryCard({
           <video
             ref={videoRef}
             src={item.url}
-            muted={videoMuted}
+            muted={videoMuted || !isHovered}
             loop
             playsInline
             preload="metadata"
             onError={() => setFailed(true)}
-            style={{ width: "100%", height: "100%", objectFit: "contain", display: "block" }}
+            style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
           />
           {!playing && (
             <div className="gallery-play-icon">
@@ -3908,7 +3591,7 @@ function GalleryCard({
               loadedImageUrls.add(item.url);
             }}
             onError={() => setFailed(true)}
-            style={{ display: "block", width: "100%", height: "100%", objectFit: "contain", opacity: imgLoaded ? 1 : 0, transition: "opacity 280ms ease" }}
+            style={{ display: "block", width: "100%", height: "100%", objectFit: "cover", opacity: imgLoaded ? 1 : 0, transition: "opacity 280ms ease" }}
           />
           {/* Inner carousel nav — only when multiple images */}
           {allUrls.length > 1 && (
