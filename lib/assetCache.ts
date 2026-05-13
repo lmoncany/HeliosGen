@@ -30,9 +30,15 @@ export async function lookupAssetHash(hash: string): Promise<string | null> {
       .select("cdn_url")
       .eq("hash", hash)
       .maybeSingle();
-    if (error) { console.error("[asset-cache] lookup error:", error.message); return null; }
+    if (error) {
+      console.error("[asset-cache] lookup error:", error.message);
+      return null;
+    }
+    if (data) console.log("[asset-cache] HIT for hash:", hash.slice(0, 8), "->", data.cdn_url);
+    else console.log("[asset-cache] MISS for hash:", hash.slice(0, 8));
     return data?.cdn_url ?? null;
-  } catch {
+  } catch (err) {
+    console.error("[asset-cache] unexpected lookup error:", err);
     return null;
   }
 }
@@ -47,6 +53,7 @@ export async function storeAssetHash(
   mimeType: string,
   byteSize: number,
 ): Promise<void> {
+  console.log("[asset-cache] storing hash:", hash.slice(0, 8), "->", cdnUrl);
   const { error } = await supabaseAdmin
     .from("asset_cache")
     .upsert(

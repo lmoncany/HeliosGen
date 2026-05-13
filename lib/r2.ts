@@ -2,6 +2,7 @@ import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import { randomUUID } from "crypto";
 import https from "node:https";
 import http  from "node:http";
+import { hashBuffer, lookupAssetHash, storeAssetHash } from "./assetCache";
 
 let _s3: S3Client | null = null;
 
@@ -38,7 +39,13 @@ export async function uploadBuffer(
   contentType: string,
   folder: string
 ): Promise<string> {
+  const hash = hashBuffer(buffer);
+  const cached = await lookupAssetHash(hash);
+  if (cached) return cached;
+
   const key = `${folder}/${randomUUID()}.${ext(contentType)}`;
+  const url = cdnUrl(key);
+
   await getS3().send(
     new PutObjectCommand({
       Bucket:      process.env.R2_BUCKET_NAME!,
@@ -47,7 +54,15 @@ export async function uploadBuffer(
       ContentType: contentType,
     })
   );
-  return cdnUrl(key);
+
+  // Store hash and wait for it
+  try {
+    await storeAssetHash(hash, url, contentType, buffer.byteLength);
+  } catch (err) {
+    console.error("[r2] Failed to store asset hash:", err);
+  }
+
+  return url;
 }
 
 /** Fetch a remote URL to a Buffer using Node.js core (immune to Next.js AbortSignal patching). */

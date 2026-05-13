@@ -9,14 +9,13 @@
  *
  * Flow:
  *   1. Read body as Buffer
- *   2. Compute SHA-256 hash
- *   3. If hash already in asset_cache → return existing CDN URL (no R2 write)
- *   4. Otherwise upload to R2, store hash, return new CDN URL
+ *   2. Deduplication happens inside uploadBuffer (lib/r2.ts)
+ *   3. Record in user_uploads if authenticated
+ *   4. Return CDN URL
  */
 import { NextRequest, NextResponse } from "next/server";
 import { uploadBuffer } from "@/lib/r2";
 import { supabaseAdmin } from "@/lib/supabase/admin";
-import { hashBuffer, lookupAssetHash, storeAssetHash } from "@/lib/assetCache";
 
 export const maxDuration = 60;
 
@@ -46,19 +45,9 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "File exceeds 100 MB limit" }, { status: 413 });
     }
 
-    // ── Deduplication: check hash before any R2 write ────────────────────────
-    const hash = hashBuffer(buffer);
-    const cached = await lookupAssetHash(hash);
-    if (cached) {
-      return NextResponse.json({ cdnUrl: cached, cached: true });
-    }
-
-    // ── Upload to R2 ─────────────────────────────────────────────────────────
+    // ── Upload to R2 (Deduplication happens inside uploadBuffer) ──────────────
     const folder  = mimeType.startsWith("video/") ? "references" : "uploads";
     const cdnUrl  = await uploadBuffer(buffer, mimeType, folder);
-
-    // ── Store hash (fire-and-forget) ─────────────────────────────────────────
-    storeAssetHash(hash, cdnUrl, mimeType, buffer.byteLength).catch(() => {});
 
     // ── Record in user_uploads if authenticated ──────────────────────────────
     const userId = await getUserId(req);
@@ -73,7 +62,7 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    return NextResponse.json({ cdnUrl, cached: false });
+    return NextResponse.json({ cdnUrl });
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
     return NextResponse.json({ error: msg }, { status: 500 });

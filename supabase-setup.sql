@@ -97,3 +97,17 @@ create table public.user_settings (
 -- Only the service role accesses this table (from API routes).
 -- No user-facing RLS policies needed — the server never exposes the token to the client.
 alter table public.user_settings enable row level security;
+
+-- ── Asset Cache (Deduplication) ──────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS public.asset_cache (
+  hash       TEXT PRIMARY KEY,
+  cdn_url    TEXT NOT NULL,
+  mime_type  TEXT,
+  byte_size  BIGINT,
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- Only the service role accesses this table (from API routes).
+-- By enabling RLS without adding any policies, we ensure the table is invisible to the frontend.
+ALTER TABLE public.asset_cache ENABLE ROW LEVEL SECURITY;
