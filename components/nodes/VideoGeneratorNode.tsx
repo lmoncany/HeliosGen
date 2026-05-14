@@ -530,9 +530,24 @@ export default function VideoGeneratorNode({ id, data, selected }: NodeProps<Vid
     if (connectedHandles.has("resource"))   activeHandles.delete("startFrame");
   }
 
+  // Seedance: first/last frames and multimodal references are mutually exclusive scenarios
+  if (cfg.id === "seedance-2-fast") {
+    const hasFrame = connectedHandles.has("startFrame") || connectedHandles.has("endFrame");
+    const hasRef   = connectedHandles.has("resource") || connectedHandles.has("referenceVideo") || connectedHandles.has("audioRef");
+    if (hasFrame) {
+      activeHandles.delete("resource");
+      activeHandles.delete("referenceVideo");
+      activeHandles.delete("audioRef");
+    }
+    if (hasRef) {
+      activeHandles.delete("startFrame");
+      activeHandles.delete("endFrame");
+    }
+  }
+
   // When the mutual-exclusion above shifts handle positions, edges stay anchored to stale
   // coords until React Flow re-measures. Re-measure after the DOM repaints.
-  const hhConnKey = `${connectedHandles.has("startFrame") ? 1 : 0}${connectedHandles.has("resource") ? 1 : 0}`;
+  const hhConnKey = `${connectedHandles.has("startFrame") ? 1 : 0}${connectedHandles.has("endFrame") ? 1 : 0}${connectedHandles.has("resource") ? 1 : 0}${connectedHandles.has("referenceVideo") ? 1 : 0}${connectedHandles.has("audioRef") ? 1 : 0}`;
   useEffect(() => {
     const raf = requestAnimationFrame(() => updateNodeInternals(id));
     return () => cancelAnimationFrame(raf);
@@ -856,30 +871,16 @@ export default function VideoGeneratorNode({ id, data, selected }: NodeProps<Vid
       }
     }
 
-    const veoImageUrls: string[] = [];
-    let generationType: string | undefined = undefined;
-
-    if (isVeo) {
-      if (veoMode === "frames") {
-        if (upstream.startFrameUrl) veoImageUrls.push(upstream.startFrameUrl);
-        if (upstream.endFrameUrl)   veoImageUrls.push(upstream.endFrameUrl);
-        generationType = veoImageUrls.length > 0 ? "FIRST_AND_LAST_FRAMES_2_VIDEO" : "TEXT_2_VIDEO";
-      } else if (veoMode === "references") {
-        veoImageUrls.push(...orderedResources.map(r => r.url).slice(0, 3));
-        generationType = "REFERENCE_2_VIDEO";
-      }
-    }
-
     // Build full payload first so debug log matches what gets sent
     const payload: Record<string, unknown> = isVeo ? {
-      model: videoModelId,
+      videoModel: videoModelId,
       prompt: finalPrompt,
-      aspect_ratio: aspectRatio,
-      generationType,
-      imageUrls: veoImageUrls,
-      enableTranslation: true,
-      enableFallback: false,
-      watermark: "",
+      aspectRatio,
+      resolution,
+      veoMode,
+      startFrameUrl: finalStartFrameUrl,
+      endFrameUrl: finalEndFrameUrl,
+      referenceImageUrls: veoMode === "references" ? orderedResources.map(r => r.url).slice(0, 3) : undefined,
     } : {
       videoModel: videoModelId,
       prompt: finalPrompt,

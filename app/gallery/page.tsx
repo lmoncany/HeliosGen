@@ -2033,6 +2033,11 @@ function GalleryInner() {
                 }
                 if (isHappyHorse && h === "startFrame" && vidResources.length > 0) continue;
                 if (isHappyHorse && h === "resource" && vidStartFrame) continue;
+                const isSeedance = vidModel?.id === "seedance-2-fast";
+                const seedanceHasFrame = !!(vidStartFrame || vidEndFrame);
+                const seedanceHasRef   = vidResources.length > 0 || vidRefVideos.length > 0 || vidRefAudios.length > 0;
+                if (isSeedance && seedanceHasFrame && (h === "resource" || h === "referenceVideo" || h === "audioRef")) continue;
+                if (isSeedance && seedanceHasRef   && (h === "startFrame" || h === "endFrame")) continue;
                 if (h === "startFrame") {
                   if (vidStartFrame) slots.push({ kind: "filled", target: h, mediaKind: "image", label: "Start Frame", ref: vidStartFrame });
                   else               slots.push({ kind: "add",    target: h, mediaKind: "image", label: "Start Frame", countLeft: 1 });

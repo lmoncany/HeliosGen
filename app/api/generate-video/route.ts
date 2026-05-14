@@ -110,7 +110,8 @@ export async function POST(req: NextRequest) {
     if (apiInput.lastFrameKey   && endFrameUrl)                input[apiInput.lastFrameKey]        = endFrameUrl;
     if (apiInput.resolutionKey)                                input[apiInput.resolutionKey]       = resolution;
     if (apiInput.soundKey)                                     input[apiInput.soundKey]            = Boolean(sound);
-    if (apiInput.referenceImagesKey && r2RefImages.length > 0) input[apiInput.referenceImagesKey]  = r2RefImages;
+    // Seedance (and similar): first/last frames and reference images are mutually exclusive
+    if (apiInput.referenceImagesKey && r2RefImages.length > 0 && !startFrameUrl && !endFrameUrl) input[apiInput.referenceImagesKey]  = r2RefImages;
     if (apiInput.referenceVideosKey && r2RefVideos.length > 0) input[apiInput.referenceVideosKey]  = r2RefVideos;
     if (apiInput.referenceAudiosKey && r2RefAudios.length > 0) input[apiInput.referenceAudiosKey]  = r2RefAudios;
     if (apiInput.extra)                                        Object.assign(input, apiInput.extra);
