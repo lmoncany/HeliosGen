@@ -367,7 +367,8 @@ export async function POST(req: NextRequest) {
   return NextResponse.json({ taskId });
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
-    console.error("[generate-video] unhandled error:", msg);
+    const cause = e instanceof Error && (e as NodeJS.ErrnoException).cause;
+    console.error("[generate-video] unhandled error:", msg, cause ?? "");
     return NextResponse.json({ error: msg }, { status: 500 });
   }
 }

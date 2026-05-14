@@ -1547,7 +1547,10 @@ export default function VideoGeneratorNode({ id, data, selected }: NodeProps<Vid
                 <FloatMenu open={modelOpen}>
                   {[...new Set(VIDEO_MODEL_CFG.map(m => m.provider))].map((provider, pi) => (
                     <Fragment key={provider}>
-                      {pi > 0 && <div className="border-t border-white/[0.06] mx-2 my-0.5" />}
+                      {pi > 0 && <div style={{ height: "1px", background: "rgba(255,255,255,0.06)", margin: "4px 8px" }} />}
+                      <div style={{ padding: "5px 10px 3px", fontSize: "10px", color: "rgba(255,255,255,0.22)", textTransform: "uppercase", letterSpacing: "0.09em", fontWeight: 500 }}>
+                        {provider}
+                      </div>
                       {VIDEO_MODEL_CFG.filter(m => m.provider === provider).map(m => (
                         <button
                           key={m.id}
@@ -1584,8 +1587,7 @@ export default function VideoGeneratorNode({ id, data, selected }: NodeProps<Vid
                           <span className="shrink-0 text-white/50" style={{ lineHeight: 0 }}>
                             <NodeProviderIcon provider={m.provider} />
                           </span>
-                          <span className="flex-1 text-left">{m.name}</span>
-                          <span className="text-[#4A4A45]">{m.provider}</span>
+                          <span className="flex-1 text-left whitespace-nowrap">{m.name}</span>
                         </button>
                       ))}
                     </Fragment>

@@ -406,6 +406,9 @@ function GalleryInner() {
   const pageRef = useRef(0);
   const tabRef = useRef<Tab>(tab);
   const sentinelRef = useRef<HTMLDivElement>(null);
+  const loadingRef = useRef(false);
+  const loadingMoreRef = useRef(false);
+  const hasMoreRef = useRef(true);
   const [windowWidth, setWindowWidth] = useState(0);
 
   // Cleanup object URLs on unmount
@@ -642,15 +645,21 @@ function GalleryInner() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [modelId, isVideo]);
 
-  // Infinite scroll
+  // Keep refs in sync so the observer callback can gate without needing to be recreated
+  useEffect(() => { loadingRef.current = loading; }, [loading]);
+  useEffect(() => { loadingMoreRef.current = loadingMore; }, [loadingMore]);
+  useEffect(() => { hasMoreRef.current = hasMore; }, [hasMore]);
+
+  // Infinite scroll — recreate observer after each load so the callback re-fires if sentinel
+  // is already in view (IntersectionObserver only fires on intersection *changes* otherwise)
   useEffect(() => {
     const sentinel = sentinelRef.current;
     const container = gridOuterRef.current;
-    if (!sentinel || !container || !hasMore || loading || loadingMore) return;
+    if (!sentinel || !container || !hasMore) return;
 
     const observer = new IntersectionObserver((entries) => {
-      if (entries[0].isIntersecting) {
-        loadItems(tab, pageRef.current + 1);
+      if (entries[0].isIntersecting && hasMoreRef.current && !loadingRef.current && !loadingMoreRef.current) {
+        loadItems(tabRef.current, pageRef.current + 1);
       }
     }, {
       root: container,
@@ -658,7 +667,10 @@ function GalleryInner() {
     });
     observer.observe(sentinel);
     return () => observer.disconnect();
-  }, [hasMore, loading, loadingMore, loadItems, tab]);
+  // loading/loadingMore in deps so observer is recreated after each page finishes,
+  // forcing an immediate intersection check when sentinel is still in view
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasMore, loadItems, loading, loadingMore]);
 
   // Persist settings
   useEffect(() => {
