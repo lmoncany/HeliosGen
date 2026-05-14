@@ -356,7 +356,7 @@ export function AppSidebar() {
             side="top"
             align="start"
             sideOffset={8}
-            className="!p-0 !rounded-2xl !bg-[#0f0f0f] !border-white/[0.12] !ring-0 !shadow-[0_8px_48px_rgba(0,0,0,0.85)] overflow-hidden"
+            className="!p-0 !rounded-2xl !bg-[#0f0f0f] !border-white/[0.12] !ring-0 !shadow-[0_8px_48px_rgba(0,0,0,0.85)] overflow-hidden !w-auto !min-w-[280px]"
           >
             {/* User header — non-interactive */}
             <div className="flex items-center gap-3.5 px-4 pt-4 pb-3.5">

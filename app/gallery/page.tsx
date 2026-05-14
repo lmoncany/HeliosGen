@@ -1631,18 +1631,18 @@ function GalleryInner() {
 
   // ── Render ────────────────────────────────────────────────────────────────
 
-  if (!authLoaded) return <div style={{ flex: 1, background: "#1A1A1C" }} />;
+  if (!authLoaded) return <div style={{ flex: 1, background: "#000000" }} />;
 
   if (!user) {
     return (
-      <div style={{ flex: 1, background: "#1A1A1C", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: "16px" }}>
+      <div style={{ flex: 1, background: "#000000", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: "16px" }}>
         <p style={{ color: "#4A4A45", fontSize: "14px" }}>Sign in to view your gallery</p>
       </div>
     );
   }
 
   return (
-    <div style={{ flex: 1, background: "#1A1A1C", display: "flex", flexDirection: "column", overflow: "hidden", color: "#fff", position: "relative" }}>
+    <div style={{ flex: 1, background: "#000000", display: "flex", flexDirection: "column", overflow: "hidden", color: "#fff", position: "relative" }}>
 
       {/* ── Sub-navbar ── */}
       <div style={{
@@ -1741,7 +1741,7 @@ function GalleryInner() {
                     height: "100%",
                     position: "relative",
                     overflow: "hidden",
-                    background: pg.error ? "rgba(20,8,8,0.95)" : "#0D1012",
+                    background: pg.error ? "rgba(20,8,8,0.95)" : "#000000",
                   }}>
                         {pg.error ? (
                           <>
@@ -2826,7 +2826,7 @@ function GalleryInner() {
 
 export default function GalleryPage() {
   return (
-    <Suspense fallback={<div style={{ flex: 1, background: "#1A1A1C" }} />}>
+    <Suspense fallback={<div style={{ flex: 1, background: "#000000" }} />}>
       <GalleryInner />
     </Suspense>
   );
@@ -4047,7 +4047,7 @@ function Lightbox({ item, onClose, onCopyPrompt }: { item: GalleryItem; onClose:
   ].filter(Boolean) as { label: string; value: string }[];
 
   const panelStyle: React.CSSProperties = {
-    background: "#0D1012",
+    background: "#000000",
     border: "1px solid rgba(255,255,255,0.07)",
     borderRadius: "16px",
     overflow: "hidden",
@@ -4300,13 +4300,13 @@ function Lightbox({ item, onClose, onCopyPrompt }: { item: GalleryItem; onClose:
             display: "flex", alignItems: "center", justifyContent: "center", gap: "8px",
             width: "100%", padding: "13px 16px",
             borderRadius: "14px", border: "1px solid rgba(255,255,255,0.07)",
-            background: "#0D1012",
+            background: "#000000",
             color: downloading ? "rgba(255,255,255,0.3)" : "rgba(255,255,255,0.75)",
             fontSize: "13px", fontWeight: 600, cursor: downloading ? "default" : "pointer",
             fontFamily: "inherit", transition: "background 140ms, color 140ms",
           }}
           onMouseEnter={e => { if (!downloading) { e.currentTarget.style.background = "rgba(255,255,255,0.06)"; e.currentTarget.style.color = "#fff"; } }}
-          onMouseLeave={e => { if (!downloading) { e.currentTarget.style.background = "#0D1012"; e.currentTarget.style.color = "rgba(255,255,255,0.75)"; } }}
+          onMouseLeave={e => { if (!downloading) { e.currentTarget.style.background = "#000000"; e.currentTarget.style.color = "rgba(255,255,255,0.75)"; } }}
         >
           {downloading ? (
             <span style={{ width: 13, height: 13, borderRadius: "50%", border: "2px solid rgba(255,255,255,0.15)", borderTopColor: "rgba(255,255,255,0.5)", display: "inline-block", animation: "spin 0.75s linear infinite" }} />

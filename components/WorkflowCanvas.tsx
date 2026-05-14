@@ -1511,7 +1511,7 @@ export default function WorkflowCanvas() {
 
           <Controls
             showInteractive={false}
-            className="[&>button]:!bg-[#0D1012] [&>button]:!border-[#1A100C] [&>button]:!text-[#8D8E89] [&>button:hover]:!text-white"
+            className="[&>button]:!bg-black [&>button]:!border-[#1A100C] [&>button]:!text-[#8D8E89] [&>button:hover]:!text-white"
           />
 
         </ReactFlow>
@@ -1636,19 +1636,19 @@ export default function WorkflowCanvas() {
                   <button
                     key={type}
                     onClick={() => addNodeAtCenter(type)}
-                    className="group relative flex flex-col items-center justify-center gap-4 w-36 py-8 rounded-2xl border border-[#1A1A1A] bg-[#090B0D]"
+                    className="group relative flex flex-col items-center justify-center gap-4 w-36 py-8 rounded-2xl border border-[#1A1A1A] bg-black"
                     style={{ transition: "box-shadow 200ms ease, border-color 200ms ease, background 200ms ease" }}
                     onMouseEnter={(e) => {
                       const el = e.currentTarget;
                       el.style.boxShadow = `0 0 32px ${accent}20, 0 0 0 1px ${accent}30`;
                       el.style.borderColor = `${accent}35`;
-                      el.style.background = "#0D1012";
+                      el.style.background = "#111111";
                     }}
                     onMouseLeave={(e) => {
                       const el = e.currentTarget;
                       el.style.boxShadow = "";
                       el.style.borderColor = "#1A1A1A";
-                      el.style.background = "#090B0D";
+                      el.style.background = "#000000";
                     }}
                   >
                     <span
@@ -1682,7 +1682,7 @@ export default function WorkflowCanvas() {
         )}
 
         {log.length > 0 && (
-          <div className="h-24 bg-[#080A0C] border-t border-[#1A100C] overflow-y-auto px-4 py-2 shrink-0">
+          <div className="h-24 bg-black border-t border-[#1A100C] overflow-y-auto px-4 py-2 shrink-0">
             {log.map((l, i) => (
               <p key={i} className={`text-[11px] font-mono leading-5 ${l.ok ? "text-[#8D8E89]" : "text-red-500"}`}>
                 {l.text}

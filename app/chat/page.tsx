@@ -7,6 +7,8 @@ import { MODEL_GROUPS, MODELS, type ModelId } from "@/lib/models";
 import { getToken } from "@/lib/galleryUtils";
 import { SYSTEM_PROMPT } from "@/lib/systemPrompt";
 import { Bot, Send, ChevronUp } from "lucide-react";
+import { BlurInText } from "@/components/ui/blur-in-text";
+import { motion } from "motion/react";
 
 // ── Logo ──────────────────────────────────────────────────────────────────────
 
@@ -145,16 +147,18 @@ function LandingView({
       <LogoIcon size={48} />
 
       {/* Title */}
-      <h1 style={{
-        margin: "20px 0 40px",
-        fontSize: "clamp(28px, 4vw, 40px)",
-        fontWeight: 600,
-        letterSpacing: "-0.03em",
-        color: "#fff",
-        textAlign: "center",
-      }}>
-        What do you want to craft?
-      </h1>
+      <BlurInText
+        text="I'm here to help you make better prompts."
+        className="text-white mt-5 mb-3 text-5xl font-semibold leading-tight whitespace-nowrap"
+      />
+      <motion.p
+        initial={{ filter: "blur(10px)", opacity: 0 }}
+        animate={{ filter: "blur(0px)", opacity: 1 }}
+        transition={{ duration: 1 }}
+        style={{ color: "rgba(255,255,255,0.4)", fontSize: "15px", marginBottom: "40px", textAlign: "center" }}
+      >
+        Give me a prompt and I&apos;ll make it better.
+      </motion.p>
 
       {/* Input + suggestions */}
       <div style={{ width: "100%", maxWidth: "680px" }}>
@@ -351,9 +355,10 @@ function ChatWindow({
     return (
       <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "0 24px 80px", minWidth: 0 }}>
         <LogoIcon size={48} />
-        <h1 style={{ margin: "20px 0 40px", fontSize: "clamp(24px, 3vw, 38px)", fontWeight: 600, letterSpacing: "-0.03em", color: "#fff", textAlign: "center" }}>
-          What do you want to craft?
-        </h1>
+        <BlurInText
+          text="I'm here to help you make better prompts."
+          className="text-white mt-5 mb-10 text-[clamp(22px,3vw,36px)] font-semibold leading-tight"
+        />
         <div style={{ width: "100%", maxWidth: "680px" }}>
           <div style={{ display: "flex", alignItems: "center", background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: "18px", padding: "10px 10px 10px 20px", transition: "border-color 150ms" }}>
             <textarea

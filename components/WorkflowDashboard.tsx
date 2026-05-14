@@ -10,7 +10,7 @@ import { timeAgo } from "@/lib/useSpaceSync";
 const CSS = `
   .wsd-card {
     position: relative;
-    background: #111417;
+    background: #111111;
     border: 1px solid rgba(255,255,255,0.07);
     border-radius: 14px;
     overflow: hidden;
@@ -80,7 +80,7 @@ const CSS = `
 
   .wsd-new {
     position: relative;
-    background: #111417;
+    background: #111111;
     border: 1px dashed rgba(255,255,255,0.18);
     border-radius: 14px;
     overflow: hidden;
@@ -173,7 +173,7 @@ function ThumbnailMosaic({ space }: { space: Space }) {
             style={{
               position: "relative",
               overflow: "hidden",
-              background: item ? "#1a1c20" : "linear-gradient(135deg, #141618 0%, #0d0f11 100%)",
+              background: item ? "#111111" : "linear-gradient(135deg, #111111 0%, #000000 100%)",
               ...(item ? {} : { display: "grid", placeItems: "center", color: "rgba(255,255,255,0.2)" }),
             }}
           >
@@ -272,7 +272,7 @@ function CardMenu({ spaceId, onOpen, onStartRename, onDelete, onClose }: CardMen
         top: "calc(100% + 6px)",
         right: 0,
         width: "186px",
-        background: "#111417",
+        background: "#111111",
         border: "1px solid rgba(255,255,255,0.1)",
         borderRadius: "12px",
         boxShadow: "0 16px 48px rgba(0,0,0,0.8), 0 2px 8px rgba(0,0,0,0.4)",
@@ -322,7 +322,7 @@ function DeleteConfirmModal({
       <div
         onClick={(e) => e.stopPropagation()}
         style={{
-          background: "#111417",
+          background: "#111111",
           border: "1px solid rgba(255,255,255,0.1)",
           borderRadius: "16px", padding: "24px", width: "320px",
           boxShadow: "0 24px 64px rgba(0,0,0,0.8)",
@@ -548,7 +548,7 @@ export default function WorkflowDashboard() {
         flex: 1,
         overflowY: "auto",
         position: "relative",
-        background: "#0D1012",
+        background: "#000000",
       }}
     >
       <style>{CSS}</style>

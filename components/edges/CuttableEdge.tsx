@@ -170,7 +170,7 @@ export default function CuttableEdge({
             width: 28,
             height: 28,
             borderRadius: "50%",
-            background: "#0D1012",
+            background: "#000000",
             border: `2px solid ${badgeColor}`,
             display: "flex",
             alignItems: "center",

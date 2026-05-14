@@ -872,7 +872,7 @@ export default function PromptNode({ id, data, selected }: NodeProps<PromptNodeT
           {/* Panel */}
           <div
             className="relative z-10 flex flex-col rounded-xl border border-white/[0.08]"
-            style={{ width: "min(760px, 100%)", height: "min(520px, 100%)", background: "#0D1012", boxShadow: "0 24px 80px rgba(0,0,0,0.8)" }}
+            style={{ width: "min(760px, 100%)", height: "min(520px, 100%)", background: "#000000", boxShadow: "0 24px 80px rgba(0,0,0,0.8)" }}
             onKeyDown={(e) => { if (e.key === "Escape") { setExpandOpen(false); setExpandMentionQuery(null); } }}
           >
             {/* Header */}

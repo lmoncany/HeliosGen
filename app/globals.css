@@ -8,7 +8,7 @@ body,
 }
 
 body {
-  background: #1A1A1C;
+  background: #000000;
   color: #FFFFFF;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   -webkit-font-smoothing: antialiased;
@@ -535,6 +535,11 @@ body {
 }
 
 /* ── React Flow overrides ────────────────────────────── */
+.react-flow {
+  --xy-background-color-default: #000000;
+  background: #000000;
+}
+
 .react-flow__node.selected .node-card {
   border-color: #ff3df5 !important;
   box-shadow: 0 0 0 1px rgba(255, 61, 245, 0.2), 0 2px 16px rgba(30, 10, 30, 0.5);
@@ -597,14 +602,14 @@ body {
 }
 
 .react-flow__controls-button {
-  background: #0D1012 !important;
+  background: #000000 !important;
   border: none !important;
   border-bottom: 1px solid #1A100C !important;
   color: #8D8E89 !important;
 }
 
 .react-flow__controls-button:hover {
-  background: #111618 !important;
+  background: #111111 !important;
   color: #FFFFFF !important;
 }
 
@@ -727,7 +732,7 @@ body {
   font-size: 13px;
   font-weight: 500;
   color: #8D8E89;
-  background: #0D1012;
+  background: #000000;
   border: 1px solid #2A1A14;
   border-radius: 6px;
   padding: 5px 12px;
