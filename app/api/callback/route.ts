@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { jobStore } from "@/lib/jobStore";
+import { jobEvents } from "@/lib/jobEvents";
 import { mirrorToR2 } from "@/lib/r2";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 
@@ -16,6 +17,11 @@ function extractUrls(resultJson?: string): string[] {
   }
 }
 
+function settle(taskId: string, result: Parameters<typeof jobStore.set>[1]) {
+  jobStore.set(taskId, result);
+  jobEvents.emit(`job:${taskId}`, result);
+}
+
 export async function POST(req: NextRequest) {
   const body = await req.json();
   console.log("[callback] received:", JSON.stringify(body, null, 2));
@@ -28,6 +34,22 @@ export async function POST(req: NextRequest) {
 
   if (!taskId) {
     console.log("[callback] could not extract taskId");
+    return NextResponse.json({ received: true });
+  }
+
+  // Treat a non-200 top-level code as a hard error (e.g. Veo 500 responses that
+  // carry no state/status field but do carry body.code and body.msg).
+  if (body.code !== undefined && body.code !== 200) {
+    const error = body.msg ?? data.failMsg ?? "Generation failed";
+    console.log("[callback] top-level error code:", body.code, error);
+    settle(taskId, { status: "error", error });
+    supabaseAdmin
+      .from("generations")
+      .update({ status: "error", error_msg: error })
+      .eq("task_id", taskId)
+      .then(({ error: e }) => {
+        if (e) console.error("[callback] supabase error update failed:", e.message);
+      });
     return NextResponse.json({ received: true });
   }
 
@@ -47,10 +69,12 @@ export async function POST(req: NextRequest) {
       Promise.all(kieUrls.map((u) => mirrorToR2(u, folder)))
         .then((r2Urls) => {
           if (isVideo) {
-            jobStore.set(taskId, { status: "done", videoUrl: r2Urls[0] });
+            const result = { status: "done" as const, videoUrl: r2Urls[0] };
+            settle(taskId, result);
             return supabaseAdmin.from("generations").update({ status: "done", video_url: r2Urls[0] }).eq("task_id", taskId);
           } else {
-            jobStore.set(taskId, { status: "done", imageUrl: r2Urls[0], imageUrls: r2Urls });
+            const result = { status: "done" as const, imageUrl: r2Urls[0], imageUrls: r2Urls };
+            settle(taskId, result);
             return supabaseAdmin.from("generations").update({ status: "done", image_url: r2Urls[0], image_urls: r2Urls }).eq("task_id", taskId);
           }
         })
@@ -60,10 +84,12 @@ export async function POST(req: NextRequest) {
         .catch((err) => {
           console.error("[callback] R2 upload failed, storing kie.ai URLs:", err.message);
           if (isVideo) {
-            jobStore.set(taskId, { status: "done", videoUrl: kieUrls[0] });
+            const result = { status: "done" as const, videoUrl: kieUrls[0] };
+            settle(taskId, result);
             supabaseAdmin.from("generations").update({ status: "done", video_url: kieUrls[0] }).eq("task_id", taskId).then(() => {});
           } else {
-            jobStore.set(taskId, { status: "done", imageUrl: kieUrls[0], imageUrls: kieUrls });
+            const result = { status: "done" as const, imageUrl: kieUrls[0], imageUrls: kieUrls };
+            settle(taskId, result);
             supabaseAdmin.from("generations").update({ status: "done", image_url: kieUrls[0], image_urls: kieUrls }).eq("task_id", taskId).then(() => {});
           }
         });
@@ -72,7 +98,7 @@ export async function POST(req: NextRequest) {
     }
   } else if (state === "fail" || state === "failed" || state === "error") {
     const error = data.failMsg ?? data.error ?? body.msg ?? "Generation failed";
-    jobStore.set(taskId, { status: "error", error });
+    settle(taskId, { status: "error", error });
 
     supabaseAdmin
       .from("generations")

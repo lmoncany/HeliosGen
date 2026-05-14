@@ -5,6 +5,7 @@ import { AppSidebar } from "@/components/AppSidebar";
 import GlobalModals from "@/components/GlobalModals";
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { cookies } from "next/headers";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -21,11 +22,14 @@ export const metadata: Metadata = {
   description: "Build AI image & video generation workflows visually",
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const cookieStore = await cookies();
+  const sidebarOpen = cookieStore.get("sidebar_state")?.value !== "false";
+
   return (
     <html
       lang="en"
@@ -34,7 +38,7 @@ export default function RootLayout({
     >
       <body className="bg-[#1A1A1C] text-white h-full overflow-hidden">
         <TooltipProvider>
-          <SidebarProvider className="h-full">
+          <SidebarProvider defaultOpen={sidebarOpen} className="h-full">
             <AppSidebar />
             <SidebarInset className="bg-transparent flex flex-col min-h-0 min-w-0">
               {children}

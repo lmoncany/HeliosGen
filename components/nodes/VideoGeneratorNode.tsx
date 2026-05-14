@@ -465,48 +465,35 @@ export default function VideoGeneratorNode({ id, data, selected }: NodeProps<Vid
     return () => cancelAnimationFrame(raf);
   }, [id, videoModelId, veoMode, updateNodeInternals]);
 
-  // ── Poll job-status while a taskId is pending ────────────────────────────
+  // ── Wait for job completion via SSE (callback-driven, no polling) ─────────
   useEffect(() => {
     const taskId = data.taskId as string | undefined;
     if (!taskId || status !== "running") return;
 
-    let cancelled = false;
+    const es = new EventSource(`/api/job-stream?taskId=${taskId}`);
 
-    const interval = setInterval(async () => {
-      try {
-        const res = await fetch(`/api/job-status?taskId=${taskId}`);
-        const json = await res.json();
-        if (cancelled) return;
+    es.onmessage = (event) => {
+      es.close();
+      let json: { status: string; videoUrl?: string; error?: string };
+      try { json = JSON.parse(event.data); } catch { return; }
 
-        if (json.status === "done" && json.videoUrl) {
-          const storeNode = useWorkflowStore.getState().nodes.find((n) => n.id === id);
-          const gens = [...((storeNode?.data?.generations as GenEntry[] | undefined) ?? [])] as GenEntry[];
-          const slot = storeNode?.data?.currentGenIdx as number ?? gens.length - 1;
-          gens[slot] = json.videoUrl as string;
-          updateNodeData(id, { status: "done", videoUrl: json.videoUrl, taskId: undefined, generations: gens, currentGenIdx: slot });
-          clearInterval(interval);
-        } else if (json.status === "error") {
-          const storeNode = useWorkflowStore.getState().nodes.find((n) => n.id === id);
-          const gens = [...((storeNode?.data?.generations as GenEntry[] | undefined) ?? [])] as GenEntry[];
-          const slot = storeNode?.data?.currentGenIdx as number ?? gens.length - 1;
-          gens[slot] = { error: json.error ?? "Generation failed" };
-          updateNodeData(id, { status: "error", errorMsg: json.error, taskId: undefined, generations: gens, currentGenIdx: slot });
-          clearInterval(interval);
-        } else if (json.status === "not_found") {
-          const storeNode = useWorkflowStore.getState().nodes.find((n) => n.id === id);
-          const gens = [...((storeNode?.data?.generations as GenEntry[] | undefined) ?? [])] as GenEntry[];
-          const slot = storeNode?.data?.currentGenIdx as number ?? gens.length - 1;
-          gens[slot] = { error: "Job lost (server restarted)" };
-          updateNodeData(id, { status: "error", errorMsg: "Job lost (server restarted)", taskId: undefined, generations: gens, currentGenIdx: slot });
-          clearInterval(interval);
-        }
-        // "pending" → keep polling
-      } catch {
-        // network hiccup — keep polling
+      const storeNode = useWorkflowStore.getState().nodes.find((n) => n.id === id);
+      const gens = [...((storeNode?.data?.generations as GenEntry[] | undefined) ?? [])] as GenEntry[];
+      const slot = (storeNode?.data?.currentGenIdx as number | undefined) ?? gens.length - 1;
+
+      if (json.status === "done" && json.videoUrl) {
+        gens[slot] = json.videoUrl;
+        updateNodeData(id, { status: "done", videoUrl: json.videoUrl, taskId: undefined, generations: gens, currentGenIdx: slot });
+      } else {
+        const errMsg = json.error ?? "Generation failed";
+        gens[slot] = { error: errMsg };
+        updateNodeData(id, { status: "error", errorMsg: errMsg, taskId: undefined, generations: gens, currentGenIdx: slot });
       }
-    }, 5000);
+    };
 
-    return () => { cancelled = true; clearInterval(interval); };
+    es.onerror = () => es.close();
+
+    return () => es.close();
   }, [data.taskId, status, id, updateNodeData]);
 
   const activeHandles = new Set<string>(cfg.handles);
@@ -1568,7 +1555,10 @@ export default function VideoGeneratorNode({ id, data, selected }: NodeProps<Vid
                           onClick={() => {
                             const validRatio = m.ratios.includes(aspectRatio) ? aspectRatio : m.defaultRatio;
                             const validDur = m.durations.includes(duration) ? duration : m.defaultDuration;
-                            updateNodeData(id, { videoModel: m.id, aspectRatio: validRatio, duration: validDur });
+                            const validRes = m.resolutions
+                              ? (m.resolutions.includes(resolution) ? resolution : (m.defaultResolution ?? m.resolutions[0]))
+                              : undefined;
+                            updateNodeData(id, { videoModel: m.id, aspectRatio: validRatio, duration: validDur, ...(validRes !== undefined && { grokResolution: validRes }) });
                             const removedHandles = (cfg.handles as string[]).filter((h) => !(m.handles as string[]).includes(h));
                             const wasMotionControl = cfg.id === "kling-2.6-motion-control";
                             const isMotionControl = m.id === "kling-2.6-motion-control";

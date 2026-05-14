@@ -645,14 +645,16 @@ function GalleryInner() {
   // Infinite scroll
   useEffect(() => {
     const sentinel = sentinelRef.current;
-    if (!sentinel || !hasMore || loading || loadingMore) return;
-    
+    const container = gridOuterRef.current;
+    if (!sentinel || !container || !hasMore || loading || loadingMore) return;
+
     const observer = new IntersectionObserver((entries) => {
       if (entries[0].isIntersecting) {
         loadItems(tab, pageRef.current + 1);
       }
-    }, { 
-      rootMargin: "800px" 
+    }, {
+      root: container,
+      rootMargin: "800px 0px"
     });
     observer.observe(sentinel);
     return () => observer.disconnect();
@@ -1830,6 +1832,7 @@ function GalleryInner() {
                         selected={selectedIds.has(layoutItem.item.id)}
                         anySelected={anySelected}
                         onSelect={() => toggleSelect(layoutItem.item.id)}
+                        scrollContainer={gridOuterRef}
                       />
                     </div>
                   );
@@ -3495,6 +3498,7 @@ function GalleryCard({
   selected,
   anySelected,
   onSelect,
+  scrollContainer,
 }: {
   item: GalleryItem;
   onOpen?: () => void;
@@ -3508,6 +3512,7 @@ function GalleryCard({
   selected?: boolean;
   anySelected?: boolean;
   onSelect?: () => void;
+  scrollContainer?: React.RefObject<HTMLDivElement | null>;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const cardRef = useRef<HTMLDivElement>(null);
@@ -3526,24 +3531,34 @@ function GalleryCard({
   const allUrls = item.imageUrls ?? [item.url];
   const displayUrl = allUrls[cardImgIdx] ?? item.url;
 
+  // Lazy-load observer: pre-load content before it scrolls into view
   useEffect(() => {
+    const el = cardRef.current;
+    if (!el) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => { if (entry.isIntersecting) setShouldLoad(true); },
+      { root: scrollContainer?.current ?? null, rootMargin: "1000px", threshold: 0 },
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Play/pause observer: only play videos that are actually visible
+  useEffect(() => {
+    if (!isVideo) return;
     const el = cardRef.current;
     if (!el) return;
     const observer = new IntersectionObserver(
       ([entry]) => {
         if (entry.isIntersecting) {
-          setShouldLoad(true);
-          if (isVideo) {
-            videoRef.current?.play().then(() => setPlaying(true)).catch(() => { });
-          }
+          videoRef.current?.play().then(() => setPlaying(true)).catch(() => {});
         } else {
-          if (isVideo) {
-            videoRef.current?.pause();
-            setPlaying(false);
-          }
+          videoRef.current?.pause();
+          setPlaying(false);
         }
       },
-      { rootMargin: "1000px", threshold: 0.01 },
+      { root: scrollContainer?.current ?? null, rootMargin: "0px", threshold: 0.1 },
     );
     observer.observe(el);
     return () => observer.disconnect();
