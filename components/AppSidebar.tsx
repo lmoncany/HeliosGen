@@ -2,9 +2,10 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { usePathname, useSearchParams } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { useWorkflowStore } from "@/lib/store";
+import { useChatSessionStore } from "@/lib/chatSessionStore";
 import type { User } from "@supabase/supabase-js";
 import {
   Workflow,
@@ -16,6 +17,9 @@ import {
   MoreHorizontal,
   LogOut,
   User as UserIcon,
+  Bot,
+  Pencil,
+  Trash2,
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
@@ -119,8 +123,10 @@ function CreditIcon({ size = 12 }: { size?: number }) {
 // ── Sidebar component ─────────────────────────────────────────────────────────
 export function AppSidebar() {
   const pathname = usePathname();
+  const router = useRouter();
   const searchParams = useSearchParams();
   const tab = searchParams.get("tab") ?? "images";
+  const activeChatId = searchParams.get("id");
 
   const [user, setUser] = React.useState<User | null>(null);
   const [balance, setBalance] = React.useState<number | null>(null);
@@ -132,7 +138,10 @@ export function AppSidebar() {
   const supabase = createClient();
 
   React.useEffect(() => {
-    supabase.auth.getUser().then(({ data }) => setUser(data.user));
+    supabase.auth.getUser().then(({ data }) => {
+      setUser(data.user);
+      if (data.user) useChatSessionStore.getState().loadFromSupabase();
+    });
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_, session) => {
       setUser(session?.user ?? null);
       if (session?.access_token) {
@@ -140,6 +149,7 @@ export function AppSidebar() {
           .then((r) => r.json())
           .then((d) => setKieKeySet(!!d.hasToken))
           .catch(() => {});
+        useChatSessionStore.getState().loadFromSupabase();
       } else {
         setKieKeySet(null);
       }
@@ -171,6 +181,20 @@ export function AppSidebar() {
 
   const signOut = async () => { await supabase.auth.signOut(); setUser(null); };
 
+  const { sessions, deleteSession } = useChatSessionStore();
+
+  function startNewChat() {
+    router.push("/chat");
+  }
+
+  function handleDeleteChat(id: string, isActive: boolean) {
+    deleteSession(id);
+    if (isActive) {
+      const next = sessions.find(s => s.id !== id);
+      router.push(next ? `/chat?id=${next.id}` : "/chat");
+    }
+  }
+
   const displayName = user
     ? (user.user_metadata?.full_name || user.email?.split("@")[0] || "User")
     : "Guest User";
@@ -182,7 +206,7 @@ export function AppSidebar() {
     { label: "Image", href: "/gallery?tab=images", icon: ImageIcon, active: pathname === "/gallery" && tab === "images" },
     { label: "Video", href: "/gallery?tab=videos", icon: VideoIcon, active: pathname === "/gallery" && tab === "videos" },
     { label: "Assets", href: "#", icon: Package, active: false, disabled: true },
-    { label: "Chat", href: "#", icon: MessageSquare, active: false, disabled: true },
+    { label: "Chat", href: "/chat", icon: MessageSquare, active: pathname === "/chat" },
     { label: "Settings", href: "#", icon: Settings, active: false, onClick: (e: React.MouseEvent) => { e.preventDefault(); setSettingsOpen(true); } },
   ];
 
@@ -217,27 +241,83 @@ export function AppSidebar() {
         <SidebarTrigger className="group-data-[collapsible=icon]:hidden text-white/30 hover:text-white/70 hover:bg-white/[0.05] transition-colors p-1.5 rounded-lg -mr-1 [&_svg]:size-4" />
       </SidebarHeader>
 
-      {/* ── Nav ── */}
-      <SidebarContent className="px-2 py-3 gap-0.5">
-        {navItems.map((item) => {
-          const content = (
-            <>
-              {React.createElement(item.icon, { size: 20, strokeWidth: 1.5, className: "shrink-0" })}
-              <span className="text-[14px] font-medium group-data-[collapsible=icon]:hidden leading-none">
-                {item.label}
-              </span>
-            </>
-          );
-          if (item.disabled) return (
-            <div key={item.label} className={itemCls(item.active, true)} title={item.label}>{content}</div>
-          );
-          if (!item.href || item.href === "#") return (
-            <button key={item.label} className={itemCls(item.active)} onClick={item.onClick} title={item.label}>{content}</button>
-          );
-          return (
-            <Link key={item.label} href={item.href} onClick={item.onClick} className={itemCls(item.active)} title={item.label}>{content}</Link>
-          );
-        })}
+      {/* ── Nav + Chat history ── */}
+      <SidebarContent className="overflow-hidden flex flex-col">
+        {/* Nav items */}
+        <div className="px-2 py-3 flex flex-col gap-0.5 shrink-0">
+          {navItems.map((item) => {
+            const content = (
+              <>
+                {React.createElement(item.icon, { size: 20, strokeWidth: 1.5, className: "shrink-0" })}
+                <span className="text-[14px] font-medium group-data-[collapsible=icon]:hidden leading-none">
+                  {item.label}
+                </span>
+              </>
+            );
+            if (item.disabled) return (
+              <div key={item.label} className={itemCls(item.active, true)} title={item.label}>{content}</div>
+            );
+            if (!item.href || item.href === "#") return (
+              <button key={item.label} className={itemCls(item.active)} onClick={item.onClick} title={item.label}>{content}</button>
+            );
+            return (
+              <Link key={item.label} href={item.href} onClick={item.onClick} className={itemCls(item.active)} title={item.label}>{content}</Link>
+            );
+          })}
+        </div>
+
+        {/* Chat history — hidden in icon mode */}
+        <div className="group-data-[collapsible=icon]:hidden flex flex-col flex-1 min-h-0 px-2 pb-2">
+          <div className="border-t border-white/[0.06] mb-1" />
+
+          {/* Section header */}
+          <div className="flex items-center justify-between px-1 py-2 shrink-0">
+            <span className="text-[10px] font-bold tracking-[0.08em] uppercase text-white/25">Chats</span>
+            <button
+              onClick={startNewChat}
+              title="New chat"
+              className="w-6 h-6 rounded-lg flex items-center justify-center text-white/40 hover:text-white/80 hover:bg-white/[0.06] transition-colors"
+            >
+              <Pencil size={12} />
+            </button>
+          </div>
+
+          {/* Session list */}
+          <div className="flex-1 overflow-y-auto flex flex-col gap-0.5 min-h-0">
+            {sessions.length === 0 ? (
+              <p className="text-center text-[11px] text-white/20 px-2 py-4">No chats yet</p>
+            ) : sessions.map(sess => {
+              const isActive = pathname === "/chat" && sess.id === activeChatId;
+              return (
+                <div
+                  key={sess.id}
+                  onClick={() => router.push(`/chat?id=${sess.id}`)}
+                  className={cn(
+                    "group flex items-center gap-2 px-2 py-2 rounded-lg cursor-pointer transition-colors",
+                    isActive ? "bg-white/[0.07]" : "hover:bg-white/[0.04]"
+                  )}
+                >
+                  <div className="w-6 h-6 rounded-md flex items-center justify-center shrink-0"
+                    style={{ background: "rgba(255,80,140,0.08)", border: "1px solid rgba(255,80,140,0.12)" }}>
+                    <Bot size={11} style={{ color: "rgba(255,120,160,0.7)" }} />
+                  </div>
+                  <span className={cn(
+                    "flex-1 text-[12px] truncate leading-tight",
+                    isActive ? "text-white/90" : "text-white/55"
+                  )}>
+                    {sess.title}
+                  </span>
+                  <button
+                    onClick={e => { e.stopPropagation(); handleDeleteChat(sess.id, isActive); }}
+                    className="w-5 h-5 rounded flex items-center justify-center opacity-0 group-hover:opacity-100 text-white/30 hover:text-red-400/70 hover:bg-red-400/10 transition-all shrink-0"
+                  >
+                    <Trash2 size={10} />
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
       </SidebarContent>
 
       {/* ── Footer ── */}
