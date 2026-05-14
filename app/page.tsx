@@ -3,6 +3,7 @@ import dynamic from "next/dynamic";
 import WorkflowDashboard from "@/components/WorkflowDashboard";
 import { useWorkflowStore } from "@/lib/store";
 import { useSpaceSync } from "@/lib/useSpaceSync";
+import { QuickAssist } from "@/components/QuickAssist";
 
 const WorkflowCanvas = dynamic(() => import("@/components/WorkflowCanvas"), {
   ssr: false,
@@ -19,6 +20,7 @@ export default function Home() {
   return (
     <div className="flex-1 flex overflow-hidden min-h-0">
       <WorkflowCanvas />
+      <QuickAssist />
     </div>
   );
 }

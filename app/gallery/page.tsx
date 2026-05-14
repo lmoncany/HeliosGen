@@ -10,6 +10,7 @@ import type { User } from "@supabase/supabase-js";
 import { GalleryItem, getToken, galleryCache } from "@/lib/galleryUtils";
 import { MediaPickerModal } from "@/components/MediaPickerModal";
 import { useSidebar } from "@/components/ui/sidebar";
+import { QuickAssist } from "@/components/QuickAssist";
 
 function thumbSrc(url: string, w = 128): string {
   if (!url || url.startsWith("blob:") || url.startsWith("data:")) return url;
@@ -2817,6 +2818,8 @@ function GalleryInner() {
           {refError}
         </div>
       )}
+
+      <QuickAssist />
     </div>
   );
 }
