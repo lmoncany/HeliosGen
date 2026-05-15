@@ -2,7 +2,7 @@ import type { CSSProperties } from "react";
 
 // Colours match the handle border colours exactly
 export const EDGE_COLORS: Record<string, string> = {
-  prompt: "#ff3df5", // green  — matches node-handle-icon-prompt
+  prompt: "#2DD4BF", // teal   — matches node-handle-icon-prompt
   image: "#fb923c", // orange — matches node-handle-icon-resource
   startFrame: "#818cf8", // indigo — matches node-handle-icon-image
   endFrame: "#818cf8", // indigo — matches node-handle-icon-image
@@ -35,7 +35,7 @@ export function getSourceHandleColor(nodeType: string | undefined, sourceHandleI
   }
   // Legacy / single-output nodes — derive from node type
   switch (nodeType) {
-    case "promptNode": return "#ff3df5";
+    case "promptNode": return "#2DD4BF";
     case "assistantNode": return "#FBBF24";
     case "imageInputNode": return "#818cf8";
     case "generateNode": return "#818cf8";

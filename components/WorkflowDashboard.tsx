@@ -111,7 +111,7 @@ const CSS = `
   .wsd-plus-orb {
     position: relative;
     width: 56px; height: 56px; border-radius: 50%;
-    background: linear-gradient(135deg, #A855F7 0%, #EC4899 100%);
+    background: linear-gradient(135deg, #0D9488 0%, #2DD4BF 100%);
     display: grid; place-items: center;
     color: white;
     box-shadow: 0 0 0 1px rgba(255,255,255,0.18) inset;
@@ -121,7 +121,7 @@ const CSS = `
     appearance: none; border: 0; cursor: pointer;
     display: inline-flex; align-items: center; gap: 8px;
     padding: 9px 14px;
-    background: linear-gradient(135deg, #A855F7 0%, #EC4899 100%);
+    background: linear-gradient(135deg, #0D9488 0%, #2DD4BF 100%);
     color: white; font-size: 12px; font-weight: 600; border-radius: 10px;
     position: relative;
     transition: filter 140ms ease, transform 140ms ease;

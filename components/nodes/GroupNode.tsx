@@ -496,17 +496,17 @@ export default function GroupNode({ id, data, selected }: NodeProps<GroupNodeTyp
               disabled={genNodeCount === 0 || pipelineRunning}
               className="h-7 flex items-center gap-1.5 px-2.5 rounded-full transition-colors duration-150"
               style={{
-                border: `1px solid ${pipelineRunning ? "rgba(255,61,245,0.5)" : "rgba(255,61,245,0.25)"}`,
-                background: pipelineRunning ? "rgba(255,61,245,0.18)" : "rgba(255,61,245,0.07)",
-                color: genNodeCount === 0 ? "rgba(255,255,255,0.25)" : "rgba(255,61,245,0.9)",
+                border: `1px solid ${pipelineRunning ? "rgba(45,212,191,0.5)" : "rgba(45,212,191,0.25)"}`,
+                background: pipelineRunning ? "rgba(45,212,191,0.18)" : "rgba(45,212,191,0.07)",
+                color: genNodeCount === 0 ? "rgba(255,255,255,0.25)" : "rgba(45,212,191,0.9)",
                 opacity: genNodeCount === 0 ? 0.45 : 1,
                 cursor: genNodeCount === 0 || pipelineRunning ? "not-allowed" : "pointer",
               }}
             >
               {pipelineRunning ? (
                 <svg width="9" height="9" viewBox="0 0 10 10" fill="none" style={{ animation: "spin 0.9s linear infinite", flexShrink: 0 }}>
-                  <circle cx="5" cy="5" r="4" stroke="rgba(255,61,245,0.3)" strokeWidth="1.5" />
-                  <path d="M5 1 A4 4 0 0 1 9 5" stroke="rgba(255,61,245,0.9)" strokeWidth="1.5" strokeLinecap="round" />
+                  <circle cx="5" cy="5" r="4" stroke="rgba(45,212,191,0.3)" strokeWidth="1.5" />
+                  <path d="M5 1 A4 4 0 0 1 9 5" stroke="rgba(45,212,191,0.9)" strokeWidth="1.5" strokeLinecap="round" />
                 </svg>
               ) : (
                 <svg width="9" height="9" viewBox="0 0 10 10" fill="currentColor" style={{ flexShrink: 0 }}>
@@ -517,7 +517,7 @@ export default function GroupNode({ id, data, selected }: NodeProps<GroupNodeTyp
               {genNodeCount > 0 && (
                 <span
                   className="text-[10px] font-semibold leading-none rounded-full px-1.5 py-0.5"
-                  style={{ background: "rgba(255,61,245,0.2)" }}
+                  style={{ background: "rgba(45,212,191,0.2)" }}
                 >
                   {genNodeCount}
                 </span>

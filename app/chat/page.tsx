@@ -6,7 +6,7 @@ import { useChatSessionStore, type StoredMessage, type ChatSession } from "@/lib
 import { MODEL_GROUPS, MODELS, type ModelId } from "@/lib/models";
 import { getToken } from "@/lib/galleryUtils";
 import { SYSTEM_PROMPT } from "@/lib/systemPrompt";
-import { Bot, Send, ChevronUp } from "lucide-react";
+import { Bot, Send, ChevronUp, Copy, Check } from "lucide-react";
 import { BlurInText } from "@/components/ui/blur-in-text";
 import { motion } from "motion/react";
 
@@ -242,6 +242,7 @@ function ChatWindow({
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(!!initialMessage);
   const [model, setModel] = useState<ModelId>((session.model || defaultModel || "claude-sonnet-4-6") as ModelId);
+  const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
 
   function handleModelChange(id: ModelId) { setModel(id); onModelChange?.(id); }
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -398,23 +399,47 @@ function ChatWindow({
       <div ref={scrollRef} style={{ flex: 1, overflowY: "auto", padding: "20px", display: "flex", flexDirection: "column", gap: "14px" }}>
         {messages.map((m, i) => (
           <div key={i} style={{ display: "flex", justifyContent: m.role === "user" ? "flex-end" : "flex-start" }}>
-            <div style={{
-              maxWidth: "72%",
-              padding: "10px 14px",
-              borderRadius: m.role === "user" ? "16px 16px 4px 16px" : "16px 16px 16px 4px",
-              background: m.role === "user" ? "rgba(45,212,191,0.15)" : "rgba(255,255,255,0.06)",
-              border: m.role === "user" ? "1px solid rgba(45,212,191,0.25)" : "1px solid rgba(255,255,255,0.07)",
-              fontSize: "14px", lineHeight: 1.6,
-              color: m.role === "user" ? "#FFFFFF" : "rgba(255,255,255,0.88)",
-              whiteSpace: "pre-wrap", wordBreak: "break-word",
-            }}>
-              {m.content}
-              {m.streaming && !m.content && (
-                <span style={{ display: "inline-flex", gap: "3px", alignItems: "center" }}>
-                  {[0, 1, 2].map(d => (
-                    <span key={d} style={{ width: "4px", height: "4px", borderRadius: "50%", background: "rgba(255,255,255,0.4)", animation: `chatDot 1s ${d * 0.2}s infinite` }} />
-                  ))}
-                </span>
+            <div style={{ display: "flex", flexDirection: "column", alignItems: m.role === "user" ? "flex-end" : "flex-start", maxWidth: "72%" }}>
+              <div style={{
+                padding: "10px 14px",
+                borderRadius: m.role === "user" ? "16px 16px 4px 16px" : "16px 16px 16px 4px",
+                background: m.role === "user" ? "rgba(45,212,191,0.15)" : "rgba(255,255,255,0.06)",
+                border: m.role === "user" ? "1px solid rgba(45,212,191,0.25)" : "1px solid rgba(255,255,255,0.07)",
+                fontSize: "14px", lineHeight: 1.6,
+                color: m.role === "user" ? "#FFFFFF" : "rgba(255,255,255,0.88)",
+                whiteSpace: "pre-wrap", wordBreak: "break-word",
+              }}>
+                {m.content}
+                {m.streaming && !m.content && (
+                  <span style={{ display: "inline-flex", gap: "3px", alignItems: "center" }}>
+                    {[0, 1, 2].map(d => (
+                      <span key={d} style={{ width: "4px", height: "4px", borderRadius: "50%", background: "rgba(255,255,255,0.4)", animation: `chatDot 1s ${d * 0.2}s infinite` }} />
+                    ))}
+                  </span>
+                )}
+              </div>
+              {m.role === "assistant" && !m.streaming && m.content && (
+                <button
+                  onClick={() => {
+                    navigator.clipboard.writeText(m.content);
+                    setCopiedIdx(i);
+                    setTimeout(() => setCopiedIdx(null), 1500);
+                  }}
+                  title="Copy response"
+                  style={{
+                    marginTop: "4px",
+                    display: "flex", alignItems: "center", gap: "4px",
+                    padding: "3px 8px", borderRadius: "6px", border: "none",
+                    background: "transparent", color: copiedIdx === i ? "rgba(45,212,191,0.8)" : "rgba(255,255,255,0.25)",
+                    fontSize: "11px", fontFamily: "inherit", cursor: "pointer",
+                    transition: "color 150ms, background 150ms",
+                  }}
+                  onMouseEnter={e => { if (copiedIdx !== i) (e.currentTarget as HTMLButtonElement).style.color = "rgba(255,255,255,0.55)"; (e.currentTarget as HTMLButtonElement).style.background = "rgba(255,255,255,0.06)"; }}
+                  onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = copiedIdx === i ? "rgba(45,212,191,0.8)" : "rgba(255,255,255,0.25)"; (e.currentTarget as HTMLButtonElement).style.background = "transparent"; }}
+                >
+                  {copiedIdx === i ? <Check size={11} /> : <Copy size={11} />}
+                  {copiedIdx === i ? "Copied" : "Copy"}
+                </button>
               )}
             </div>
           </div>

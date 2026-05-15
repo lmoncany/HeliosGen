@@ -2531,31 +2531,29 @@ function GalleryInner() {
                     display: "flex",
                     alignItems: "center",
                     justifyContent: "center",
-                    width: "44px",
-                    height: "44px",
+                    width: "36px",
+                    height: "36px",
                     borderRadius: "50%",
                     border: "none",
-                    background: "#2DD4BF",
-                    color: "#0B0E14",
+                    background: canGenerate ? "rgba(45,212,191,0.25)" : "rgba(45,212,191,0.1)",
+                    color: canGenerate ? "rgba(45,212,191,0.9)" : "rgba(45,212,191,0.3)",
                     cursor: !canGenerate ? "not-allowed" : "pointer",
-                    opacity: !canGenerate ? 0.4 : 1,
-                    transition: "all 200ms cubic-bezier(0.16,1,0.3,1)",
-                    transform: !canGenerate ? "scale(0.92)" : "scale(1)",
-                    boxShadow: canGenerate ? "0 4px 12px rgba(45,212,191,0.25)" : "none",
+                    flexShrink: 0,
+                    transition: "background 150ms, color 150ms",
                   }}
-                  onMouseEnter={e => { if (canGenerate) { e.currentTarget.style.background = "#2DD4BF"; e.currentTarget.style.transform = "scale(1.08)"; } }}
-                  onMouseLeave={e => { if (canGenerate) { e.currentTarget.style.background = "#2DD4BF"; e.currentTarget.style.transform = "scale(1)"; } }}
+                  onMouseEnter={e => { if (canGenerate) { e.currentTarget.style.background = "rgba(45,212,191,0.38)"; } }}
+                  onMouseLeave={e => { if (canGenerate) { e.currentTarget.style.background = "rgba(45,212,191,0.25)"; } }}
                 >
                   {submitting ? (
                     <span style={{
-                      width: "18px", height: "18px", borderRadius: "50%",
-                      border: "2px solid rgba(6,10,6,0.25)", borderTopColor: "#060A06",
+                      width: "15px", height: "15px", borderRadius: "50%",
+                      border: "2px solid rgba(45,212,191,0.25)", borderTopColor: "rgba(45,212,191,0.9)",
                       display: "inline-block", animation: "spin 0.75s linear infinite",
                     }} />
                   ) : (
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round">
-                      <line x1="12" y1="19" x2="12" y2="5" />
-                      <polyline points="5 12 12 5 19 12" />
+                    <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <path d="M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z" />
+                      <path d="m21.854 2.147-10.94 10.939" />
                     </svg>
                   )}
                 </button>
