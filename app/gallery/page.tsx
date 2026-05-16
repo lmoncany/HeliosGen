@@ -11,6 +11,7 @@ import { GalleryItem, getToken, galleryCache } from "@/lib/galleryUtils";
 import { MediaPickerModal } from "@/components/MediaPickerModal";
 import { useSidebar } from "@/components/ui/sidebar";
 import { QuickAssist } from "@/components/QuickAssist";
+import DotCanvasBackground from "@/components/ui/DotCanvasBackground";
 
 function thumbSrc(url: string, w = 128): string {
   if (!url || url.startsWith("blob:") || url.startsWith("data:")) return url;
@@ -1721,6 +1722,7 @@ function GalleryInner() {
 
   return (
     <div style={{ flex: 1, background: "#0B0E14", display: "flex", flexDirection: "column", overflow: "hidden", color: "#fff", position: "relative" }}>
+      <DotCanvasBackground />
 
       {/* ── Sub-navbar ── */}
       {user && <div style={{
@@ -1729,8 +1731,11 @@ function GalleryInner() {
         justifyContent: "space-between",
         padding: "0 14px",
         height: "44px",
+        background: "#000000",
         borderBottom: "1px solid rgba(255,255,255,0.05)",
         flexShrink: 0,
+        position: "relative",
+        zIndex: 1,
       }}>
         {/* Left: source tabs */}
         <div style={{ display: "flex", gap: "2px" }}>

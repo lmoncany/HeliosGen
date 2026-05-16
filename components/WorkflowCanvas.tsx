@@ -27,6 +27,7 @@ import { sha256Hex } from "@/lib/assetHash";
 
 import { motion } from "motion/react";
 import TypewriterHeading from "@/components/ui/TypewriterHeading";
+import DotCanvasBackground from "@/components/ui/DotCanvasBackground";
 import PromptNode from "./nodes/PromptNode";
 import ImageInputNode from "./nodes/ImageInputNode";
 import VideoInputNode from "./nodes/VideoInputNode";
@@ -1384,6 +1385,7 @@ export default function WorkflowCanvas() {
       <div
         ref={wrapperRef}
         className={`relative flex-1 flex flex-col min-h-0 min-w-0${activeTool === "hand" ? " canvas-hand-mode" : ""}`}
+        style={{ background: "#0B0E14" }}
         onMouseMoveCapture={(e) => {
           const rect = e.currentTarget.getBoundingClientRect();
           const x = e.clientX - rect.left;
@@ -1462,6 +1464,7 @@ export default function WorkflowCanvas() {
           minZoom={0.05}
           colorMode="dark"
           className="flex-1"
+          style={{ background: "transparent" }}
           // Hand mode: left-click pans; Select mode: right-click pans + left-click selects
           panOnDrag={activeTool === "hand" ? [0] : [2]}
           selectionOnDrag={activeTool !== "hand"}
@@ -1477,21 +1480,21 @@ export default function WorkflowCanvas() {
             strokeLinecap: "round",
           }}
         >
-          <Background variant={BackgroundVariant.Dots} gap={28} size={1.5} color="#333333" />
+          <Background variant={BackgroundVariant.Dots} gap={28} size={1.5} color="#2a2a2a" />
           <div
             style={{
               position: "absolute",
               inset: 0,
               pointerEvents: "none",
               zIndex: 1,
-              maskImage: "radial-gradient(circle 300px at var(--mouse-x, -1000px) var(--mouse-y, -1000px), black 0%, transparent 80%)",
-              WebkitMaskImage: "radial-gradient(circle 300px at var(--mouse-x, -1000px) var(--mouse-y, -1000px), black 0%, transparent 80%)",
+              maskImage: "radial-gradient(circle 420px at var(--mouse-x, -1000px) var(--mouse-y, -1000px), black 0%, transparent 70%)",
+              WebkitMaskImage: "radial-gradient(circle 420px at var(--mouse-x, -1000px) var(--mouse-y, -1000px), black 0%, transparent 70%)",
             }}
           >
             <Background
               variant={BackgroundVariant.Dots}
               gap={28}
-              size={2}
+              size={3}
               color="#FFFFFF"
             />
           </div>
@@ -1561,6 +1564,7 @@ export default function WorkflowCanvas() {
         {/* ── Welcome screen (empty state) ─────────────────────────────────────── */}
         {nodes.length === 0 && (
           <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none z-10">
+            <DotCanvasBackground />
             {/* Ambient glow */}
             <div
               className="absolute inset-0 pointer-events-none"

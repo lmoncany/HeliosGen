@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { useWorkflowStore, Space } from "@/lib/store";
 import { timeAgo } from "@/lib/useSpaceSync";
 import { WorkflowHero } from "@/components/WorkflowHero";
+import DotCanvasBackground from "@/components/ui/DotCanvasBackground";
 
 // ── CSS ───────────────────────────────────────────────────────────────────────
 
@@ -543,6 +544,7 @@ export default function WorkflowDashboard() {
         background: "#0B0E14",
       }}
     >
+      <DotCanvasBackground />
       <style>{CSS}</style>
 
       <div style={{ paddingBottom: "80px" }}>
