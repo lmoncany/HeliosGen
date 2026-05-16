@@ -5,6 +5,7 @@ import NextImage from "next/image";
 import { useRouter } from "next/navigation";
 import { useWorkflowStore, Space } from "@/lib/store";
 import { timeAgo } from "@/lib/useSpaceSync";
+import { WorkflowHero } from "@/components/WorkflowHero";
 
 // ── CSS ───────────────────────────────────────────────────────────────────────
 
@@ -356,19 +357,6 @@ function DeleteConfirmModal({
 
 // ── Space card ────────────────────────────────────────────────────────────────
 
-function NodePill({ label, color, bg }: { label: string; color: string; bg: string }) {
-  return (
-    <span style={{
-      display: "inline-flex", alignItems: "center",
-      padding: "2px 7px", borderRadius: "5px",
-      fontSize: "10px", fontWeight: 600, letterSpacing: "0.04em",
-      background: bg, color, flexShrink: 0,
-      border: `1px solid ${color}28`,
-    }}>
-      {label}
-    </span>
-  );
-}
 
 function SpaceCard({ space, onOpen }: { space: Space; onOpen: () => void }) {
   const [menuOpen, setMenuOpen] = useState(false);
@@ -381,9 +369,6 @@ function SpaceCard({ space, onOpen }: { space: Space; onOpen: () => void }) {
   const deleteSpace = useWorkflowStore((s) => s.deleteSpace);
 
   const ts = space.updatedAt ?? space.createdAt;
-  const textCount  = space.nodes.filter((n) => n.type === "promptNode").length;
-  const imageCount = space.nodes.filter((n) => n.type === "generateNode").length;
-  const videoCount = space.nodes.filter((n) => n.type === "videoGeneratorNode").length;
 
   const startRename = () => {
     setDraft(space.name);
@@ -463,22 +448,16 @@ function SpaceCard({ space, onOpen }: { space: Space; onOpen: () => void }) {
           )}
         </div>
 
-        {/* Meta row: timestamp + node-type pills */}
-        <div className="wsd-foot-row" style={{ justifyContent: "space-between" }}>
+        {/* Meta row: timestamp */}
+        <div className="wsd-foot-row">
           <span style={{
             fontFamily: "var(--font-geist-mono), monospace",
             fontSize: "10px", fontWeight: 500,
             color: "rgba(255,255,255,0.28)",
             letterSpacing: "0.05em", textTransform: "uppercase",
-            flexShrink: 0,
           }}>
             {timeAgo(new Date(ts))}
           </span>
-          <div style={{ display: "flex", gap: "4px", flexWrap: "wrap", justifyContent: "flex-end" }}>
-            {textCount  > 0 && <NodePill label={`${textCount} TEXT`}      color="#a0a0b0" bg="rgba(160,160,176,0.1)" />}
-            {imageCount > 0 && <NodePill label={`${imageCount} IMG GEN`}  color="#fb923c" bg="rgba(251,146,60,0.1)"  />}
-            {videoCount > 0 && <NodePill label={`${videoCount} VID GEN`}  color="#818cf8" bg="rgba(129,140,248,0.1)" />}
-          </div>
         </div>
       </div>
 
@@ -568,6 +547,8 @@ export default function WorkflowDashboard() {
 
       <div style={{ paddingBottom: "80px" }}>
 
+        <WorkflowHero />
+
         {/* ── Page header ── */}
         <section style={{
           padding: "28px 32px 20px",
@@ -605,7 +586,7 @@ export default function WorkflowDashboard() {
         {/* ── Grid ── */}
         <section style={{
           display: "grid",
-          gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))",
+          gridTemplateColumns: "repeat(4, 1fr)",
           gap: "18px",
           padding: "0 32px",
         }}>
