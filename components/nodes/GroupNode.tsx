@@ -315,12 +315,13 @@ export default function GroupNode({ id, data, selected }: NodeProps<GroupNodeTyp
   const flashNode = useCallback((nodeId: string, anim = "node-identify-blink") => {
     const styleId = `identify-flash-${nodeId}`;
     document.getElementById(styleId)?.remove();
-    void document.body.offsetHeight;
-    const styleEl = document.createElement("style");
-    styleEl.id = styleId;
-    styleEl.textContent = `.react-flow__node[data-id="${CSS.escape(nodeId)}"] .node-card { animation: ${anim} 1.3s ease 1 forwards; }`;
-    document.head.appendChild(styleEl);
-    setTimeout(() => document.getElementById(styleId)?.remove(), 1400);
+    requestAnimationFrame(() => {
+      const styleEl = document.createElement("style");
+      styleEl.id = styleId;
+      styleEl.textContent = `.react-flow__node[data-id="${CSS.escape(nodeId)}"] .node-card { animation: ${anim} 1.3s ease 1 forwards; }`;
+      document.head.appendChild(styleEl);
+      setTimeout(() => document.getElementById(styleId)?.remove(), 1400);
+    });
   }, []);
 
   // Close run dropdown on click outside
@@ -766,6 +767,7 @@ export default function GroupNode({ id, data, selected }: NodeProps<GroupNodeTyp
                         borderBottom: i < jobs.length - 1 ? "1px solid rgba(255,255,255,0.04)" : "none",
                         cursor: "pointer",
                       }}
+                      onMouseDown={(e) => e.stopPropagation()}
                       onClick={(e) => {
                         e.stopPropagation();
                         flashNode(job.genNodeId);

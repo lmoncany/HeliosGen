@@ -1675,7 +1675,7 @@ export default function VideoGeneratorNode({ id, data, selected }: NodeProps<Vid
                   className="flex items-center gap-1.5 rounded-full px-2 py-1 transition-colors"
                   style={{ background: "rgba(0,0,0,0.45)", backdropFilter: "blur(10px)", WebkitBackdropFilter: "blur(10px)", border: "1px solid rgba(255,255,255,0.07)" }}
                 >
-                  <ToggleSwitch on={sound} />
+                  <ToggleSwitch on={sound} activeColor="#2dd4bf" />
                   <span className="text-[11px] text-white/70">Sound</span>
                 </button>
               )}
