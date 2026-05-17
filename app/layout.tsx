@@ -46,7 +46,7 @@ export default async function RootLayout({
         <TooltipProvider>
           <SidebarProvider defaultOpen={sidebarOpen} className="h-full">
             <AppSidebar />
-            <SidebarInset className="bg-transparent flex flex-col min-h-0 min-w-0 border-l border-r border-t border-white/[0.08] mx-2 mt-2 rounded-tl-xl rounded-tr-xl overflow-hidden">
+            <SidebarInset className="bg-transparent flex flex-col min-h-0 min-w-0 border-l border-r border-t border-white/[0.08] mx-2 mt-2 rounded-tl-xl rounded-tr-xl">
               {children}
             </SidebarInset>
           </SidebarProvider>
