@@ -514,6 +514,19 @@ body {
   transition-delay: 0ms !important;
 }
 
+/* ── Suppress all transitions during rubber-band selection ────────────────── */
+/* Without this, every node gaining/losing .selected fires simultaneous handle
+   transform+opacity animations (180 ms + 280 ms delay), causing visible blinking. */
+.react-flow.is-rubber-band-selecting .node-handle.react-flow__handle,
+.react-flow.is-rubber-band-selecting .node-handle-icon.react-flow__handle {
+  transition: none !important;
+  animation: none !important;
+}
+
+.react-flow.is-rubber-band-selecting .node-card {
+  transition: none !important;
+}
+
 /* ── Selection rectangle (drag) + post-release overlay ── */
 .react-flow__selection {
   background: rgba(45, 212, 191, 0.04) !important;

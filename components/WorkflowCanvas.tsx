@@ -190,6 +190,8 @@ export default function WorkflowCanvas() {
   const [potentialGroupIds, setPotentialGroupIds] = useState<Set<string> | null>(null);
   // Ref so the nodes map always reads the latest selected IDs in the same render
   const selectedIdsRef = useRef<Set<string>>(new Set());
+  // True while the rubber-band drag is in progress — skip BFS and dimming to prevent blinking
+  const isRubberBandSelectingRef = useRef(false);
   // Edge IDs that will be removed by our delayed node-delete handler — suppress RF's auto-remove
   const suppressedEdgeRemovesRef = useRef<Set<string>>(new Set());
 
@@ -207,11 +209,41 @@ export default function WorkflowCanvas() {
     suppressedEdgeRemovesRef.current = new Set();
   }, [redo]);
 
+  // BFS helper: compute ancestor nodes/edges for the current selectedIdsRef and update state
+  const runAncestorBFS = useCallback(() => {
+    const selectedIds = selectedIdsRef.current;
+    if (selectedIds.size === 0) {
+      setAncestorIds(new Set());
+      setAncestorEdgeIds(new Set());
+      return;
+    }
+    const visitedNodes = new Set<string>();
+    const visitedEdges = new Set<string>();
+    const queue = [...selectedIds];
+    while (queue.length > 0) {
+      const id = queue.shift()!;
+      for (const edge of edges) {
+        if (edge.target !== id) continue;
+        visitedEdges.add(edge.id);
+        if (!selectedIds.has(edge.source) && !visitedNodes.has(edge.source)) {
+          visitedNodes.add(edge.source);
+          queue.push(edge.source);
+        }
+      }
+    }
+    setAncestorIds(visitedNodes);
+    setAncestorEdgeIds(visitedEdges);
+  }, [edges]);
+
   // Walk edges upstream from selected nodes, collecting all ancestor node + edge IDs
   const onSelectionChange = useCallback(
     ({ nodes: selected }: { nodes: Node[] }) => {
       // Update ref synchronously — visible to the render triggered by setAncestorIds below
       selectedIdsRef.current = new Set(selected.map((n) => n.id));
+
+      // During rubber-band drag: skip BFS and state updates to prevent per-frame re-renders
+      // and blinking. Ancestor highlighting is applied once when the drag ends.
+      if (isRubberBandSelectingRef.current) return;
 
       // When a group node is selected, also select all its members
       const selectedGroups = selected.filter((n) => n.type === "groupNode");
@@ -231,25 +263,9 @@ export default function WorkflowCanvas() {
         setAncestorEdgeIds(new Set());
         return;
       }
-      const selectedIds = selectedIdsRef.current;
-      const visitedNodes = new Set<string>();
-      const visitedEdges = new Set<string>();
-      const queue = [...selectedIds];
-      while (queue.length > 0) {
-        const id = queue.shift()!;
-        for (const edge of edges) {
-          if (edge.target !== id) continue;
-          visitedEdges.add(edge.id);
-          if (!selectedIds.has(edge.source) && !visitedNodes.has(edge.source)) {
-            visitedNodes.add(edge.source);
-            queue.push(edge.source);
-          }
-        }
-      }
-      setAncestorIds(visitedNodes);
-      setAncestorEdgeIds(visitedEdges);
+      runAncestorBFS();
     },
-    [edges],
+    [edges, runAncestorBFS],
   );
 
   const handleEdgesChange = useCallback((changes: Parameters<typeof onEdgesChange>[0]) => {
@@ -859,6 +875,7 @@ export default function WorkflowCanvas() {
 
   // ── Edge drop → node picker ─────────────────────────────────────────────
   const [isConnecting, setIsConnecting] = useState(false);
+  const [isRubberBandSelecting, setIsRubberBandSelecting] = useState(false);
   const [dropState, setDropState] = useState<DropState | null>(null);
   const [log, setLog] = useState<{ text: string; ok: boolean }[]>([]);
 
@@ -1390,6 +1407,12 @@ export default function WorkflowCanvas() {
   );
 
   const computedNodes = useMemo(() => {
+    // During rubber-band: return nodes as-is so only actually-changed nodes (selected state)
+    // get new references. Wrapping every node in a new object causes ReactFlow to re-render
+    // ALL nodes on every mousemove frame, which is the source of the blinking.
+    // CSS class .is-rubber-band-selecting suppresses handle/card animations.
+    if (isRubberBandSelecting && dyingNodeIds.size === 0) return nodes;
+
     const selIds = selectedIdsRef.current;
     const anySelected = selIds.size > 0;
     const lockedMemberIds = new Set<string>();
@@ -1400,7 +1423,7 @@ export default function WorkflowCanvas() {
     return nodes.map((n) => {
       const isInGroup = hasPotentialGroup && potentialGroupIds!.has(n.id);
       const isHighlighted = selIds.has(n.id) || ancestorIds.has(n.id) || isInGroup;
-      const isDimmed = (anySelected || hasPotentialGroup) && !isHighlighted && !isConnecting;
+      const isDimmed = !isRubberBandSelecting && (anySelected || hasPotentialGroup) && !isHighlighted && !isConnecting;
       const ancestorClass = ancestorIds.has(n.id) ? "node-ancestor" : null;
       const groupPreviewClass = (isInGroup && !selIds.has(n.id) && !ancestorIds.has(n.id)) ? "node-group-preview" : null;
       const isLockedMember = lockedMemberIds.has(n.id);
@@ -1414,11 +1437,11 @@ export default function WorkflowCanvas() {
         style: {
           ...n.style,
           opacity: isDying ? undefined : (isDimmed ? 0.25 : undefined),
-          transition: isDying ? undefined : ((anySelected || hasPotentialGroup) ? "opacity 150ms" : undefined),
+          transition: isDying || isRubberBandSelecting ? undefined : ((anySelected || hasPotentialGroup) ? "opacity 150ms" : undefined),
         },
       };
     });
-  }, [nodes, ancestorIds, potentialGroupIds, dyingNodeIds, isConnecting]);
+  }, [nodes, ancestorIds, potentialGroupIds, dyingNodeIds, isConnecting, isRubberBandSelecting]);
 
   const computedEdges = useMemo(() => {
     const selIds = selectedIdsRef.current;
@@ -1466,6 +1489,12 @@ export default function WorkflowCanvas() {
           onConnectStart={onConnectStart}
           onConnectEnd={onConnectEnd}
           isValidConnection={isValidConnection}
+          onSelectionStart={() => { isRubberBandSelectingRef.current = true; setIsRubberBandSelecting(true); }}
+          onSelectionEnd={() => {
+            isRubberBandSelectingRef.current = false;
+            setIsRubberBandSelecting(false);
+            runAncestorBFS();
+          }}
           onMove={(_, vp) => { viewportRef.current = vp; saveViewport(vp); }}
           onDrop={onDrop}
           onDragOver={onDragOver}
@@ -1474,7 +1503,7 @@ export default function WorkflowCanvas() {
           fitView
           minZoom={0.05}
           colorMode="dark"
-          className="flex-1"
+          className={`flex-1${isRubberBandSelecting ? " is-rubber-band-selecting" : ""}`}
           style={{ background: "transparent" }}
           // Hand mode: left-click pans; Select mode: right-click pans + left-click selects
           panOnDrag={activeTool === "hand" ? [0] : [2]}
