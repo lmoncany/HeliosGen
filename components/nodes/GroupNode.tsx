@@ -9,6 +9,23 @@ import { VIDEO_MODELS } from "@/lib/modelConfig";
 
 export type GroupNodeType = Node<NodeData, "groupNode">;
 
+function collectAncestors(startId: string, allNodes: Node<NodeData>[], edges: { source: string; target: string }[]): string[] {
+  const visited = new Set<string>();
+  const queue = [startId];
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    if (visited.has(current)) continue;
+    visited.add(current);
+    for (const e of edges) {
+      if (e.target === current && allNodes.some(n => n.id === e.source)) {
+        queue.push(e.source);
+      }
+    }
+  }
+  visited.delete(startId);
+  return [...visited];
+}
+
 const GROUP_COLORS = [
   "#3b82f6", // Blue (default)
   "#0D9488", // Blue-600
@@ -211,6 +228,7 @@ export default function GroupNode({ id, data, selected }: NodeProps<GroupNodeTyp
         genLabel: (genNode.data.label as string) || (genNode.type === "videoGeneratorNode" ? "Video gen" : "Image gen"),
         sourceLabel,
         missingInputs,
+        allAncestorIds: collectAncestors(genNode.id, allNodes, edges),
       };
     });
   }, [allNodes, edges, memberIds]);
@@ -294,14 +312,13 @@ export default function GroupNode({ id, data, selected }: NodeProps<GroupNodeTyp
     return () => document.removeEventListener("mousedown", handler);
   }, [colorPickerOpen]);
 
-  const flashNode = useCallback((genNodeId: string) => {
-    // Inject a scoped <style> rule so React reconciliation can't wipe it
-    const styleId = `identify-flash-${genNodeId}`;
+  const flashNode = useCallback((nodeId: string, anim = "node-identify-blink") => {
+    const styleId = `identify-flash-${nodeId}`;
     document.getElementById(styleId)?.remove();
-    void document.body.offsetHeight; // reflow so browser re-triggers animation
+    void document.body.offsetHeight;
     const styleEl = document.createElement("style");
     styleEl.id = styleId;
-    styleEl.textContent = `.react-flow__node[data-id="${CSS.escape(genNodeId)}"] .node-card { animation: node-identify-blink 1.3s ease 1 forwards; }`;
+    styleEl.textContent = `.react-flow__node[data-id="${CSS.escape(nodeId)}"] .node-card { animation: ${anim} 1.3s ease 1 forwards; }`;
     document.head.appendChild(styleEl);
     setTimeout(() => document.getElementById(styleId)?.remove(), 1400);
   }, []);
@@ -749,7 +766,11 @@ export default function GroupNode({ id, data, selected }: NodeProps<GroupNodeTyp
                         borderBottom: i < jobs.length - 1 ? "1px solid rgba(255,255,255,0.04)" : "none",
                         cursor: "pointer",
                       }}
-                      onClick={(e) => { e.stopPropagation(); flashNode(job.genNodeId); }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        flashNode(job.genNodeId);
+                        job.allAncestorIds.forEach((aid) => flashNode(aid, "node-identify-input-blink"));
+                      }}
                       onMouseEnter={(e) => { (e.currentTarget as HTMLDivElement).style.background = "rgba(255,255,255,0.04)"; }}
                       onMouseLeave={(e) => { (e.currentTarget as HTMLDivElement).style.background = "transparent"; }}
                     >
