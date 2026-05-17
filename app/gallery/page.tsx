@@ -1731,7 +1731,7 @@ function GalleryInner() {
         justifyContent: "space-between",
         padding: "0 14px",
         height: "44px",
-        background: "#000000",
+        background: "#0B0E14",
         borderBottom: "1px solid rgba(255,255,255,0.05)",
         flexShrink: 0,
         position: "relative",
