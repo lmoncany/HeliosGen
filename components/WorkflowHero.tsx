@@ -1,6 +1,6 @@
 export function WorkflowHero() {
   return (
-    <section className="relative w-full overflow-hidden py-8 md:py-10">
+    <section className="relative w-full py-8 md:py-10" style={{ overflowX: "clip" }}>
       <style>{`
         @keyframes hero-fade-up {
           from { opacity: 0; transform: translateY(12px); }
@@ -14,7 +14,7 @@ export function WorkflowHero() {
         }
       `}</style>
 
-      <div className="relative left-1/2 h-[270px] w-[1800px] -translate-x-1/2">
+      <div className="relative left-1/2 h-[300px] w-[1800px] -translate-x-1/2">
         <svg
           className="pointer-events-none absolute inset-0 hidden size-full text-white/25 md:block"
           viewBox="0 0 100 100"

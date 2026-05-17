@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useRef, useState, useCallback } from "react";
+import { createClient } from "@/lib/supabase/client";
 import { getToken } from "@/lib/galleryUtils";
 import { MODEL_GROUPS, MODELS, type ModelId } from "@/lib/models";
 import { useChatSessionStore } from "@/lib/chatSessionStore";
@@ -13,6 +14,7 @@ interface Message {
 
 
 export function QuickAssist() {
+  const [user, setUser] = useState<boolean | null>(null);
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
@@ -28,6 +30,16 @@ export function QuickAssist() {
   const containerRef = useRef<HTMLDivElement>(null);
 
   const { createSession, upsertSession } = useChatSessionStore();
+
+  // Track auth state
+  useEffect(() => {
+    const supabase = createClient();
+    supabase.auth.getSession().then(({ data }) => setUser(!!data.session?.user));
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_, session) => {
+      setUser(!!session?.user);
+    });
+    return () => subscription.unsubscribe();
+  }, []);
 
   // Sync to store when streaming stops
   useEffect(() => {
@@ -160,6 +172,8 @@ export function QuickAssist() {
   }
 
   const isEmpty = messages.length === 0;
+
+  if (!user) return null;
 
   return (
     <div ref={containerRef}>

@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ReactFlow,
   Background,
@@ -27,7 +27,6 @@ import { sha256Hex } from "@/lib/assetHash";
 
 import { motion } from "motion/react";
 import TypewriterHeading from "@/components/ui/TypewriterHeading";
-import DotCanvasBackground from "@/components/ui/DotCanvasBackground";
 import PromptNode from "./nodes/PromptNode";
 import ImageInputNode from "./nodes/ImageInputNode";
 import VideoInputNode from "./nodes/VideoInputNode";
@@ -166,10 +165,17 @@ export default function WorkflowCanvas() {
     addNode, insertEdge,
     updateNodeData, isRunning, setIsRunning, debugMode, toggleDebug,
     setConnectingHandleType,
-    saveViewport,
+    saveViewport: _saveViewport,
     pushUndoSnapshot, undo, redo,
     undoStack, redoStack,
   } = useWorkflowStore();
+
+  // Debounce viewport saves so zoom/pan doesn't trigger a Zustand update every frame
+  const saveViewportTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const saveViewport = useCallback((vp: { x: number; y: number; zoom: number }) => {
+    if (saveViewportTimerRef.current) clearTimeout(saveViewportTimerRef.current);
+    saveViewportTimerRef.current = setTimeout(() => _saveViewport(vp), 300);
+  }, [_saveViewport]);
   const updateNodeDataRef = useRef(updateNodeData);
   updateNodeDataRef.current = updateNodeData;
   const [activeTool, setActiveTool] = useState<"select" | "hand">("select");
@@ -1380,12 +1386,59 @@ export default function WorkflowCanvas() {
     (n) => n.type === "generateNode" || n.type === "videoGeneratorNode" || n.type === "assistantNode"
   );
 
+  const computedNodes = useMemo(() => {
+    const selIds = selectedIdsRef.current;
+    const anySelected = selIds.size > 0;
+    const lockedMemberIds = new Set<string>();
+    nodes.filter((n) => n.type === "groupNode" && n.data?.locked).forEach((g) => {
+      (g.data?.memberIds as string[] | undefined)?.forEach((mid) => lockedMemberIds.add(mid));
+    });
+    const hasPotentialGroup = potentialGroupIds !== null && potentialGroupIds.size > 0;
+    return nodes.map((n) => {
+      const isInGroup = hasPotentialGroup && potentialGroupIds!.has(n.id);
+      const isHighlighted = selIds.has(n.id) || ancestorIds.has(n.id) || isInGroup;
+      const isDimmed = (anySelected || hasPotentialGroup) && !isHighlighted && !isConnecting;
+      const ancestorClass = ancestorIds.has(n.id) ? "node-ancestor" : null;
+      const groupPreviewClass = (isInGroup && !selIds.has(n.id) && !ancestorIds.has(n.id)) ? "node-group-preview" : null;
+      const isLockedMember = lockedMemberIds.has(n.id);
+      const isLockedGroup = n.type === "groupNode" && !!n.data?.locked;
+      const isDying = dyingNodeIds.has(n.id);
+      const dyingClass = isDying ? "node-dying" : null;
+      return {
+        ...n,
+        draggable: (isLockedMember || isLockedGroup) ? false : undefined,
+        className: [n.className, ancestorClass, groupPreviewClass, dyingClass].filter(Boolean).join(" ") || undefined,
+        style: {
+          ...n.style,
+          opacity: isDying ? undefined : (isDimmed ? 0.25 : undefined),
+          transition: isDying ? undefined : ((anySelected || hasPotentialGroup) ? "opacity 150ms" : undefined),
+        },
+      };
+    });
+  }, [nodes, ancestorIds, potentialGroupIds, dyingNodeIds, isConnecting]);
+
+  const computedEdges = useMemo(() => {
+    const selIds = selectedIdsRef.current;
+    const anySelected = selIds.size > 0;
+    const hasPotentialGroup = potentialGroupIds !== null && potentialGroupIds.size > 0;
+    return edges.map((e) => {
+      const isAncestorEdge = ancestorEdgeIds.has(e.id);
+      const isGroupEdge = hasPotentialGroup && potentialGroupIds!.has(e.source) && potentialGroupIds!.has(e.target);
+      const isDimmed = (anySelected || hasPotentialGroup) && !isAncestorEdge && !isGroupEdge;
+      return {
+        ...e,
+        className: isAncestorEdge ? [e.className, "edge-ancestor"].filter(Boolean).join(" ") : e.className,
+        data: { ...e.data, dying: dyingEdgeIds.has(e.id) || e.data?.dying === true, dimmed: isDimmed },
+      };
+    });
+  }, [edges, ancestorEdgeIds, potentialGroupIds, dyingEdgeIds]);
+
   return (
-    <div className="relative flex-1 flex flex-col min-w-0 h-full">
+    <div className="relative flex-1 flex flex-col min-w-0 h-full" style={{ background: "#0B0E14" }}>
       <div
         ref={wrapperRef}
         className={`relative flex-1 flex flex-col min-h-0 min-w-0${activeTool === "hand" ? " canvas-hand-mode" : ""}`}
-        style={{ background: "#0B0E14" }}
+        style={{ background: "transparent" }}
         onMouseMoveCapture={(e) => {
           const rect = e.currentTarget.getBoundingClientRect();
           const x = e.clientX - rect.left;
@@ -1396,53 +1449,8 @@ export default function WorkflowCanvas() {
         }}
       >
         <ReactFlow
-          nodes={(() => {
-            const selIds = selectedIdsRef.current;
-            const anySelected = selIds.size > 0;
-            // Build set of member IDs belonging to locked groups
-            const lockedMemberIds = new Set<string>();
-            nodes.filter((n) => n.type === "groupNode" && n.data?.locked).forEach((g) => {
-              (g.data?.memberIds as string[] | undefined)?.forEach((mid) => lockedMemberIds.add(mid));
-            });
-            const hasPotentialGroup = potentialGroupIds !== null && potentialGroupIds.size > 0;
-            return nodes.map((n) => {
-              const isInGroup = hasPotentialGroup && potentialGroupIds!.has(n.id);
-              const isHighlighted = selIds.has(n.id) || ancestorIds.has(n.id) || isInGroup;
-              const isDimmed = (anySelected || hasPotentialGroup) && !isHighlighted && !isConnecting;
-              const ancestorClass = ancestorIds.has(n.id) ? "node-ancestor" : null;
-              // Only add group-preview to nodes not already styled by selection or ancestor
-              const groupPreviewClass = (isInGroup && !selIds.has(n.id) && !ancestorIds.has(n.id)) ? "node-group-preview" : null;
-              const isLockedMember = lockedMemberIds.has(n.id);
-              const isLockedGroup = n.type === "groupNode" && !!n.data?.locked;
-              const isDying = dyingNodeIds.has(n.id);
-              const dyingClass = isDying ? "node-dying" : null;
-              return {
-                ...n,
-                draggable: (isLockedMember || isLockedGroup) ? false : undefined,
-                className: [n.className, ancestorClass, groupPreviewClass, dyingClass].filter(Boolean).join(" ") || undefined,
-                style: {
-                  ...n.style,
-                  opacity: isDying ? undefined : (isDimmed ? 0.25 : undefined),
-                  transition: isDying ? undefined : ((anySelected || hasPotentialGroup) ? "opacity 150ms" : undefined),
-                },
-              };
-            });
-          })()}
-          edges={(() => {
-            const selIds = selectedIdsRef.current;
-            const anySelected = selIds.size > 0;
-            const hasPotentialGroup = potentialGroupIds !== null && potentialGroupIds.size > 0;
-            return edges.map((e) => {
-              const isAncestorEdge = ancestorEdgeIds.has(e.id);
-              const isGroupEdge = hasPotentialGroup && potentialGroupIds!.has(e.source) && potentialGroupIds!.has(e.target);
-              const isDimmed = (anySelected || hasPotentialGroup) && !isAncestorEdge && !isGroupEdge;
-              return {
-                ...e,
-                className: isAncestorEdge ? [e.className, "edge-ancestor"].filter(Boolean).join(" ") : e.className,
-                data: { ...e.data, dying: dyingEdgeIds.has(e.id) || e.data?.dying === true, dimmed: isDimmed },
-              };
-            });
-          })()}
+          nodes={computedNodes}
+          edges={computedEdges}
           onNodesChange={onNodesChange}
           onEdgesChange={handleEdgesChange}
           onEdgeClick={handleEdgeClick}
@@ -1480,24 +1488,7 @@ export default function WorkflowCanvas() {
             strokeLinecap: "round",
           }}
         >
-          <Background variant={BackgroundVariant.Dots} gap={28} size={1.5} color="#2a2a2a" />
-          <div
-            style={{
-              position: "absolute",
-              inset: 0,
-              pointerEvents: "none",
-              zIndex: 1,
-              maskImage: "radial-gradient(circle 420px at var(--mouse-x, -1000px) var(--mouse-y, -1000px), black 0%, transparent 70%)",
-              WebkitMaskImage: "radial-gradient(circle 420px at var(--mouse-x, -1000px) var(--mouse-y, -1000px), black 0%, transparent 70%)",
-            }}
-          >
-            <Background
-              variant={BackgroundVariant.Dots}
-              gap={28}
-              size={3}
-              color="#FFFFFF"
-            />
-          </div>
+          <Background variant={BackgroundVariant.Dots} gap={28} size={1.5} color="#ffffff" />
           <ViewportSyncer />
           <GroupPreviewOverlay groupIds={potentialGroupIds} />
           <SelectionToolbar />
@@ -1564,7 +1555,6 @@ export default function WorkflowCanvas() {
         {/* ── Welcome screen (empty state) ─────────────────────────────────────── */}
         {nodes.length === 0 && (
           <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none z-10">
-            <DotCanvasBackground />
             {/* Ambient glow */}
             <div
               className="absolute inset-0 pointer-events-none"

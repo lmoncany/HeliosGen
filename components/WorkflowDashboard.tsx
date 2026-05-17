@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import NextImage from "next/image";
 import { useRouter } from "next/navigation";
+import { createClient } from "@/lib/supabase/client";
 import { useWorkflowStore, Space } from "@/lib/store";
 import { timeAgo } from "@/lib/useSpaceSync";
 import { WorkflowHero } from "@/components/WorkflowHero";
@@ -519,6 +520,17 @@ export default function WorkflowDashboard() {
   const spaces = useWorkflowStore((s) => s.spaces);
   const createSpace = useWorkflowStore((s) => s.createSpace);
   const switchSpace = useWorkflowStore((s) => s.switchSpace);
+  const setAuthModalOpen = useWorkflowStore((s) => s.setAuthModalOpen);
+  const [user, setUser] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    const supabase = createClient();
+    supabase.auth.getSession().then(({ data }) => setUser(!!data.session?.user));
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_, session) => {
+      setUser(!!session?.user);
+    });
+    return () => subscription.unsubscribe();
+  }, []);
 
   const openSpace = (id: string) => {
     switchSpace(id);
@@ -554,7 +566,7 @@ export default function WorkflowDashboard() {
         {/* ── Page header ── */}
         <section style={{
           padding: "28px 32px 20px",
-          display: "flex", alignItems: "flex-end", gap: "24px",
+          display: "flex", alignItems: "center", gap: "24px",
           flexWrap: "wrap", rowGap: "16px",
         }}>
           <div>
@@ -572,16 +584,28 @@ export default function WorkflowDashboard() {
               fontSize: "11px", fontWeight: 500, color: "rgba(255,255,255,0.4)",
               letterSpacing: "0.06em", textTransform: "uppercase",
             }}>
-              <b style={{ color: "rgba(255,255,255,0.7)", fontWeight: 500 }}>{sorted.length}</b>
-              <span>workspace{sorted.length !== 1 ? "s" : ""}</span>
+              {user ? (
+                <>
+                  <b style={{ color: "rgba(255,255,255,0.7)", fontWeight: 500 }}>{sorted.length}</b>
+                  <span>workspace{sorted.length !== 1 ? "s" : ""}</span>
+                </>
+              ) : (
+                <span style={{ color: "rgba(255,255,255,0.35)" }}>Sign in to save and sync your workflows</span>
+              )}
             </div>
           </div>
 
-          <div style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", paddingBottom: "2px" }}>
-            <button className="wsd-new-btn" onClick={handleCreate}>
-              <PlusIcon />
-              New workflow
-            </button>
+          <div style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center" }}>
+            {user ? (
+              <button className="wsd-new-btn" onClick={handleCreate}>
+                <PlusIcon />
+                New workflow
+              </button>
+            ) : (
+              <button className="wsd-new-btn" onClick={() => setAuthModalOpen(true)}>
+                Sign in
+              </button>
+            )}
           </div>
         </section>
 
