@@ -12,6 +12,7 @@ import { createClient } from "@/lib/supabase/client";
 import { VIDEO_MODELS as VIDEO_MODEL_CFG } from "@/lib/modelConfig";
 import { useGeneratingPhase } from "@/lib/useGeneratingPhase";
 import { useGeneratingBorderAnimation } from "@/lib/useGeneratingBorderAnimation";
+import MissingInputWarning from "./MissingInputWarning";
 
 type VideoGeneratorNodeType = Node<NodeData, "videoGeneratorNode">;
 
@@ -379,6 +380,7 @@ export default function VideoGeneratorNode({ id, data, selected }: NodeProps<Vid
   const isPending = status === "pending";
   const animBusy = loading || status === "running";
   const busy = animBusy || isPending;
+  const isQueued = !busy && !!data.pipelineQueued;
   const phaseLabel = useGeneratingPhase(animBusy);
 
   useGeneratingBorderAnimation(cardRef, animBusy);
@@ -960,7 +962,7 @@ export default function VideoGeneratorNode({ id, data, selected }: NodeProps<Vid
   return (
     <div
       ref={cardRef}
-      className={`video-node-card node-card w-full${animBusy ? " node-generating" : ""}${(data.hasError as boolean) ? " node-error-blink" : ""}`}
+      className={`video-node-card node-card w-full${animBusy ? " node-generating" : ""}${isQueued ? " node-queued" : ""}${(data.hasError as boolean) ? " node-error-blink" : ""}`}
       style={{
         minWidth: 320,
         aspectRatio: (data.imageNaturalRatio as string | undefined) ?? aspectRatio.replace(":", " / "),
@@ -994,6 +996,9 @@ export default function VideoGeneratorNode({ id, data, selected }: NodeProps<Vid
         <VideoNodeIcon />
         {data.label as string}
       </span>
+      {!connectedHandles.has("prompt") && !cfg.promptOptional && status !== "running" && !data.locked && (
+        <MissingInputWarning messages={["A text node is required"]} />
+      )}
 
       {/* ── Source (output) handles — top-right ──────────────────────── */}
       {SOURCE_HANDLES.map((h, i) => (
@@ -1361,6 +1366,20 @@ export default function VideoGeneratorNode({ id, data, selected }: NodeProps<Vid
                 </button>
               </div>
             </div>
+          </div>
+        )}
+
+        {/* Queued badge */}
+        {isQueued && (
+          <div
+            className="absolute top-2 left-2 flex items-center gap-1.5 h-7 px-3 rounded-full z-20 pointer-events-none select-none"
+            style={{ background: "rgba(0,0,0,0.58)", backdropFilter: "blur(10px)", border: "1px solid rgba(148,163,184,0.2)" }}
+          >
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="rgba(148,163,184,0.65)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+              <circle cx="12" cy="12" r="9" />
+              <path d="M12 7v5l3 3" />
+            </svg>
+            <span className="text-[11px] font-medium" style={{ color: "rgba(148,163,184,0.8)" }}>Queued</span>
           </div>
         )}
 

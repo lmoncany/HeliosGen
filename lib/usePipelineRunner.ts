@@ -33,9 +33,28 @@ export function usePipelineRunner(scopeNodeIds?: string[]) {
     const filteredNodes = scope ? nodes.filter(n => scope.includes(n.id)) : nodes;
     const waves = buildPipelineWaves(filteredNodes, edges);
     if (waves.length === 0) return;
+
+    // Mark future-wave nodes as queued so they show a waiting indicator
+    for (let i = 1; i < waves.length; i++) {
+      for (const id of waves[i]) {
+        updateNodeData(id, { pipelineQueued: true });
+      }
+    }
+
     waveEverActive.current = false;
     setPipeline({ waves, waveIdx: 0, waveStarted: false });
-  }, []);
+  }, [updateNodeData]);
+
+  // Clear any leftover queued flags when the pipeline ends (e.g. early error)
+  useEffect(() => {
+    if (pipeline !== null) return;
+    const { nodes } = useWorkflowStore.getState();
+    const scope = scopeRef.current;
+    const scoped = scope ? nodes.filter(n => scope.includes(n.id)) : nodes;
+    for (const node of scoped) {
+      if (node.data.pipelineQueued) updateNodeData(node.id, { pipelineQueued: false });
+    }
+  }, [pipeline, updateNodeData]);
 
   useEffect(() => {
     if (!pipeline) return;
@@ -52,10 +71,13 @@ export function usePipelineRunner(scopeNodeIds?: string[]) {
       return;
     }
 
-    // Mark once we see activity (pendingGenerate or running)
+    // Only mark the wave as "ever active" once a node actually reaches
+    // status "pending" or "running" — NOT merely on pendingGenerate being set.
+    // This prevents a race where pendingGenerate is cleared before generate()
+    // sets status:"pending", causing the runner to think the wave is already done.
     const anyActive = currentWave.some(id => {
       const node = nodes.find(n => n.id === id);
-      return node?.data?.pendingGenerate || node?.data?.status === "pending" || node?.data?.status === "running";
+      return node?.data?.status === "pending" || node?.data?.status === "running";
     });
     if (anyActive) waveEverActive.current = true;
 
@@ -77,7 +99,7 @@ export function usePipelineRunner(scopeNodeIds?: string[]) {
     } else {
       waveEverActive.current = false;
       for (const id of waves[nextIdx]) {
-        updateNodeData(id, { pendingGenerate: true });
+        updateNodeData(id, { pendingGenerate: true, pipelineQueued: false });
       }
       setPipeline({ waves, waveIdx: nextIdx, waveStarted: true });
     }

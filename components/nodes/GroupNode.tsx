@@ -1,10 +1,11 @@
 "use client";
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { NodeProps, Node, useReactFlow, NodeResizeControl, NodeToolbar, Position } from "@xyflow/react";
 import { useWorkflowStore, NodeData } from "@/lib/store";
 import { arrangeNodes } from "@/lib/arrangeNodes";
 import { usePipelineRunner } from "@/lib/usePipelineRunner";
 import { makeZip } from "@/lib/makeZip";
+import { VIDEO_MODELS } from "@/lib/modelConfig";
 
 export type GroupNodeType = Node<NodeData, "groupNode">;
 
@@ -67,6 +68,87 @@ function LockBadge({ color }: { color: string }) {
   );
 }
 
+// ── Scrolling label (overflows are revealed on hover) ─────────────────────────
+function ScrollLabel({ text, color }: { text: string; color?: string }) {
+  const containerRef = useRef<HTMLSpanElement>(null);
+  const innerRef = useRef<HTMLSpanElement>(null);
+
+  const startScroll = () => {
+    const c = containerRef.current;
+    const t = innerRef.current;
+    if (!c || !t) return;
+    const overflow = t.scrollWidth - c.clientWidth;
+    if (overflow <= 2) return;
+    t.style.transition = `transform ${Math.max(800, overflow * 20)}ms linear 350ms`;
+    t.style.transform = `translateX(-${overflow}px)`;
+  };
+
+  const stopScroll = () => {
+    const t = innerRef.current;
+    if (!t) return;
+    t.style.transition = "transform 180ms ease";
+    t.style.transform = "translateX(0)";
+  };
+
+  return (
+    <span
+      ref={containerRef}
+      style={{ overflow: "hidden", display: "inline-block", verticalAlign: "middle", maxWidth: 88 }}
+      onMouseEnter={startScroll}
+      onMouseLeave={stopScroll}
+    >
+      <span ref={innerRef} style={{ display: "inline-block", whiteSpace: "nowrap", color }}>
+        {text}
+      </span>
+    </span>
+  );
+}
+
+// ── Inline warning icon with tooltip ──────────────────────────────────────────
+function InlineWarning({ messages }: { messages: string[] }) {
+  const [visible, setVisible] = React.useState(false);
+  if (messages.length === 0) return null;
+  return (
+    <span
+      style={{ position: "relative", display: "inline-flex", alignItems: "center", flexShrink: 0 }}
+      onMouseEnter={() => setVisible(true)}
+      onMouseLeave={() => setVisible(false)}
+    >
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" style={{ display: "block", cursor: "default" }}>
+        <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" fill="#ef4444" />
+        <line x1="12" y1="9" x2="12" y2="13" stroke="white" strokeWidth="2" strokeLinecap="round" />
+        <line x1="12" y1="17" x2="12.01" y2="17" stroke="white" strokeWidth="2" strokeLinecap="round" />
+      </svg>
+      {visible && (
+        <span
+          style={{
+            position: "absolute",
+            bottom: "calc(100% + 4px)",
+            right: 0,
+            background: "#1A1A1A",
+            border: "1px solid rgba(239,68,68,0.3)",
+            borderRadius: 6,
+            padding: "4px 8px",
+            whiteSpace: "nowrap",
+            fontSize: 10,
+            color: "#CCCCCC",
+            boxShadow: "0 4px 14px rgba(0,0,0,0.55)",
+            zIndex: 200,
+            pointerEvents: "none",
+          }}
+        >
+          {messages.map((msg, i) => (
+            <span key={i} style={{ display: "flex", alignItems: "center", gap: 5 }}>
+              <span style={{ color: "#ef4444", fontSize: 7 }}>●</span>
+              {msg}
+            </span>
+          ))}
+        </span>
+      )}
+    </span>
+  );
+}
+
 // ── Component ──────────────────────────────────────────────────────────────────
 export default function GroupNode({ id, data, selected }: NodeProps<GroupNodeType>) {
   const updateNodeData  = useWorkflowStore((s) => s.updateNodeData);
@@ -81,6 +163,59 @@ export default function GroupNode({ id, data, selected }: NodeProps<GroupNodeTyp
   const memberIds = (data.memberIds as string[] | undefined) ?? [];
   const { run: runPipeline, isRunning: pipelineRunning, genNodeCount } = usePipelineRunner(memberIds);
   const [isDownloading, setIsDownloading] = useState(false);
+  const [runDropdownOpen, setRunDropdownOpen] = useState(false);
+  const runDropdownRef = useRef<HTMLDivElement>(null);
+
+  const allNodes = useWorkflowStore((s) => s.nodes);
+  const edges = useWorkflowStore((s) => s.edges);
+
+  const jobs = useMemo(() => {
+    const genNodes = allNodes.filter(
+      (n) => memberIds.includes(n.id) &&
+        (n.type === "generateNode" || n.type === "videoGeneratorNode")
+    );
+    return genNodes.map((genNode) => {
+      const incomingEdges = edges.filter((e) => e.target === genNode.id);
+      const sourcesById = new Map(
+        incomingEdges
+          .map((e) => allNodes.find((n) => n.id === e.source))
+          .filter((n): n is Node<NodeData> => !!n)
+          .map((n) => [n.id, n])
+      );
+      const allSources = [...sourcesById.values()];
+
+      // Prefer text-type sources (same logic as resolveInputs)
+      const textSources = allSources.filter(
+        (n) => n.type === "promptNode" || n.type === "assistantNode"
+      );
+      const sources = textSources.length > 0 ? textSources : allSources;
+      const sourceLabel =
+        sources.length > 0
+          ? sources.map((n) => (n.data.label as string) || n.type).join(", ")
+          : "—";
+
+      // Compute missing required inputs
+      const missingInputs: string[] = [];
+      const promptConnected = incomingEdges.some((e) => e.targetHandle === "prompt");
+      if (genNode.type === "generateNode") {
+        if (!promptConnected) missingInputs.push("A text node is required");
+      } else {
+        const videoModelId = (genNode.data.videoModel as string) ?? "kling-3.0";
+        const cfg = VIDEO_MODELS.find((m) => m.id === videoModelId) ?? VIDEO_MODELS[0];
+        if (!cfg.promptOptional && !promptConnected) missingInputs.push("A text node is required");
+      }
+
+      return {
+        genNodeId: genNode.id,
+        isVideo: genNode.type === "videoGeneratorNode",
+        genLabel: (genNode.data.label as string) || (genNode.type === "videoGeneratorNode" ? "Video gen" : "Image gen"),
+        sourceLabel,
+        missingInputs,
+      };
+    });
+  }, [allNodes, edges, memberIds]);
+
+  const readyJobCount = useMemo(() => jobs.filter((j) => j.missingInputs.length === 0).length, [jobs]);
 
   const handleDownload = useCallback(async () => {
     if (isDownloading) return;
@@ -158,6 +293,30 @@ export default function GroupNode({ id, data, selected }: NodeProps<GroupNodeTyp
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
   }, [colorPickerOpen]);
+
+  const flashNode = useCallback((genNodeId: string) => {
+    // Inject a scoped <style> rule so React reconciliation can't wipe it
+    const styleId = `identify-flash-${genNodeId}`;
+    document.getElementById(styleId)?.remove();
+    void document.body.offsetHeight; // reflow so browser re-triggers animation
+    const styleEl = document.createElement("style");
+    styleEl.id = styleId;
+    styleEl.textContent = `.react-flow__node[data-id="${CSS.escape(genNodeId)}"] .node-card { animation: node-identify-blink 1.3s ease 1 forwards; }`;
+    document.head.appendChild(styleEl);
+    setTimeout(() => document.getElementById(styleId)?.remove(), 1400);
+  }, []);
+
+  // Close run dropdown on click outside
+  useEffect(() => {
+    if (!runDropdownOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (runDropdownRef.current && !runDropdownRef.current.contains(e.target as Element)) {
+        setRunDropdownOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [runDropdownOpen]);
   const toolbarVisible = !!selected;
 
   // ── Ungroup ──────────────────────────────────────────────────────────────
@@ -488,41 +647,150 @@ export default function GroupNode({ id, data, selected }: NodeProps<GroupNodeTyp
               )}
             </Btn>
 
-            {/* Run pipeline */}
-            <button
-              onMouseDown={(e) => e.stopPropagation()}
-              onClick={(e) => { e.stopPropagation(); runPipeline(); }}
-              title={genNodeCount === 0 ? "No generation nodes in group" : `Run ${genNodeCount} generation node${genNodeCount === 1 ? "" : "s"}`}
-              disabled={genNodeCount === 0 || pipelineRunning}
-              className="h-7 flex items-center gap-1.5 px-2.5 rounded-full transition-colors duration-150"
-              style={{
-                border: `1px solid ${pipelineRunning ? "rgba(45,212,191,0.5)" : "rgba(45,212,191,0.25)"}`,
-                background: pipelineRunning ? "rgba(45,212,191,0.18)" : "rgba(45,212,191,0.07)",
-                color: genNodeCount === 0 ? "rgba(255,255,255,0.25)" : "rgba(45,212,191,0.9)",
-                opacity: genNodeCount === 0 ? 0.45 : 1,
-                cursor: genNodeCount === 0 || pipelineRunning ? "not-allowed" : "pointer",
-              }}
-            >
-              {pipelineRunning ? (
-                <svg width="9" height="9" viewBox="0 0 10 10" fill="none" style={{ animation: "spin 0.9s linear infinite", flexShrink: 0 }}>
-                  <circle cx="5" cy="5" r="4" stroke="rgba(45,212,191,0.3)" strokeWidth="1.5" />
-                  <path d="M5 1 A4 4 0 0 1 9 5" stroke="rgba(45,212,191,0.9)" strokeWidth="1.5" strokeLinecap="round" />
-                </svg>
-              ) : (
-                <svg width="9" height="9" viewBox="0 0 10 10" fill="currentColor" style={{ flexShrink: 0 }}>
-                  <path d="M2 1.5 L9 5 L2 8.5 Z" />
-                </svg>
-              )}
-              <span className="text-[11px] font-medium leading-none tracking-wide">Run</span>
-              {genNodeCount > 0 && (
-                <span
-                  className="text-[10px] font-semibold leading-none rounded-full px-1.5 py-0.5"
-                  style={{ background: "rgba(45,212,191,0.2)" }}
+            {/* Run pipeline — split button with jobs dropdown */}
+            <div className="relative" ref={runDropdownRef}>
+              <div
+                className="h-7 flex items-center rounded-full"
+                style={{
+                  border: `1px solid ${pipelineRunning ? "rgba(45,212,191,0.5)" : "rgba(45,212,191,0.25)"}`,
+                  background: pipelineRunning ? "rgba(45,212,191,0.18)" : "rgba(45,212,191,0.07)",
+                  color: readyJobCount === 0 ? "rgba(255,255,255,0.25)" : "rgba(45,212,191,0.9)",
+                  opacity: readyJobCount === 0 ? 0.45 : 1,
+                }}
+              >
+                {/* Run part */}
+                <button
+                  onMouseDown={(e) => e.stopPropagation()}
+                  onClick={(e) => { e.stopPropagation(); runPipeline(); }}
+                  title={readyJobCount === 0 ? "No ready generation nodes in group" : `Run ${readyJobCount} generation node${readyJobCount === 1 ? "" : "s"}`}
+                  disabled={readyJobCount === 0 || pipelineRunning}
+                  className="flex items-center gap-1.5 pl-2.5 pr-2 h-full"
+                  style={{ cursor: readyJobCount === 0 || pipelineRunning ? "not-allowed" : "pointer" }}
                 >
-                  {genNodeCount}
-                </span>
+                  {pipelineRunning ? (
+                    <svg width="9" height="9" viewBox="0 0 10 10" fill="none" style={{ animation: "spin 0.9s linear infinite", flexShrink: 0 }}>
+                      <circle cx="5" cy="5" r="4" stroke="rgba(45,212,191,0.3)" strokeWidth="1.5" />
+                      <path d="M5 1 A4 4 0 0 1 9 5" stroke="rgba(45,212,191,0.9)" strokeWidth="1.5" strokeLinecap="round" />
+                    </svg>
+                  ) : (
+                    <svg width="9" height="9" viewBox="0 0 10 10" fill="currentColor" style={{ flexShrink: 0 }}>
+                      <path d="M2 1.5 L9 5 L2 8.5 Z" />
+                    </svg>
+                  )}
+                  <span className="text-[11px] font-medium leading-none tracking-wide">Run</span>
+                  {readyJobCount > 0 && (
+                    <span
+                      className="text-[10px] font-semibold leading-none rounded-full px-1.5 py-0.5"
+                      style={{ background: "rgba(45,212,191,0.2)" }}
+                    >
+                      {readyJobCount}
+                    </span>
+                  )}
+                </button>
+
+                {/* Divider */}
+                <span
+                  className="shrink-0"
+                  style={{
+                    width: 1, height: 14,
+                    background: pipelineRunning ? "rgba(45,212,191,0.4)" : "rgba(45,212,191,0.2)",
+                  }}
+                />
+
+                {/* Chevron */}
+                <button
+                  onMouseDown={(e) => e.stopPropagation()}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (jobs.length > 0) setRunDropdownOpen((o) => !o);
+                  }}
+                  disabled={genNodeCount === 0 || pipelineRunning}
+                  title="Show generate jobs"
+                  className="flex items-center justify-center px-1.5 h-full"
+                  style={{ cursor: genNodeCount === 0 ? "not-allowed" : "pointer" }}
+                >
+                  <svg
+                    width="10" height="10" viewBox="0 0 10 10" fill="none"
+                    style={{
+                      transform: runDropdownOpen ? "rotate(180deg)" : "rotate(0deg)",
+                      transition: "transform 150ms ease",
+                    }}
+                  >
+                    <path d="M2 3.5L5 6.5L8 3.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                </button>
+              </div>
+
+              {/* Jobs dropdown */}
+              {runDropdownOpen && jobs.length > 0 && (
+                <div
+                  className="absolute bottom-full mb-2 right-0 node-action-bar-enter"
+                  style={{
+                    borderRadius: 10,
+                    background: "rgba(14, 14, 14, 0.97)",
+                    backdropFilter: "blur(12px)",
+                    border: "1px solid rgba(255,255,255,0.07)",
+                    boxShadow: "0 4px 24px rgba(0,0,0,0.65), 0 1px 4px rgba(0,0,0,0.4)",
+                    minWidth: 200,
+                    overflow: "hidden",
+                  }}
+                  onMouseDown={(e) => e.stopPropagation()}
+                >
+                  <div className="px-3 py-1.5 border-b border-white/[0.06]">
+                    <span className="text-[10px] font-medium text-white/30 uppercase tracking-widest">
+                      Generate jobs
+                    </span>
+                  </div>
+                  {jobs.map((job, i) => (
+                    <div
+                      key={job.genNodeId}
+                      className="flex items-center gap-2 px-3 py-2 text-[11px] transition-colors duration-100"
+                      style={{
+                        borderBottom: i < jobs.length - 1 ? "1px solid rgba(255,255,255,0.04)" : "none",
+                        cursor: "pointer",
+                      }}
+                      onClick={(e) => { e.stopPropagation(); flashNode(job.genNodeId); }}
+                      onMouseEnter={(e) => { (e.currentTarget as HTMLDivElement).style.background = "rgba(255,255,255,0.04)"; }}
+                      onMouseLeave={(e) => { (e.currentTarget as HTMLDivElement).style.background = "transparent"; }}
+                    >
+                      {/* Source icon */}
+                      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.35)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                        <polyline points="14 2 14 8 20 8" />
+                        <line x1="16" y1="13" x2="8" y2="13" />
+                        <line x1="16" y1="17" x2="8" y2="17" />
+                      </svg>
+                      <ScrollLabel text={job.sourceLabel} color="rgba(255,255,255,0.5)" />
+
+                      {/* Arrow */}
+                      <svg width="12" height="12" viewBox="0 0 12 12" fill="none" style={{ flexShrink: 0 }}>
+                        <path d="M2 6H10M10 6L7 3M10 6L7 9" stroke="rgba(255,255,255,0.2)" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+                      </svg>
+
+                      {/* Target icon */}
+                      {job.isVideo ? (
+                        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="rgba(45,212,191,0.7)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                          <polygon points="23 7 16 12 23 17 23 7" />
+                          <rect x="1" y="5" width="15" height="14" rx="2" ry="2" />
+                        </svg>
+                      ) : (
+                        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="rgba(45,212,191,0.7)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                          <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+                          <circle cx="8.5" cy="8.5" r="1.5" />
+                          <polyline points="21 15 16 10 5 21" />
+                        </svg>
+                      )}
+                      <ScrollLabel text={job.genLabel} color="rgba(45,212,191,0.85)" />
+                      {job.missingInputs.length > 0 && (
+                        <span style={{ marginLeft: "auto" }}>
+                          <InlineWarning messages={job.missingInputs} />
+                        </span>
+                      )}
+                    </div>
+                  ))}
+                </div>
               )}
-            </button>
+            </div>
           </>
         )}
       </div>

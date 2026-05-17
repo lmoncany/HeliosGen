@@ -31,7 +31,7 @@ export default function ImageGenNode({ id, data }: NodeProps<ImageGenNodeType>) 
   return (
     <div
       ref={cardRef}
-      className={`node-card bg-gray-900 border-2 rounded-xl w-72 shadow-lg overflow-hidden ${STATUS_RING[status]} ${busy ? "node-generating" : ""}`}
+      className={`node-card bg-gray-900 border-2 rounded-xl w-72 shadow-lg ${STATUS_RING[status]} ${busy ? "node-generating" : ""}`}
     >
       {/* Input handle */}
       <Handle
@@ -41,6 +41,7 @@ export default function ImageGenNode({ id, data }: NodeProps<ImageGenNodeType>) 
         className="!w-3 !h-3 !bg-indigo-400 !border-2 !border-indigo-600"
       />
 
+      <div className="overflow-hidden rounded-[7px]">
       {/* Header */}
       <div className="flex items-center gap-2 px-3 py-2 bg-blue-900/60 border-b border-blue-700/50">
         <span className="text-blue-300 text-sm">🎨</span>
@@ -99,6 +100,7 @@ export default function ImageGenNode({ id, data }: NodeProps<ImageGenNodeType>) 
             Open full size ↗
           </a>
         )}
+      </div>
       </div>
 
       {/* Output handle */}

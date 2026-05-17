@@ -16,6 +16,7 @@ type GenerateNodeType = Node<NodeData, "generateNode">;
 import { IMAGE_MODELS } from "@/lib/modelConfig";
 import { useGeneratingPhase } from "@/lib/useGeneratingPhase";
 import { useGeneratingBorderAnimation } from "@/lib/useGeneratingBorderAnimation";
+import MissingInputWarning from "./MissingInputWarning";
 
 // Derived from config — no hardcoding needed
 const MODELS = IMAGE_MODELS.map((m) => ({ id: m.id, name: m.name, meta: m.provider }));
@@ -403,6 +404,7 @@ export default function GenerateNode({ id, data, selected }: NodeProps<GenerateN
   const isPending = status === "pending";
   const animBusy = loading || status === "running";
   const busy = animBusy || isPending;
+  const isQueued = !busy && !!data.pipelineQueued;
   const phaseLabel = useGeneratingPhase(animBusy);
 
   useGeneratingBorderAnimation(cardRef, animBusy);
@@ -684,7 +686,7 @@ export default function GenerateNode({ id, data, selected }: NodeProps<GenerateN
   return (
     <div
       ref={cardRef}
-      className={`node-card w-full${animBusy ? " node-generating" : ""}${(data.hasError as boolean) ? " node-error-blink" : ""}`}
+      className={`node-card w-full${animBusy ? " node-generating" : ""}${isQueued ? " node-queued" : ""}${(data.hasError as boolean) ? " node-error-blink" : ""}`}
       style={{
         minWidth: 280,
         aspectRatio: (data.imageNaturalRatio as string | undefined) ?? cssRatio,
@@ -714,6 +716,9 @@ export default function GenerateNode({ id, data, selected }: NodeProps<GenerateN
         </div>
       )}
       <span className="node-above-label">{data.label as string}</span>
+      {!promptConnected && status !== "running" && !data.locked && (
+        <MissingInputWarning messages={["A text node is required"]} />
+      )}
 
       {/* ── Icon handles — bottom-anchored, consistent with other nodes ── */}
       {/* prompt is top-most; image is closest to bottom */}
@@ -790,6 +795,18 @@ export default function GenerateNode({ id, data, selected }: NodeProps<GenerateN
       >
         {/* Clipped media layer */}
         <div className="absolute inset-0 overflow-hidden rounded-[8px] z-0">
+          {isQueued && (
+            <div
+              className="absolute top-2 left-2 flex items-center gap-1.5 h-7 px-3 rounded-full z-20 pointer-events-none select-none"
+              style={{ background: "rgba(0,0,0,0.58)", backdropFilter: "blur(10px)", border: "1px solid rgba(148,163,184,0.2)" }}
+            >
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="rgba(148,163,184,0.65)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                <circle cx="12" cy="12" r="9" />
+                <path d="M12 7v5l3 3" />
+              </svg>
+              <span className="text-[11px] font-medium" style={{ color: "rgba(148,163,184,0.8)" }}>Queued</span>
+            </div>
+          )}
           {busy && generations[currentGenIdx] === null && (
             <>
               <div

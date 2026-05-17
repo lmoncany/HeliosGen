@@ -449,7 +449,8 @@ body {
   transition-delay: 0ms !important;
 }
 
-/* Image output → resource + character inputs */
+/* Image output → image + resource + character inputs */
+.react-flow[data-connecting-type="image"] .react-flow__handle-left.node-handle-icon-image,
 .react-flow[data-connecting-type="image"] .react-flow__handle-left.node-handle-icon-resource,
 .react-flow[data-connecting-type="image"] .react-flow__handle-left.node-handle-icon-character {
   transform: translate(-100%, -50%) !important;
@@ -689,6 +690,31 @@ body {
   pointer-events: none;
   z-index: 1;
   animation: node-error-blink-border 1.4s ease 1 forwards;
+}
+
+/* ── Node identify blink (triggered from group toolbar job list) ── */
+/* Applied via an injected <style> tag (not via classList) so React can't wipe it */
+@keyframes node-identify-blink {
+  0%, 100% {
+    box-shadow: 0 2px 16px rgba(0, 0, 0, 0.5);
+    border-color: transparent;
+  }
+  18% {
+    box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.75), 0 0 30px rgba(255, 255, 255, 0.2);
+    border-color: rgba(255, 255, 255, 0.8);
+  }
+  35% {
+    box-shadow: 0 2px 16px rgba(0, 0, 0, 0.5);
+    border-color: transparent;
+  }
+  58% {
+    box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.5), 0 0 20px rgba(255, 255, 255, 0.12);
+    border-color: rgba(255, 255, 255, 0.5);
+  }
+  75% {
+    box-shadow: 0 2px 16px rgba(0, 0, 0, 0.5);
+    border-color: transparent;
+  }
 }
 
 .node-error-blink .node-above-label {
@@ -1062,6 +1088,16 @@ body {
     ) border-box;
   transition: none;
   box-shadow: none;
+}
+
+/* ── Pipeline queued state ───────────────────────────────────────────────── */
+@keyframes node-queued-pulse {
+  0%, 100% { border-color: rgba(148, 163, 184, 0.18); box-shadow: 0 2px 16px rgba(0,0,0,0.5); }
+  50%       { border-color: rgba(148, 163, 184, 0.5);  box-shadow: 0 2px 16px rgba(0,0,0,0.5), 0 0 0 1px rgba(148,163,184,0.15); }
+}
+
+.node-card.node-queued {
+  animation: node-queued-pulse 2s ease-in-out infinite;
 }
 
 /* ── @mention chip in PromptNode ─────────────────────────────────────────── */

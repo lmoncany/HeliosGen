@@ -31,7 +31,7 @@ export default function VideoGenNode({ id, data }: NodeProps<VideoGenNodeType>) 
   return (
     <div
       ref={cardRef}
-      className={`node-card bg-gray-900 border-2 rounded-xl w-72 shadow-lg overflow-hidden ${STATUS_RING[status]} ${busy ? "node-generating" : ""}`}
+      className={`node-card bg-gray-900 border-2 rounded-xl w-72 shadow-lg ${STATUS_RING[status]} ${busy ? "node-generating" : ""}`}
     >
       {/* Input handles */}
       <Handle
@@ -49,6 +49,7 @@ export default function VideoGenNode({ id, data }: NodeProps<VideoGenNodeType>) 
         className="!w-3 !h-3 !bg-blue-400 !border-2 !border-blue-600"
       />
 
+      <div className="overflow-hidden rounded-[7px]">
       {/* Header */}
       <div className="flex items-center gap-2 px-3 py-2 bg-rose-900/60 border-b border-rose-700/50">
         <span className="text-rose-300 text-sm">🎬</span>
@@ -135,6 +136,7 @@ export default function VideoGenNode({ id, data }: NodeProps<VideoGenNodeType>) 
             Download video ↗
           </a>
         )}
+      </div>
       </div>
 
       {/* Output handle */}
