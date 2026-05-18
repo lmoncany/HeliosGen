@@ -16,7 +16,7 @@ function KieBanner() {
       onClick={() => setSettingsOpen(true)}
       style={{
         position: "fixed",
-        top: "52px",
+        top: 0,
         left: 0,
         right: 0,
         zIndex: 9000,
