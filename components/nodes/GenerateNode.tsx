@@ -393,7 +393,7 @@ export default function GenerateNode({ id, data, selected }: NodeProps<GenerateN
   const promptOverLimit = promptInfo?.over ?? false;
 
   // If current ratio isn't valid for this model, fall back to first valid ratio (or 1:1)
-  const rawRatio = (data.aspectRatio as string) ?? "1:1";
+  const rawRatio = (data.aspectRatio as string) ?? "9:16";
   const aspectRatio = caps.ratios.includes(rawRatio)
     ? rawRatio
     : (caps.ratios[0] ?? "1:1");
