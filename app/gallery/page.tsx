@@ -1616,7 +1616,7 @@ function GalleryInner() {
   // Zoom controls target row height — higher zoom = shorter rows = more items per row.
   const justifiedRows = useMemo(() => {
     if (containerWidth <= 0) return [] as Array<{ items: GalleryLayoutItem[]; height: number }>;
-    const targetH = Math.max(80, Math.min(400, Math.round(containerWidth / Math.max(1, zoom))));
+    const targetH = Math.max(80, Math.round(containerWidth / Math.max(1, zoom)));
 
     const toRatio = (ar: string | undefined, mediaType: "image" | "video", url: string): number => {
       const fallback = mediaType === "video" ? 16 / 9 : 4 / 3;
@@ -1690,6 +1690,31 @@ function GalleryInner() {
     return rows;
   }, [containerWidth, zoom, pendingGens, filteredItems, GALLERY_GAP, natRatioVersion, tab, sourceFilter]);
 
+  // Fixed-column justified layout: exactly `zoom` items per row, each row fills full width.
+  // Last partial row keeps column widths consistent with full rows; empty slots are padded.
+  const fixedRows = useMemo(() => {
+    if (containerWidth <= 0) return [] as Array<{ items: GalleryLayoutItem[]; height: number; emptyCount: number }>;
+    const allItems = justifiedRows.flatMap(row => row.items);
+    const rows: Array<{ items: GalleryLayoutItem[]; height: number; emptyCount: number }> = [];
+    const colWidth = (containerWidth - (zoom - 1) * GALLERY_GAP) / zoom;
+    for (let i = 0; i < allItems.length; i += zoom) {
+      const group = allItems.slice(i, i + zoom);
+      const isFull = group.length === zoom;
+      if (isFull) {
+        const ratioSum = group.reduce((s, it) => s + it.ratio, 0);
+        const totalGaps = (group.length - 1) * GALLERY_GAP;
+        const availW = containerWidth - totalGaps;
+        const height = availW / ratioSum;
+        rows.push({ items: group.map(it => ({ ...it, width: availW * it.ratio / ratioSum })), height, emptyCount: 0 });
+      } else {
+        // Partial last row: each item gets the standard column width; height from average ratio.
+        const avgRatio = group.reduce((s, it) => s + it.ratio, 0) / group.length;
+        const height = colWidth / avgRatio;
+        rows.push({ items: group.map(it => ({ ...it, width: colWidth })), height, emptyCount: zoom - group.length });
+      }
+    }
+    return rows;
+  }, [containerWidth, zoom, justifiedRows, GALLERY_GAP]);
 
   // Fire probes for every uncached item without a stored aspect_ratio.
   // Images: 32px next/image probe (fast). Videos: <video preload="metadata"> probe.
@@ -1830,8 +1855,8 @@ function GalleryInner() {
           <GalleryLoggedOut tab={tab} />
         ) : (
           <div ref={gridRef} style={{ padding: "1px" }}>
-            {justifiedRows.map((row, rowIdx) => (
-              <div key={rowIdx} style={{ display: "flex", height: row.height, gap: `${GALLERY_GAP}px`, marginBottom: rowIdx < justifiedRows.length - 1 ? `${GALLERY_GAP}px` : 0 }}>
+            {fixedRows.map((row, rowIdx) => (
+              <div key={rowIdx} style={{ display: "flex", height: row.height, gap: `${GALLERY_GAP}px`, marginBottom: rowIdx < fixedRows.length - 1 ? `${GALLERY_GAP}px` : 0 }}>
                 {row.items.map((layoutItem) => {
               if (layoutItem.kind === "pending") {
                 const pg = layoutItem.pg;
@@ -1951,6 +1976,9 @@ function GalleryInner() {
                     </div>
                   );
                 })}
+                {Array.from({ length: row.emptyCount }).map((_, i) => (
+                  <div key={`empty-${i}`} style={{ flex: "0 0 auto", width: row.items[0]?.width ?? 0, height: "100%" }} />
+                ))}
               </div>
             ))}
           </div>
