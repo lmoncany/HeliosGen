@@ -1,16 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase/admin";
-
-async function getUserId(req: NextRequest): Promise<string | null> {
-  const auth = req.headers.get("authorization") ?? "";
-  const token = auth.startsWith("Bearer ") ? auth.slice(7) : null;
-  if (!token) return null;
-  const { data } = await supabaseAdmin.auth.getUser(token);
-  return data.user?.id ?? null;
-}
+import { GUEST_MODE, resolveUserId } from "@/lib/guestMode";
 
 export async function GET(req: NextRequest) {
-  const userId = await getUserId(req);
+  if (GUEST_MODE) return NextResponse.json({ hasToken: !!process.env.KIE_API_KEY });
+
+  const userId = await resolveUserId(req);
   if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const { data } = await supabaseAdmin
@@ -23,7 +18,9 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  const userId = await getUserId(req);
+  if (GUEST_MODE) return NextResponse.json({ ok: true, note: "Key is set via KIE_API_KEY env var in guest mode" });
+
+  const userId = await resolveUserId(req);
   if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const { kieApiToken } = await req.json();
@@ -40,7 +37,9 @@ export async function POST(req: NextRequest) {
 }
 
 export async function DELETE(req: NextRequest) {
-  const userId = await getUserId(req);
+  if (GUEST_MODE) return NextResponse.json({ ok: true });
+
+  const userId = await resolveUserId(req);
   if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   await supabaseAdmin
