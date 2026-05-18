@@ -419,6 +419,7 @@ function GalleryInner() {
   useEffect(() => { pendingGensRef.current = pendingGens; }, [pendingGens]);
   const [submitting, setSubmitting] = useState(false);
   const [veoMode, setVeoMode] = useState<"frames" | "references">("frames");
+  const [promptTextMode, setPromptTextMode] = useState<"text" | "json">("text");
   const [genError, setGenError] = useState<string>("");
   const debugMode        = useWorkflowStore((s) => s.debugMode);
   const addToast         = useWorkflowStore((s) => s.addToast);
@@ -2292,9 +2293,9 @@ function GalleryInner() {
                   color: "transparent",
                   caretColor: "#2DD4BF",
                   fontSize: "14.5px",
-                  fontFamily: "inherit",
+                  fontFamily: promptTextMode === "json" ? "monospace" : "inherit",
                   lineHeight: "22px",
-                  letterSpacing: "-0.01em",
+                  letterSpacing: promptTextMode === "json" ? "normal" : "-0.01em",
                   padding: 0,
                   resize: "none",
                   maxHeight: "264px",
@@ -2317,15 +2318,17 @@ function GalleryInner() {
                   style={{
                     display: "block",
                     fontSize: "14.5px",
-                    fontFamily: "inherit",
+                    fontFamily: promptTextMode === "json" ? "monospace" : "inherit",
                     lineHeight: "22px",
-                    letterSpacing: "-0.01em",
+                    letterSpacing: promptTextMode === "json" ? "normal" : "-0.01em",
                     whiteSpace: "pre-wrap",
                     wordBreak: "break-word",
                     willChange: "transform",
                   }}
                 >
-                  {promptMaxLength !== null && prompt.length > promptMaxLength ? (
+                  {promptTextMode === "json" ? (
+                    syntaxHighlightJson(prompt)
+                  ) : promptMaxLength !== null && prompt.length > promptMaxLength ? (
                     <>
                       {renderGalleryMentions(
                         prompt.slice(0, promptMaxLength), taggedImages,
@@ -2604,6 +2607,50 @@ function GalleryInner() {
                     >+</button>
                   </div>
                 )}
+
+                {/* Text / JSON mode toggle */}
+                <button
+                  onClick={() => {
+                    if (promptTextMode === "text") {
+                      try {
+                        const formatted = JSON.stringify(JSON.parse(prompt), null, 2);
+                        setPrompt(formatted);
+                        requestAnimationFrame(() => { if (inputRef.current) resizeTextarea(inputRef.current); });
+                      } catch { /* not valid JSON — switch anyway */ }
+                      setPromptTextMode("json");
+                    } else {
+                      setPromptTextMode("text");
+                    }
+                  }}
+                  disabled={submitting}
+                  style={{
+                    display: "flex", alignItems: "center", gap: "7px",
+                    height: "36px", padding: "0 12px",
+                    borderRadius: "8px",
+                    border: "1px solid rgba(255,255,255,0.1)",
+                    background: promptTextMode === "json" ? "rgba(45,212,191,0.12)" : "rgba(255,255,255,0.05)",
+                    color: promptTextMode === "json" ? "#2DD4BF" : "rgba(255,255,255,0.55)",
+                    fontSize: "13px", fontFamily: "inherit",
+                    cursor: submitting ? "not-allowed" : "pointer",
+                    transition: "background 150ms, color 150ms, border-color 150ms",
+                    flexShrink: 0,
+                  }}>
+                  <span style={{
+                    width: "28px", height: "16px", borderRadius: "8px",
+                    background: promptTextMode === "json" ? "#2DD4BF" : "rgba(255,255,255,0.18)",
+                    position: "relative", flexShrink: 0,
+                    transition: "background 150ms",
+                  }}>
+                    <span style={{
+                      position: "absolute", top: "2px",
+                      left: promptTextMode === "json" ? "14px" : "2px",
+                      width: "12px", height: "12px", borderRadius: "50%",
+                      background: promptTextMode === "json" ? "#0B3B38" : "#ffffff",
+                      transition: "left 150ms",
+                    }} />
+                  </span>
+                  JSON
+                </button>
               </div>{/* end controls group */}
 
               {/* Character count + Generate button */}
@@ -4036,6 +4083,38 @@ function DownloadToast({ downloads, onClear }: { downloads: DownloadTask[]; onCl
 }
 
 // ── Lightbox helpers ──────────────────────────────────────────────────────────
+
+function syntaxHighlightJson(json: string): React.ReactNode {
+  const parts: React.ReactNode[] = [];
+  let k = 0;
+  const push = (from: number, to: number, color?: string) => {
+    if (from >= to) return;
+    parts.push(<span key={k++} style={color ? { color } : undefined}>{json.slice(from, to)}</span>);
+  };
+  const re = /("(?:[^"\\]|\\.)*")(\s*:)?|(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)|(true|false|null)|([{}\[\],])/g;
+  let last = 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(json)) !== null) {
+    push(last, m.index);
+    if (m[1] !== undefined) {
+      if (m[2] !== undefined) {
+        push(m.index, m.index + m[1].length, "#c678dd");
+        push(m.index + m[1].length, m.index + m[0].length, "#6b7280");
+      } else {
+        push(m.index, m.index + m[1].length, "white");
+      }
+    } else if (m[3] !== undefined) {
+      push(m.index, m.index + m[3].length, "white");
+    } else if (m[4] !== undefined) {
+      push(m.index, m.index + m[4].length, "white");
+    } else if (m[5] !== undefined) {
+      push(m.index, m.index + m[5].length, "#6b7280");
+    }
+    last = re.lastIndex;
+  }
+  push(last, json.length);
+  return <>{parts}</>;
+}
 
 function renderLightboxPrompt(
   text: string,
