@@ -40,6 +40,7 @@ interface GuestDb {
   generations: Generation[];
   uploads: Upload[];
   assetCache: Record<string, { cdn_url: string; mime_type: string; byte_size: number }>;
+  settings?: { kie_api_token?: string };
 }
 
 function now(): string {
@@ -135,5 +136,23 @@ export function lookupAssetHash(hash: string): string | null {
 export function storeAssetHash(hash: string, cdnUrl: string, mimeType: string, byteSize: number): void {
   const db = read();
   db.assetCache[hash] = { cdn_url: cdnUrl, mime_type: mimeType, byte_size: byteSize };
+  write(db);
+}
+
+// ── Settings ───────────────────────────────────────────────────────────────
+
+export function getKieApiToken(): string | null {
+  return read().settings?.kie_api_token ?? process.env.KIE_API_KEY ?? null;
+}
+
+export function setKieApiToken(token: string): void {
+  const db = read();
+  db.settings = { ...db.settings, kie_api_token: token };
+  write(db);
+}
+
+export function deleteKieApiToken(): void {
+  const db = read();
+  if (db.settings) delete db.settings.kie_api_token;
   write(db);
 }
