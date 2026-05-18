@@ -13,6 +13,16 @@ import { useSidebar } from "@/components/ui/sidebar";
 import { QuickAssist } from "@/components/QuickAssist";
 import DotCanvasBackground from "@/components/ui/DotCanvasBackground";
 
+function randomUUID(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return randomUUID();
+  }
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    return (c === "x" ? r : (r & 0x3) | 0x8).toString(16);
+  });
+}
+
 function thumbSrc(url: string, w = 128): string {
   if (!url || url.startsWith("blob:") || url.startsWith("data:")) return url;
   return `/_next/image?url=${encodeURIComponent(url)}&w=${w}&q=75`;
@@ -821,7 +831,7 @@ function GalleryInner() {
     if (toAdd.length === 0) return;
 
     const newEntries: RefImage[] = toAdd.map(f => ({
-      id: crypto.randomUUID(),
+      id: randomUUID(),
       objectUrl: URL.createObjectURL(f),
       cdnUrl: null,
       uploading: true,
@@ -894,7 +904,7 @@ function GalleryInner() {
     if (toAdd.length === 0) return;
 
     const newEntries: RefImage[] = toAdd.map(f => ({
-      id: crypto.randomUUID(),
+      id: randomUUID(),
       objectUrl: URL.createObjectURL(f),
       cdnUrl: null,
       uploading: true,
@@ -982,15 +992,15 @@ function GalleryInner() {
     if (pickerTarget === "resource") {
       if (isDup(vidResources)) { showDup(); return; }
       if (modelId === "happyhorse") setVidStartFrame(null);
-      setVidResources(prev => [...prev, { id: crypto.randomUUID(), objectUrl: url, cdnUrl: url, uploading: false, error: false }]);
+      setVidResources(prev => [...prev, { id: randomUUID(), objectUrl: url, cdnUrl: url, uploading: false, error: false }]);
       return;
     }
     if (pickerTarget === "referenceVideo") {
       if (isDup(vidRefVideos)) { showDup(); return; }
-      setVidRefVideos(prev => [...prev, { id: crypto.randomUUID(), objectUrl: url, cdnUrl: url, uploading: false, error: false }]);
+      setVidRefVideos(prev => [...prev, { id: randomUUID(), objectUrl: url, cdnUrl: url, uploading: false, error: false }]);
       return;
     }
-    const entry: RefImage = { id: crypto.randomUUID(), objectUrl: url, cdnUrl: url, uploading: false, error: false };
+    const entry: RefImage = { id: randomUUID(), objectUrl: url, cdnUrl: url, uploading: false, error: false };
     if (pickerTarget === "startFrame") {
       setVidStartFrame(entry);
       if (modelId === "happyhorse") setVidResources([]);
@@ -1172,7 +1182,7 @@ function GalleryInner() {
     const n = isVideo ? 1 : count;
     const snapshotRefUrls = [...new Set(refImages.filter(r => r.cdnUrl && !r.error).map(r => r.cdnUrl!))];
     const newPendings: PendingGen[] = Array.from({ length: n }, () => ({
-      id: crypto.randomUUID(), aspectRatio, prompt, referenceImageUrls: snapshotRefUrls, createdAt: new Date().toISOString(), tab, prePending: true,
+      id: randomUUID(), aspectRatio, prompt, referenceImageUrls: snapshotRefUrls, createdAt: new Date().toISOString(), tab, prePending: true,
     }));
     setPendingGens(prev => [...prev, ...newPendings]);
 
@@ -1425,12 +1435,12 @@ function GalleryInner() {
       return;
     }
     if (refImages.length >= maxImgs) return;
-    setRefImages(prev => [...prev, { id: crypto.randomUUID(), objectUrl: url, cdnUrl: url, uploading: false, error: false }]);
+    setRefImages(prev => [...prev, { id: randomUUID(), objectUrl: url, cdnUrl: url, uploading: false, error: false }]);
   }, [refImages, maxImgs]);
 
   const handleCopyPrompt = useCallback((text: string, refUrls?: string[]) => {
     const newRefs = (refUrls ?? []).map(url => ({
-      id: crypto.randomUUID(), objectUrl: url, cdnUrl: url, uploading: false, error: false,
+      id: randomUUID(), objectUrl: url, cdnUrl: url, uploading: false, error: false,
     }));
 
     let processedText = text;
@@ -1531,7 +1541,7 @@ function GalleryInner() {
   const handleDownload = useCallback(async (url: string, itemIsVideo: boolean): Promise<void> => {
     const ext = itemIsVideo ? "mp4" : "jpg";
     const filename = `${Date.now()}.${ext}`;
-    const taskId = crypto.randomUUID();
+    const taskId = randomUUID();
     setDownloads(prev => [...prev, { id: taskId, filename, status: "preparing" }]);
     try {
       const res = await fetch(`/api/download?url=${encodeURIComponent(url)}&filename=${filename}`);
@@ -1858,7 +1868,7 @@ function GalleryInner() {
                                 </svg>
                               </button>
                               <button className="gallery-action-btn" title="Retry" onClick={async () => {
-                                const newId = crypto.randomUUID();
+                                const newId = randomUUID();
                                 const newPending: PendingGen = { id: newId, aspectRatio: pg.aspectRatio, prompt: pg.prompt, referenceImageUrls: pg.referenceImageUrls, createdAt: new Date().toISOString(), tab: pg.tab };
                                 setPendingGens(prev => [...prev.filter(p => p.id !== pg.id), newPending]);
                                 const token = await getToken();
@@ -2978,7 +2988,7 @@ function ElementPickerModal({
     );
     if (!toAdd.length) return;
     const newEntries = toAdd.map(f => ({
-      id: crypto.randomUUID(),
+      id: randomUUID(),
       objectUrl: URL.createObjectURL(f),
       cdnUrl: null as string | null,
       uploading: true,
@@ -3013,7 +3023,7 @@ function ElementPickerModal({
     if (!canCreate) return;
     setCreating(true);
     const newEl: KlingElement = {
-      id: crypto.randomUUID(),
+      id: randomUUID(),
       name: createName.trim(),
       description: createDesc.trim(),
       imageUrls: readyImages.map(e => e.cdnUrl!),
