@@ -555,7 +555,6 @@ function GalleryInner() {
   useEffect(() => {
     if (process.env.NEXT_PUBLIC_GUEST_MODE === "true") {
       setUser({ id: "guest" } as unknown as User);
-      setKieKeySet(true);
       setAuthLoaded(true);
       return;
     }
@@ -1158,6 +1157,7 @@ function GalleryInner() {
   };
 
   const generate = async () => {
+    if (kieKeySet === false) return;
     if (!prompt.trim() && !isVideo) return;
     if (refImages.some(r => r.uploading)) { setGenError("Images still uploading…"); setTimeout(() => setGenError(""), 3_000); return; }
     if (isVideo && [vidStartFrame, vidEndFrame, vidVideoRef, ...vidResources, ...vidRefVideos, ...vidRefAudios].some(r => r?.uploading)) {
