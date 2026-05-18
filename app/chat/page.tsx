@@ -3,10 +3,10 @@
 import React, { useCallback, useEffect, useRef, useState, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useChatSessionStore, type StoredMessage, type ChatSession } from "@/lib/chatSessionStore";
+import { useChatStreamingStore } from "@/lib/chatStreamingStore";
 import { MODEL_GROUPS, MODELS, type ModelId } from "@/lib/models";
-import { getToken } from "@/lib/galleryUtils";
 import { SYSTEM_PROMPT } from "@/lib/systemPrompt";
-import { Bot, Send, ChevronUp, Copy, Check } from "lucide-react";
+import { Send, ChevronUp, Copy, Check } from "lucide-react";
 import { motion } from "motion/react";
 import Image from "next/image";
 import DotCanvasBackground from "@/components/ui/DotCanvasBackground";
@@ -284,24 +284,30 @@ interface LiveMessage {
 }
 
 function ChatWindow({
-  session, onUpdate, initialMessage, onInitialSent, defaultModel, onModelChange, onAuthRequired,
+  session, onUpdate, defaultModel, onModelChange, onAuthRequired,
 }: {
   session: ChatSession;
   onUpdate: (msgs: StoredMessage[], model: string) => void;
-  initialMessage?: string | null;
-  onInitialSent?: () => void;
   defaultModel?: string;
   onModelChange?: (id: ModelId) => void;
   onAuthRequired?: () => void;
 }) {
-  // Pre-populate immediately when coming from LandingView so chat mode shows on first render
-  const [messages, setMessages] = useState<LiveMessage[]>(() =>
-    initialMessage
-      ? [{ role: "user" as const, content: initialMessage }, { role: "assistant" as const, content: "", streaming: true }]
-      : session.messages
-  );
+  const streamState = useChatStreamingStore((s) => s.streams[session.id]);
+  const startStream = useChatStreamingStore((s) => s.startStream);
+  const clearStream = useChatStreamingStore((s) => s.clearStream);
+
+  const isStreaming = streamState?.status === "streaming";
+
+  // Initialise messages from session, adding a streaming placeholder if a stream is already in flight
+  const [messages, setMessages] = useState<LiveMessage[]>(() => {
+    const base: LiveMessage[] = session.messages.map((m) => ({ ...m }));
+    const existing = useChatStreamingStore.getState().streams[session.id];
+    if (existing?.status === "streaming") {
+      base.push({ role: "assistant", content: existing.content, streaming: true });
+    }
+    return base;
+  });
   const [input, setInput] = useState("");
-  const [streaming, setStreaming] = useState(!!initialMessage);
   const [model, setModel] = useState<ModelId>((session.model || defaultModel || "claude-sonnet-4-6") as ModelId);
   const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
   const kieKeySet = useWorkflowStore((s) => s.kieKeySet);
@@ -309,113 +315,87 @@ function ChatWindow({
   function handleModelChange(id: ModelId) { setModel(id); onModelChange?.(id); }
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  const abortRef = useRef<AbortController | null>(null);
-
-  // key={session.id} in parent ensures remount on session change — no reset effect needed
 
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
   }, [messages]);
 
+  // Sync live stream content into local messages
   useEffect(() => {
-    if (streaming) return;
-    const stored = messages.filter(m => !m.streaming && m.content).map(m => ({ role: m.role, content: m.content }));
-    if (stored.length > 0) onUpdate(stored, model);
-  }, [streaming]);
+    if (!streamState) return;
 
-  // Shared SSE fetch — called by both send() and the initialMessage effect
-  const runStream = useCallback(async (
-    apiMessages: { role: string; content: string }[],
-    assistantIdx: number,
-    signal: AbortSignal,
-    currentModel: string,
-  ) => {
-    try {
-      const token = await getToken();
-      const res = await fetch("/api/assistant", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-        body: JSON.stringify({ model: currentModel, messages: apiMessages, stream: true }),
-        signal,
-      });
-      if (!res.ok || !res.body) {
-        const err = await res.text().catch(() => "Unknown error");
-        setMessages(prev => prev.map((m, i) => i === assistantIdx ? { ...m, content: `Error: ${err}`, streaming: false } : m));
-        return;
+    setMessages((prev) => {
+      const lastIdx = prev.length - 1;
+      const last = prev[lastIdx];
+
+      if (last?.role === "assistant" && last.streaming) {
+        // Update existing placeholder
+        return prev.map((m, i) =>
+          i === lastIdx
+            ? { ...m, content: streamState.content, streaming: streamState.status === "streaming" }
+            : m
+        );
       }
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buf = "";
-      let accumulated = "";
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += decoder.decode(value, { stream: true });
-        const lines = buf.split("\n");
-        buf = lines.pop() ?? "";
-        for (const line of lines) {
-          if (!line.startsWith("data: ")) continue;
-          const json = line.slice(6).trim();
-          if (json === "[DONE]") continue;
-          try {
-            const parsed = JSON.parse(json);
-            const chunk = (parsed.type === "content_block_delta" ? parsed.delta?.text : null)
-              ?? parsed.choices?.[0]?.delta?.content ?? null;
-            if (chunk) {
-              accumulated += chunk;
-              setMessages(prev => prev.map((m, i) => i === assistantIdx ? { ...m, content: accumulated } : m));
-            }
-          } catch { /* skip */ }
-        }
+
+      if (streamState.status === "streaming") {
+        // Add placeholder (user navigated back mid-stream)
+        return [...prev, { role: "assistant", content: streamState.content, streaming: true }];
       }
-      setMessages(prev => prev.map((m, i) => i === assistantIdx ? { ...m, streaming: false } : m));
-    } catch (err: unknown) {
-      if ((err as Error)?.name !== "AbortError") {
-        setMessages(prev => prev.map((m, i) => i === assistantIdx ? { ...m, content: "Request failed.", streaming: false } : m));
-      }
-    } finally {
-      setStreaming(false);
+
+      return prev;
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [streamState?.content, streamState?.status]);
+
+  // When stream finishes, sync final messages from session store and clean up
+  useEffect(() => {
+    if (streamState?.status !== "done" && streamState?.status !== "error") return;
+    const stored = useChatSessionStore.getState().sessions.find((s) => s.id === session.id);
+    if (stored?.messages.length) {
+      setMessages(stored.messages.map((m) => ({ ...m })));
     }
-  }, []);
+    clearStream(session.id);
+    onUpdate(stored?.messages ?? [], model);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [streamState?.status]);
 
-  const send = useCallback(async (text: string) => {
+  const send = useCallback((text: string) => {
     const trimmed = text.trim();
-    if (!trimmed || streaming) return;
+    if (!trimmed || isStreaming) return;
     if (onAuthRequired) { onAuthRequired(); return; }
-    const newMessages: LiveMessage[] = [...messages, { role: "user", content: trimmed }];
-    setMessages([...newMessages, { role: "assistant", content: "", streaming: true }]);
-    setInput("");
-    setStreaming(true);
-    const abort = new AbortController();
-    abortRef.current = abort;
-    const apiMessages = [
-      { role: "system" as const, content: SYSTEM_PROMPT },
-      ...newMessages.map(m => ({ role: m.role, content: m.content })),
-    ];
-    await runStream(apiMessages, newMessages.length, abort.signal, model);
-  }, [messages, streaming, model, runStream, onAuthRequired]);
 
-  // Fire API call for the pre-populated initial message
-  const initialFired = useRef(false);
-  useEffect(() => {
-    if (!initialMessage || initialFired.current) return;
-    initialFired.current = true;
-    onInitialSent?.();
-    const abort = new AbortController();
-    abortRef.current = abort;
-    runStream([
-      { role: "system", content: SYSTEM_PROMPT },
-      { role: "user", content: initialMessage },
-    ], 1, abort.signal, model);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    const contextMessages: StoredMessage[] = [
+      ...session.messages,
+      { role: "user", content: trimmed },
+    ];
+
+    setMessages((prev) => [
+      ...prev.filter((m) => !m.streaming),
+      { role: "user", content: trimmed },
+      { role: "assistant", content: "", streaming: true },
+    ]);
+    setInput("");
+
+    // Save user message immediately so it's not lost if the user navigates away
+    onUpdate(contextMessages, model);
+
+    startStream({
+      sessionId: session.id,
+      apiMessages: [
+        { role: "system", content: SYSTEM_PROMPT },
+        ...contextMessages.map((m) => ({ role: m.role, content: m.content })),
+      ],
+      model,
+      contextMessages,
+    });
+  }, [isStreaming, model, onAuthRequired, startStream, session, onUpdate]);
 
   function onKey(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(input); }
   }
 
   // ── Empty state: centered welcome + input ──────────────────────────────────
-  if (messages.length === 0 && !streaming) {
+  if (messages.length === 0 && !isStreaming) {
     return (
       <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "0 24px 80px", minWidth: 0 }}>
         <LogoIcon size={48} />
@@ -523,7 +503,7 @@ function ChatWindow({
             onKeyDown={onKey}
             placeholder="Send a message…"
             rows={1}
-            disabled={streaming}
+            disabled={isStreaming}
             style={{
               flex: 1, background: "transparent", border: "none", outline: "none",
               resize: "none", color: "rgba(255,255,255,0.88)", fontSize: "14px",
@@ -540,12 +520,12 @@ function ChatWindow({
             <ModelPicker model={model} onChange={handleModelChange} />
             <button
               onClick={() => send(input)}
-              disabled={!input.trim() || streaming || kieKeySet === false}
+              disabled={!input.trim() || isStreaming || kieKeySet === false}
               style={{
                 width: "32px", height: "32px", borderRadius: "8px", border: "none",
-                background: input.trim() && !streaming && kieKeySet !== false ? "rgba(45,212,191,0.25)" : "rgba(255,255,255,0.07)",
-                color: input.trim() && !streaming && kieKeySet !== false ? "rgba(45,212,191,0.9)" : "rgba(255,255,255,0.25)",
-                cursor: input.trim() && !streaming && kieKeySet !== false ? "pointer" : "not-allowed",
+                background: input.trim() && !isStreaming && kieKeySet !== false ? "rgba(45,212,191,0.25)" : "rgba(255,255,255,0.07)",
+                color: input.trim() && !isStreaming && kieKeySet !== false ? "rgba(45,212,191,0.9)" : "rgba(255,255,255,0.25)",
+                cursor: input.trim() && !isStreaming && kieKeySet !== false ? "pointer" : "not-allowed",
                 display: "flex", alignItems: "center", justifyContent: "center",
                 flexShrink: 0, transition: "background 150ms, color 150ms",
               }}
@@ -574,8 +554,8 @@ function ChatInner() {
   const idParam = searchParams.get("id");
 
   const { sessions, createSession, upsertSession, preferredModel, setPreferredModel } = useChatSessionStore();
+  const startStream = useChatStreamingStore((s) => s.startStream);
   const [hydrated, setHydrated] = useState(false);
-  const [pendingMessage, setPendingMessage] = useState<string | null>(null);
   const [landingModel, setLandingModel] = useState<ModelId>("claude-sonnet-4-6");
   const [user, setUser] = useState<User | null>(null);
   const setAuthModalOpen = useWorkflowStore((s) => s.setAuthModalOpen);
@@ -605,7 +585,14 @@ function ChatInner() {
   function handleLandingSubmit(text: string) {
     if (!user && !isGuestMode) { setAuthModalOpen(true); return; }
     const id = createSession(landingModel, text.slice(0, 50));
-    setPendingMessage(text);
+    const userMsg = { role: "user" as const, content: text };
+    upsertSession(id, [userMsg], landingModel);
+    startStream({
+      sessionId: id,
+      apiMessages: [{ role: "system", content: SYSTEM_PROMPT }, userMsg],
+      model: landingModel,
+      contextMessages: [userMsg],
+    });
     router.push(`/chat?id=${id}`);
   }
 
@@ -624,8 +611,6 @@ function ChatInner() {
           key={activeSession.id}
           session={activeSession}
           onUpdate={(msgs, mdl) => upsertSession(activeSession.id, msgs, mdl)}
-          initialMessage={pendingMessage}
-          onInitialSent={() => setPendingMessage(null)}
           defaultModel={preferredModel}
           onModelChange={setPreferredModel}
           onAuthRequired={!user && !isGuestMode ? () => setAuthModalOpen(true) : undefined}

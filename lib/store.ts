@@ -141,15 +141,18 @@ const MAX_UNDO = 50;
 // ── Store interface ────────────────────────────────────────────────────────────
 
 export interface Toast {
-  id:      string;
-  message: string;
-  type:    "error" | "success" | "info";
+  id:       string;
+  message:  string;
+  type:     "error" | "success" | "info";
+  href?:    string;
+  title?:   string;
+  preview?: string;
 }
 
 interface WorkflowStore {
   // ── Toasts
   toasts:      Toast[];
-  addToast:    (message: string, type?: Toast["type"]) => void;
+  addToast:    (message: string, type?: Toast["type"], href?: string, title?: string, preview?: string) => void;
   removeToast: (id: string) => void;
 
   // ── Kie key status (null = unknown, true = set, false = not set)
@@ -635,10 +638,10 @@ export const useWorkflowStore = create<WorkflowStore>()(
         },
 
         toasts: [],
-        addToast: (message, type = "error") =>
+        addToast: (message, type = "error", href, title, preview) =>
           set((s) => {
             const id = Math.random().toString(36).slice(2);
-            return { toasts: [...s.toasts, { id, message, type }] };
+            return { toasts: [...s.toasts, { id, message, type, href, title, preview }] };
           }),
         removeToast: (id) =>
           set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
