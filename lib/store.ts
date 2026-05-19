@@ -102,6 +102,7 @@ export interface Space {
   createdAt: number;
   updatedAt?: number;
   viewport?: { x: number; y: number; zoom: number };
+  isPublic?: boolean;
 }
 
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
@@ -183,6 +184,7 @@ interface WorkflowStore {
   renameSpace:    (id: string, name: string) => void;
   deleteSpace:    (id: string)   => void;
   duplicateSpace: (id: string)   => void;
+  setSpacePublic: (id: string, isPublic: boolean) => void;
 
   // ── Workflow actions
   onNodesChange:      (changes: NodeChange[]) => void;
@@ -349,6 +351,11 @@ export const useWorkflowStore = create<WorkflowStore>()(
             const spaces = syncSpace(s.spaces, s.activeSpaceId, s.nodes, s.edges, s.nodeCounters);
             return { spaces: [...spaces, copy] };
           }),
+
+        setSpacePublic: (id, isPublic) =>
+          set((s) => ({
+            spaces: s.spaces.map((sp) => (sp.id === id ? { ...sp, isPublic } : sp)),
+          })),
 
         // ── Workflow actions (each syncs back to spaces) ────────────────────
 

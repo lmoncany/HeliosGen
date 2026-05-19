@@ -9,6 +9,7 @@ import NodeActionBar from "./NodeActionBar";
 import { useWorkflowStore, NodeData } from "@/lib/store";
 import { resolveInputs } from "@/lib/executor";
 import { createClient } from "@/lib/supabase/client";
+import { useReadOnly } from "@/lib/readOnlyContext";
 import { VIDEO_MODELS as VIDEO_MODEL_CFG } from "@/lib/modelConfig";
 import { useGeneratingPhase } from "@/lib/useGeneratingPhase";
 import { useGeneratingBorderAnimation } from "@/lib/useGeneratingBorderAnimation";
@@ -155,6 +156,7 @@ function resolveMentions(
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export default function VideoGeneratorNode({ id, data, selected }: NodeProps<VideoGeneratorNodeType>) {
+  const readOnly = useReadOnly();
   const updateNodeData = useWorkflowStore((s) => s.updateNodeData);
   const updateNodeSize = useWorkflowStore((s) => s.updateNodeSize);
   const setAuthModalOpen = useWorkflowStore((s) => s.setAuthModalOpen);
@@ -973,7 +975,7 @@ export default function VideoGeneratorNode({ id, data, selected }: NodeProps<Vid
     >
       <CornerResizer minWidth={280} minHeight={80} keepAspectRatio={!!data.videoUrl} />
       <NodeActionBar
-        visible={!!selected && !data.locked && !parentGroupSelected && !multiSelected}
+        visible={!!selected && !data.locked && !parentGroupSelected && !multiSelected && !readOnly}
         hasContent={!!data.videoUrl}
         isSaving={isSaving}
         onPreview={openLightbox}
@@ -1713,6 +1715,7 @@ export default function VideoGeneratorNode({ id, data, selected }: NodeProps<Vid
                     max={2147483647}
                     placeholder="—"
                     value={seed}
+                    readOnly={readOnly}
                     onChange={(e) => {
                       const v = e.target.value === "" ? 0 : Math.max(0, Math.min(2147483647, parseInt(e.target.value, 10)));
                       updateNodeData(id, { seed: isNaN(v) ? 0 : v });
@@ -1733,7 +1736,7 @@ export default function VideoGeneratorNode({ id, data, selected }: NodeProps<Vid
               </div>{/* end pills wrapper */}
 
               {/* Generate button — always right */}
-              <GenerateButton onClick={generate} busy={animBusy} disabled={promptOverLimit || kieKeySet === false || busy} />
+              {!readOnly && <GenerateButton onClick={generate} busy={animBusy} disabled={promptOverLimit || kieKeySet === false || busy} />}
             </div>
           );
         })()}

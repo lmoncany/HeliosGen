@@ -7,6 +7,7 @@ import { useAnimatedPopup } from "@/lib/useAnimatedPopup";
 import CornerResizer from "./CornerResizer";
 import { createClient } from "@/lib/supabase/client";
 import { useGeneratingBorderAnimation } from "@/lib/useGeneratingBorderAnimation";
+import { useReadOnly } from "@/lib/readOnlyContext";
 
 type AssistantNodeType = Node<NodeData, "assistantNode">;
 
@@ -16,6 +17,7 @@ const MODELS = [
 ];
 
 export default function AssistantNode({ id, data, selected }: NodeProps<AssistantNodeType>) {
+  const readOnly = useReadOnly();
   const updateNodeData = useWorkflowStore((s) => s.updateNodeData);
   const onNodesChange = useWorkflowStore((s) => s.onNodesChange);
   const addNode = useWorkflowStore((s) => s.addNode);
@@ -341,6 +343,7 @@ export default function AssistantNode({ id, data, selected }: NodeProps<Assistan
                 className="relative w-full h-full px-3 pt-10 pb-10 bg-transparent text-[13px] text-white leading-[1.6] resize-none outline-none overflow-y-auto z-10"
                 style={{ caretColor: "white", overscrollBehavior: "contain" }}
                 defaultValue={localPrompt}
+                readOnly={readOnly}
                 onChange={(e) => updateNodeData(id, { localPrompt: e.target.value })}
                 onMouseDown={(e) => { if (selected) e.stopPropagation(); else e.preventDefault(); }}
               />
@@ -392,7 +395,7 @@ export default function AssistantNode({ id, data, selected }: NodeProps<Assistan
             </div>
 
             {/* Generate / Stop */}
-            {busy ? (
+            {!readOnly && (busy ? (
               <button
                 onClick={(e) => { e.stopPropagation(); handleCancel(); }}
                 className="flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-medium hover:bg-white/5 transition-colors"
@@ -403,7 +406,7 @@ export default function AssistantNode({ id, data, selected }: NodeProps<Assistan
               </button>
             ) : (
               <GenerateButton onClick={handleGenerate} disabled={!hasPrompt || kieKeySet === false} />
-            )}
+            ))}
           </div>
         </div>
       </div>

@@ -2,7 +2,7 @@
 import React, { useState } from "react";
 import {
   Plus, MousePointer2, Hand, Scissors, LayoutTemplate,
-  MessageSquare, Undo2, Redo2,
+  MessageSquare, Undo2, Redo2, Share2,
 } from "lucide-react";
 
 type ToolId = "select" | "hand" | "cut" | "frame" | "comment";
@@ -16,6 +16,8 @@ interface CanvasToolbarProps {
   canUndo?: boolean;
   canRedo?: boolean;
   onOpenSettings?: () => void;
+  onShare?: () => void;
+  isPublic?: boolean;
 }
 
 function Divider() {
@@ -71,9 +73,12 @@ export default function CanvasToolbar({
   onRedo,
   canUndo = true,
   canRedo = false,
+  onShare,
+  isPublic = false,
 }: CanvasToolbarProps) {
   const [internalTool, setInternalTool] = useState<ToolId>("select");
   const [addHovered, setAddHovered] = useState(false);
+  const [shareHovered, setShareHovered] = useState(false);
   const activeTool = externalTool ?? internalTool;
 
   function selectTool(tool: ToolId) {
@@ -136,6 +141,34 @@ export default function CanvasToolbar({
       <Btn id="toolbar-redo" title="Redo (⌘⇧Z)" dimmed={!canRedo} onClick={() => onRedo?.()}>
         <Redo2 size={15} strokeWidth={1.8} />
       </Btn>
+
+      {/* ── Bottom section: share ── */}
+      <span style={{
+        display: "block", width: "100%", height: "1px",
+        background: "rgba(255,255,255,0.07)", margin: "4px 0", flexShrink: 0,
+      }} />
+
+      <button
+        id="toolbar-share"
+        title="Share workflow"
+        onMouseEnter={() => setShareHovered(true)}
+        onMouseLeave={() => setShareHovered(false)}
+        onClick={() => onShare?.()}
+        style={{
+          display: "flex", alignItems: "center", justifyContent: "center",
+          width: "34px", height: "34px", borderRadius: "10px",
+          border: "none", cursor: "pointer", flexShrink: 0,
+          transition: "background 150ms, color 150ms",
+          background: isPublic
+            ? shareHovered ? "rgba(45,212,191,0.22)" : "rgba(45,212,191,0.12)"
+            : shareHovered ? "rgba(255,255,255,0.08)" : "transparent",
+          color: isPublic
+            ? "#2DD4BF"
+            : shareHovered ? "#fff" : "rgba(255,255,255,0.6)",
+        }}
+      >
+        <Share2 size={15} strokeWidth={1.8} />
+      </button>
     </div>
   );
 }

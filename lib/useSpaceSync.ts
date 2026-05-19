@@ -47,7 +47,7 @@ export function useSpaceSync() {
 
       const { data, error } = await supabase
         .from("spaces")
-        .select("id, name, data, created_at")
+        .select("id, name, data, is_public, created_at")
         .eq("user_id", session.user.id)
         .order("created_at", { ascending: true });
 
@@ -63,6 +63,7 @@ export function useSpaceSync() {
         viewport:     row.data?.viewport,
         createdAt:    row.data?.createdAt    ?? Date.parse(row.created_at),
         updatedAt:    row.data?.updatedAt    ?? row.data?.createdAt ?? Date.parse(row.created_at),
+        isPublic:     row.is_public          ?? false,
       }));
 
       loadSpacesFromDB(dbSpaces);
@@ -87,9 +88,10 @@ export function useSpaceSync() {
 
       if (spacesToSave.length > 0) {
         const rows = spacesToSave.map((sp) => ({
-          id:      sp.id,
-          user_id: session.user.id,
-          name:    sp.name,
+          id:        sp.id,
+          user_id:   session.user.id,
+          name:      sp.name,
+          is_public: sp.isPublic ?? false,
           data:    {
             nodes: sp.nodes.map((n) => ({
               ...n,

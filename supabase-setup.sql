@@ -35,6 +35,7 @@ create table public.spaces (
   user_id    uuid        not null references auth.users(id) on delete cascade,
   name       text        not null,
   data       jsonb       not null default '{}',
+  is_public  boolean     not null default false,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -49,6 +50,10 @@ create policy "users manage own spaces"
   on public.spaces for all
   using  (auth.uid() = user_id)
   with check (auth.uid() = user_id);
+
+create policy "anyone read public spaces"
+  on public.spaces for select
+  using (is_public = true);
 
 create table public.generations (
   id                   uuid primary key default gen_random_uuid(),

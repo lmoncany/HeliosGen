@@ -38,6 +38,7 @@ import NodePickerMenu, { DropState } from "./NodePickerMenu";
 import SelectionToolbar from "./SelectionToolbar";
 import CanvasToolbar from "./CanvasToolbar";
 import AddNodeMenu from "./AddNodeMenu";
+import ShareModal from "./ShareModal";
 import { MessageSquare, Sparkles, Clapperboard } from "lucide-react";
 
 async function getAccessToken(): Promise<string | undefined> {
@@ -883,6 +884,9 @@ export default function WorkflowCanvas() {
   const [addMenuAnchor, setAddMenuAnchor] = useState<DOMRect | null>(null);
 
   const setSettingsOpen = useWorkflowStore((s) => s.setSettingsOpen);
+  const activeSpaceId = useWorkflowStore((s) => s.activeSpaceId);
+  const activeSpace = useWorkflowStore((s) => s.spaces.find((sp) => sp.id === s.activeSpaceId));
+  const [shareModalOpen, setShareModalOpen] = useState(false);
 
   // ── Alignment snap guides ─────────────────────────────────────────────────────
   const [snapGuides, setSnapGuides] = useState<SnapGuide[]>([]);
@@ -1557,7 +1561,17 @@ export default function WorkflowCanvas() {
           canUndo={canUndo}
           canRedo={canRedo}
           onOpenSettings={() => setSettingsOpen(true)}
+          onShare={() => setShareModalOpen(true)}
+          isPublic={activeSpace?.isPublic ?? false}
         />
+
+        {shareModalOpen && (
+          <ShareModal
+            spaceId={activeSpaceId}
+            open={shareModalOpen}
+            onClose={() => setShareModalOpen(false)}
+          />
+        )}
 
 
         {/* ── Alignment guide lines ────────────────────────────────────────────── */}

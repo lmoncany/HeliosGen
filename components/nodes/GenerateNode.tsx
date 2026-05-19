@@ -10,6 +10,7 @@ import NodeActionBar from "./NodeActionBar";
 import { useWorkflowStore, NodeData } from "@/lib/store";
 import { createClient } from "@/lib/supabase/client";
 import { resolveInputs } from "@/lib/executor";
+import { useReadOnly } from "@/lib/readOnlyContext";
 
 type GenerateNodeType = Node<NodeData, "generateNode">;
 
@@ -160,6 +161,7 @@ function resolveMentions(
 // ── Component ────────────────────────────────────────────────────────────────
 
 export default function GenerateNode({ id, data, selected }: NodeProps<GenerateNodeType>) {
+  const readOnly = useReadOnly();
   const updateNodeData = useWorkflowStore((s) => s.updateNodeData);
   const updateNodeSize = useWorkflowStore((s) => s.updateNodeSize);
   const removeEdgesForHandle = useWorkflowStore((s) => s.removeEdgesForHandle);
@@ -702,7 +704,7 @@ export default function GenerateNode({ id, data, selected }: NodeProps<GenerateN
     >
       <CornerResizer minWidth={220} minHeight={80} keepAspectRatio={!!data.imageUrl} />
       <NodeActionBar
-        visible={!!selected && !data.locked && !parentGroupSelected && !multiSelected}
+        visible={!!selected && !data.locked && !parentGroupSelected && !multiSelected && !readOnly}
         hasContent={!!data.imageUrl}
         isSaving={isSaving}
         onPreview={openLightbox}
@@ -1126,7 +1128,7 @@ export default function GenerateNode({ id, data, selected }: NodeProps<GenerateN
           </div>{/* end pills wrapper */}
 
           {/* Generate button — always right */}
-          <GenerateButton onClick={generate} busy={animBusy} disabled={promptOverLimit || kieKeySet === false || busy} />
+          {!readOnly && <GenerateButton onClick={generate} busy={animBusy} disabled={promptOverLimit || kieKeySet === false || busy} />}
         </div>
       </div>
 

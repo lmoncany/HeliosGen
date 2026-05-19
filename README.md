@@ -142,6 +142,7 @@ Just workflows.
 - Persistent cloud storage
 - Per-user API keys
 - Real-time generation history
+- Shareable public workspace links (read-only view at `/public/workflow/<id>`)
 - Modern responsive UI
 
 ---
@@ -264,7 +265,7 @@ Tables created:
 
 | Table | Description |
 |---|---|
-| `spaces` | Workflow canvases |
+| `spaces` | Workflow canvases (includes `is_public` flag for sharing) |
 | `generations` | Image/video generation history |
 | `user_uploads` | Uploaded assets |
 | `user_settings` | Per-user API keys |

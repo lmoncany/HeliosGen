@@ -7,6 +7,7 @@ import { createPortal } from "react-dom";
 import { Handle, Position, NodeProps, Node, useViewport } from "@xyflow/react";
 import { useWorkflowStore, NodeData } from "@/lib/store";
 import { IMAGE_MODELS, VIDEO_MODELS } from "@/lib/modelConfig";
+import { useReadOnly } from "@/lib/readOnlyContext";
 import CornerResizer from "./CornerResizer";
 
 
@@ -55,6 +56,7 @@ function renderWithMentions(
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export default function PromptNode({ id, data, selected }: NodeProps<PromptNodeType>) {
+  const readOnly = useReadOnly();
   const updateNodeData = useWorkflowStore((s) => s.updateNodeData);
   const onNodesChange = useWorkflowStore((s) => s.onNodesChange);
   const addNode = useWorkflowStore((s) => s.addNode);
@@ -692,6 +694,7 @@ export default function PromptNode({ id, data, selected }: NodeProps<PromptNodeT
               className={`relative w-full h-full px-3 pt-2.5 pb-8 bg-transparent text-[13px] leading-[1.6] resize-none outline-none overflow-y-auto z-10${textMode === "json" ? " font-mono" : ""}`}
               style={{ color: "transparent", caretColor: "white", overscrollBehavior: "contain", ...(textMode === "json" ? { overflowY: "scroll" as const } : {}) }}
               defaultValue={storePrompt}
+              readOnly={readOnly}
               onChange={handleChange}
               onPaste={textMode === "json" ? () => {
                 requestAnimationFrame(() => {
@@ -911,6 +914,7 @@ export default function PromptNode({ id, data, selected }: NodeProps<PromptNodeT
                 ref={modalTextareaRef}
                 className="relative w-full h-full px-4 pt-3 pb-4 bg-transparent text-[14px] leading-[1.7] resize-none outline-none overflow-y-auto"
                 style={{ color: "transparent", caretColor: "white", overscrollBehavior: "contain" }}
+                readOnly={readOnly}
                 onChange={handleModalChange}
                 onScroll={syncModalScroll}
                 onKeyDown={(e) => {
