@@ -179,7 +179,7 @@ interface WorkflowStore {
   redo: () => void;
 
   // ── Space actions
-  createSpace:    (name: string) => void;
+  createSpace:    (name: string, template?: { nodes: Node<NodeData>[]; edges: Edge[]; nodeCounters: Record<string, number> }) => void;
   switchSpace:    (id: string)   => void;
   renameSpace:    (id: string, name: string) => void;
   deleteSpace:    (id: string)   => void;
@@ -284,9 +284,13 @@ export const useWorkflowStore = create<WorkflowStore>()(
 
         // ── Space actions ──────────────────────────────────────────────────
 
-        createSpace: (name) =>
+        createSpace: (name, template) =>
           set((s) => {
-            const sp = makeSpace(name);
+            const sp = makeSpace(name, template ? {
+              nodes:        template.nodes,
+              edges:        template.edges,
+              nodeCounters: template.nodeCounters,
+            } : undefined);
             const spaces = [
               ...syncSpace(s.spaces, s.activeSpaceId, s.nodes, s.edges, s.nodeCounters),
               sp,
@@ -294,9 +298,9 @@ export const useWorkflowStore = create<WorkflowStore>()(
             return {
               spaces,
               activeSpaceId: sp.id,
-              nodes:         [],
-              edges:         [],
-              nodeCounters:  {},
+              nodes:         template?.nodes        ?? [],
+              edges:         template?.edges        ?? [],
+              nodeCounters:  template?.nodeCounters ?? {},
               undoStack:     [],
               redoStack:     [],
             };
