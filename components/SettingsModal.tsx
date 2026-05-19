@@ -337,6 +337,9 @@ function ApiKeysPanel({
   kieKeyStatus,
   onKieKeySave,
   onKieKeyDelete,
+  azureKeyStatus,
+  onAzureKeySave,
+  onAzureKeyDelete,
 }: {
   providers: Record<string, ProviderId>;
   onProviderChange: (modelId: string, v: ProviderId) => void;
@@ -347,10 +350,16 @@ function ApiKeysPanel({
   kieKeyStatus: "unknown" | "set" | "unset";
   onKieKeySave: (token: string) => Promise<void>;
   onKieKeyDelete: () => Promise<void>;
+  azureKeyStatus: "unknown" | "set" | "unset";
+  onAzureKeySave: (key: string) => Promise<void>;
+  onAzureKeyDelete: () => Promise<void>;
 }) {
-  const [kieInput, setKieInput]     = useState("");
-  const [kieSaving, setKieSaving]   = useState(false);
-  const [kieError, setKieError]     = useState<string | null>(null);
+  const [kieInput, setKieInput]       = useState("");
+  const [kieSaving, setKieSaving]     = useState(false);
+  const [kieError, setKieError]       = useState<string | null>(null);
+  const [azureInput, setAzureInput]   = useState("");
+  const [azureSaving, setAzureSaving] = useState(false);
+  const [azureError, setAzureError]   = useState<string | null>(null);
 
   const handleKieSave = async () => {
     if (!kieInput.trim()) return;
@@ -363,6 +372,20 @@ function ApiKeysPanel({
       setKieError(e instanceof Error ? e.message : "Failed to save");
     } finally {
       setKieSaving(false);
+    }
+  };
+
+  const handleAzureSave = async () => {
+    if (!azureInput.trim()) return;
+    setAzureSaving(true);
+    setAzureError(null);
+    try {
+      await onAzureKeySave(azureInput.trim());
+      setAzureInput("");
+    } catch (e: unknown) {
+      setAzureError(e instanceof Error ? e.message : "Failed to save");
+    } finally {
+      setAzureSaving(false);
     }
   };
 
@@ -510,7 +533,7 @@ function ApiKeysPanel({
         )}
       </div>
 
-      {/* ──── Global Azure Foundry endpoint ───────────────────────────── */}
+      {/* ──── Azure Foundry API key + endpoint ────────────────────────── */}
       <div
         style={{
           display: "flex",
@@ -536,10 +559,94 @@ function ApiKeysPanel({
           </span>
           <div>
             <div style={{ fontSize: "13px", fontWeight: 600, color: "rgba(255,255,255,0.85)" }}>Azure Foundry</div>
-            <div style={{ fontSize: "10px", color: "rgba(255,255,255,0.28)", marginTop: "1px" }}>Global base URL — used by all Azure-routed models</div>
+            <div style={{ fontSize: "10px", color: "rgba(255,255,255,0.28)", marginTop: "1px" }}>
+              API key &amp; base URL — used by all Azure-routed models
+            </div>
           </div>
+          {azureKeyStatus === "set" && (
+            <span
+              style={{
+                marginLeft: "auto", fontSize: "10px", fontWeight: 600,
+                color: "rgba(74,222,128,0.8)", background: "rgba(74,222,128,0.08)",
+                border: "1px solid rgba(74,222,128,0.2)", borderRadius: "5px",
+                padding: "2px 7px", letterSpacing: "0.04em",
+              }}
+            >
+              SAVED
+            </span>
+          )}
         </div>
 
+        {/* API Key */}
+        <div style={{ display: "flex", flexDirection: "column", gap: "5px" }}>
+          <label
+            htmlFor="azure-api-key"
+            style={{ fontSize: "11px", fontWeight: 600, color: "rgba(96,165,250,0.7)", letterSpacing: "0.05em", textTransform: "uppercase" }}
+          >
+            API Key
+          </label>
+          {azureKeyStatus === "unknown" ? (
+            <div style={{
+              height: "31px", borderRadius: "7px",
+              background: "rgba(255,255,255,0.05)",
+              animation: "skeleton-pulse 1.4s ease-in-out infinite",
+            }} />
+          ) : azureKeyStatus === "set" ? (
+            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+              <input
+                type="password"
+                value="placeholdertoken"
+                readOnly
+                style={{ ...INPUT_STYLE, flex: 1, cursor: "default", color: "rgba(255,255,255,0.3)" }}
+              />
+              <button
+                onClick={onAzureKeyDelete}
+                style={{
+                  padding: "7px 12px", borderRadius: "7px", border: "1px solid rgba(239,68,68,0.3)",
+                  background: "rgba(239,68,68,0.06)", color: "rgba(239,68,68,0.7)",
+                  cursor: "pointer", fontSize: "12px", fontWeight: 500, whiteSpace: "nowrap",
+                }}
+              >
+                Remove
+              </button>
+            </div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+              <div style={{ display: "flex", gap: "8px" }}>
+                <input
+                  id="azure-api-key"
+                  type="password"
+                  placeholder="Paste your Azure Foundry API key"
+                  value={azureInput}
+                  onChange={(e) => setAzureInput(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") handleAzureSave(); }}
+                  style={{ ...INPUT_STYLE, flex: 1 }}
+                  onFocus={(e) => { (e.target as HTMLInputElement).style.borderColor = "rgba(96,165,250,0.4)"; }}
+                  onBlur={(e)  => { (e.target as HTMLInputElement).style.borderColor = "rgba(255,255,255,0.08)"; }}
+                />
+                <button
+                  onClick={handleAzureSave}
+                  disabled={!azureInput.trim() || azureSaving}
+                  style={{
+                    padding: "7px 14px", borderRadius: "7px", border: "none",
+                    background: azureInput.trim() ? "rgba(96,165,250,0.15)" : "rgba(255,255,255,0.04)",
+                    color: azureInput.trim() ? "rgba(96,165,250,0.9)" : "rgba(255,255,255,0.25)",
+                    cursor: azureInput.trim() ? "pointer" : "default",
+                    fontSize: "12px", fontWeight: 500, whiteSpace: "nowrap",
+                    transition: "background 140ms ease, color 140ms ease",
+                  }}
+                >
+                  {azureSaving ? "Saving…" : "Save"}
+                </button>
+              </div>
+              {azureError && (
+                <p style={{ fontSize: "11px", color: "rgba(239,68,68,0.7)", margin: 0 }}>{azureError}</p>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Base URL */}
         <div style={{ display: "flex", flexDirection: "column", gap: "5px" }}>
           <label
             htmlFor="azure-global-base-url"
@@ -558,7 +665,7 @@ function ApiKeysPanel({
             onBlur={(e)  => { (e.target as HTMLInputElement).style.borderColor = "rgba(255,255,255,0.08)"; }}
           />
           <p style={{ fontSize: "10px", color: "rgba(255,255,255,0.2)", margin: 0, lineHeight: 1.5 }}>
-            The <code style={{ fontFamily: "monospace" }}>AZURE_API_KEY</code> environment variable must be set on the server.
+            Combined with per-model deployment names below.
           </p>
         </div>
       </div>
@@ -610,11 +717,12 @@ function ApiKeysPanel({
 /* ─── Main modal ─────────────────────────────────────────────────────────────── */
 
 export default function SettingsModal({ onClose }: SettingsModalProps) {
-  const [activeNav, setActiveNav]         = useState<NavId>("api-keys");
-  const [modelProviders, setModelProviders] = useState<Record<string, ProviderId>>({});
+  const [activeNav, setActiveNav]             = useState<NavId>("api-keys");
+  const [modelProviders, setModelProviders]   = useState<Record<string, ProviderId>>({});
   const [azureDeployments, setAzureDeployments] = useState<Record<string, string>>({});
-  const [azureBaseUrl, setAzureBaseUrl]   = useState("");
-  const [kieKeyStatus, setKieKeyStatus]   = useState<"unknown" | "set" | "unset">("unknown");
+  const [azureBaseUrl, setAzureBaseUrl]       = useState("");
+  const [kieKeyStatus, setKieKeyStatus]       = useState<"unknown" | "set" | "unset">("unknown");
+  const [azureKeyStatus, setAzureKeyStatus]   = useState<"unknown" | "set" | "unset">("unknown");
   const setKieKeySet = useWorkflowStore((s) => s.setKieKeySet);
   const overlayRef = useRef<HTMLDivElement>(null);
 
@@ -636,6 +744,13 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
         .then((r) => r.json())
         .then((d) => setKieKeyStatus(d.hasToken ? "set" : "unset"))
         .catch(() => setKieKeyStatus("unset"))
+    );
+    // Check if Azure key is saved on the server
+    authHeader().then((h) =>
+      fetch("/api/settings/azure-key", { headers: h })
+        .then((r) => r.json())
+        .then((d) => setAzureKeyStatus(d.hasToken ? "set" : "unset"))
+        .catch(() => setAzureKeyStatus("unset"))
     );
   }, []);
 
@@ -687,6 +802,23 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
     await fetch("/api/settings/kie-key", { method: "DELETE", headers: h });
     setKieKeyStatus("unset");
     setKieKeySet(false);
+  };
+
+  const handleAzureKeySave = async (key: string) => {
+    const h = await authHeader();
+    const res = await fetch("/api/settings/azure-key", {
+      method: "POST",
+      headers: { ...h, "Content-Type": "application/json" },
+      body: JSON.stringify({ azureApiKey: key }),
+    });
+    if (!res.ok) throw new Error((await res.json()).error ?? "Failed to save");
+    setAzureKeyStatus("set");
+  };
+
+  const handleAzureKeyDelete = async () => {
+    const h = await authHeader();
+    await fetch("/api/settings/azure-key", { method: "DELETE", headers: h });
+    setAzureKeyStatus("unset");
   };
 
   return (
@@ -883,6 +1015,9 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
                 kieKeyStatus={kieKeyStatus}
                 onKieKeySave={handleKieKeySave}
                 onKieKeyDelete={handleKieKeyDelete}
+                azureKeyStatus={azureKeyStatus}
+                onAzureKeySave={handleAzureKeySave}
+                onAzureKeyDelete={handleAzureKeyDelete}
               />
             )}
           </div>

@@ -10,6 +10,7 @@ import { ensureR2, uploadBuffer } from "@/lib/r2";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { IMAGE_MODELS } from "@/lib/modelConfig";
 import { getKieTokenForUser } from "@/lib/getKieToken";
+import { getAzureKeyForUser } from "@/lib/getAzureKey";
 import { GUEST_MODE, resolveUserId } from "@/lib/guestMode";
 import * as guestDb from "@/lib/guest/db";
 
@@ -198,8 +199,10 @@ export async function POST(req: NextRequest) {
 
   // ── Azure Foundry branch ──────────────────────────────────────────────────────
   if (azureBaseUrl && azureDeployment) {
-    const azureKey = process.env.AZURE_API_KEY;
-    if (!azureKey) return NextResponse.json({ error: "AZURE_API_KEY is not set" }, { status: 500 });
+    const azureKey = currentUserId
+      ? await getAzureKeyForUser(currentUserId)
+      : process.env.AZURE_API_KEY ?? null;
+    if (!azureKey) return NextResponse.json({ error: "Azure API key is not configured. Add it in Settings." }, { status: 500 });
 
     const sizeMap         = cfg.azureSizeMap ?? {};
     const size            = sizeMap[aspectRatio] ?? "1024x1024";

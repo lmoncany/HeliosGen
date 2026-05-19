@@ -40,7 +40,7 @@ interface GuestDb {
   generations: Generation[];
   uploads: Upload[];
   assetCache: Record<string, { cdn_url: string; mime_type: string; byte_size: number }>;
-  settings?: { kie_api_token?: string };
+  settings?: { kie_api_token?: string; azure_api_key?: string };
 }
 
 function now(): string {
@@ -159,5 +159,24 @@ export function setKieApiToken(token: string): void {
 export function deleteKieApiToken(): void {
   const db = read();
   if (db.settings) delete db.settings.kie_api_token;
+  write(db);
+}
+
+export function getAzureApiKey(): string | null {
+  const dbKey = read().settings?.azure_api_key;
+  if (dbKey) return dbKey;
+  const envKey = process.env.AZURE_API_KEY ?? "";
+  return envKey || null;
+}
+
+export function setAzureApiKey(key: string): void {
+  const db = read();
+  db.settings = { ...db.settings, azure_api_key: key };
+  write(db);
+}
+
+export function deleteAzureApiKey(): void {
+  const db = read();
+  if (db.settings) delete db.settings.azure_api_key;
   write(db);
 }
