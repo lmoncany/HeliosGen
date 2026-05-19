@@ -13,6 +13,16 @@
 
 ---
 
+# 📸 Screenshots
+
+<p align="center">
+  <img width="2912" height="2292" alt="Image" src="https://github.com/user-attachments/assets/f9bd5a48-3a3d-4b1a-a6d9-2e5f359c8b95" />
+
+  <img width="1459" height="1146" alt="Image" src="https://github.com/user-attachments/assets/1e6e6b2d-672d-4307-9db6-d8a3f29beee7" />
+</p>
+
+---
+
 # ✨ HeliosGen
 
 HeliosGen is a free & open source visual AI workflow builder for image and video generation.
@@ -27,16 +37,6 @@ Build reusable AI pipelines with:
 No subscriptions.  
 No disappearing credits.  
 No vendor lock-in.
-
----
-
-# 📸 Screenshots
-
-<p align="center">
-  <img width="2912" height="2292" alt="Image" src="https://github.com/user-attachments/assets/f9bd5a48-3a3d-4b1a-a6d9-2e5f359c8b95" />
-
-  <img width="1459" height="1146" alt="Image" src="https://github.com/user-attachments/assets/1e6e6b2d-672d-4307-9db6-d8a3f29beee7" />
-</p>
 
 ---
 
