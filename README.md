@@ -1,3 +1,4 @@
+````md
 <p align="center">
   <img 
     src="https://helios.sdd.cash/HG.svg" 
@@ -40,6 +41,22 @@ No vendor lock-in.
 
 ---
 
+# 💳 Credits
+
+HeliosGen now works with <a href="https://kie.ai?ref=25abb3f2236cbff9780ab9c2f84479ec" target="_blank">kie.ai</a>.
+
+All credits are purchased directly on your own account and never expire.
+
+That means:
+- no monthly reset,
+- no lost credits,
+- no subscription lock-in,
+- and full ownership of your usage.
+
+You only pay for what you generate.
+
+---
+
 # 🚀 Features
 
 - Infinite node-based canvas
@@ -71,7 +88,7 @@ No vendor lock-in.
 - Seedance 2.0
 - Grok Imagine Video
 
-More models available via Kie.ai.
+More models are coming.
 
 ---
 
@@ -199,3 +216,5 @@ MIT License
 <p align="center">
   Built for creators building the future of AI workflows.
 </p>
+````
+
