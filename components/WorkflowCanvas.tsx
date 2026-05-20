@@ -41,6 +41,8 @@ import AddNodeMenu from "./AddNodeMenu";
 import ShareModal from "./ShareModal";
 import { MessageSquare, Sparkles, Clapperboard } from "lucide-react";
 
+const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
+
 async function getAccessToken(): Promise<string | undefined> {
   try {
     const { data } = await createClient().auth.getSession();
@@ -477,6 +479,7 @@ export default function WorkflowCanvas() {
       (f) => f.type.startsWith("image/") || f.type.startsWith("video/")
     );
     if (files.length > 0) {
+      if (DEMO_MODE) { useWorkflowStore.getState().setAuthModalOpen(true); return; }
       const dropX = (e.clientX - rect.left - panX) / zoom;
       const dropY = (e.clientY - rect.top - panY) / zoom;
 

@@ -1116,7 +1116,8 @@ export default function VideoGeneratorNode({ id, data, selected }: NodeProps<Vid
             <div
               style={{
                 display: "flex",
-                height: "100%",
+                position: "absolute",
+                inset: 0,
                 transform: `translateX(${-currentGenIdx * 100}%)`,
                 transition: "transform 320ms cubic-bezier(0.4, 0, 0.2, 1)",
                 willChange: "transform",
@@ -1164,8 +1165,8 @@ export default function VideoGeneratorNode({ id, data, selected }: NodeProps<Vid
                         else videoRefs.current.delete(i);
                       }}
                       src={entry}
-                      className="w-full h-full block"
-                      style={{ objectFit: "fill" }}
+                      className="absolute inset-0 block"
+                      style={{ width: "100%", height: "100%", objectFit: "fill" }}
                       loop
                       playsInline
                       muted={i !== currentGenIdx || muted || !hovering}

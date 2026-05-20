@@ -17,7 +17,7 @@ import { edgeStyle } from "./edgeStyles";
 //   T[5-8]  → VG[1-4].prompt
 
 const STRIDE_X = 380;
-const X_OFFSET  = 310;
+const X_OFFSET = 310;
 
 const REF_IMAGES = [
   "https://pub-73a59b956f1c4a7db2934522c13d8027.r2.dev/workflow-template/1.png",
@@ -147,96 +147,122 @@ export function makeUGCTemplate(): {
   const edges: Edge[] = [];
 
   for (let i = 0; i < 4; i++) {
-    const base    = i * STRIDE_X;
+    const base = i * STRIDE_X;
     const ptImgId = `tpl-pt-${i + 1}`;
-    const igId    = `tpl-ig-${i + 1}`;
+    const igId = `tpl-ig-${i + 1}`;
     const ptVidId = `tpl-pv-${i + 1}`;
-    const vgId    = `tpl-vg-${i + 1}`;
+    const vgId = `tpl-vg-${i + 1}`;
 
     // Text node for video gen — sits above its video gen node
     nodes.push({
-      id:       ptVidId,
-      type:     "promptNode",
+      id: ptVidId,
+      type: "promptNode",
       position: { x: base + X_OFFSET * 2, y: -430 },
-      style:    { width: 260, height: 390 },
-      data:     { label: `Text #${i + 5}`, status: "idle", prompt: VID_PROMPTS[i] },
+      style: { width: 260, height: 390 },
+      data: { label: `Text #${i + 5}`, status: "idle", prompt: VID_PROMPTS[i] },
     });
 
     // Video gen node — seedance-2, 9:16, 1080p, sound on
     nodes.push({
-      id:       vgId,
-      type:     "videoGeneratorNode",
+      id: vgId,
+      type: "videoGeneratorNode",
       position: { x: base + X_OFFSET * 2, y: 0 },
-      style:    { width: 320, height: 220 },
+      style: { width: 320, height: 220 },
       data: {
-        label:          `Video Generator #${i + 1}`,
-        status:         "done",
-        videoModel:     "seedance-2",
-        aspectRatio:    "9:16",
+        label: `Video Generator #${i + 1}`,
+        status: "done",
+        videoModel: "seedance-2",
+        aspectRatio: "9:16",
         grokResolution: "1080p",
-        sound:          true,
-        videoUrl:       REF_VIDEOS[i],
+        sound: true,
+        videoUrl: REF_VIDEOS[i],
       },
     });
 
     // Image gen node — image pre-loaded as a "done" output so the node
     // displays the image and the startFrame edge carries the URL.
     nodes.push({
-      id:       igId,
-      type:     "generateNode",
+      id: igId,
+      type: "generateNode",
       position: { x: base, y: 620 },
-      style:    { width: 280, height: 280 },
+      style: { width: 280, height: 280 },
       data: {
-        label:       `Image Generator #${i + 1}`,
-        status:      "done",
-        model:       "nano-banana-pro",
+        label: `Image Generator #${i + 1}`,
+        status: "done",
+        model: "nano-banana-pro",
         aspectRatio: "9:16",
-        quality:     "2k",
-        imageUrl:    REF_IMAGES[i],
-        r2Url:       REF_IMAGES[i],
+        quality: "2k",
+        imageUrl: REF_IMAGES[i],
+        r2Url: REF_IMAGES[i],
       },
     });
 
     // Text node for image gen — sits below its image gen node
     nodes.push({
-      id:       ptImgId,
-      type:     "promptNode",
+      id: ptImgId,
+      type: "promptNode",
       position: { x: base, y: 1200 },
-      style:    { width: 260, height: 390 },
-      data:     { label: `Text #${i + 1}`, status: "idle", prompt: IMG_PROMPTS[i] },
+      style: { width: 260, height: 390 },
+      data: { label: `Text #${i + 1}`, status: "idle", prompt: IMG_PROMPTS[i] },
     });
 
     edges.push({
-      id:           `tpl-e-pt${i + 1}-ig${i + 1}`,
-      source:       ptImgId,
-      target:       igId,
+      id: `tpl-e-pt${i + 1}-ig${i + 1}`,
+      source: ptImgId,
+      target: igId,
       targetHandle: "prompt",
-      animated:     false,
-      style:        edgeStyle("prompt"),
+      animated: false,
+      style: edgeStyle("prompt"),
     });
 
     edges.push({
-      id:           `tpl-e-ig${i + 1}-vg${i + 1}`,
-      source:       igId,
-      target:       vgId,
+      id: `tpl-e-ig${i + 1}-vg${i + 1}`,
+      source: igId,
+      target: vgId,
       targetHandle: "startFrame",
-      animated:     false,
-      style:        edgeStyle("startFrame"),
+      animated: false,
+      style: edgeStyle("startFrame"),
     });
 
     edges.push({
-      id:           `tpl-e-pv${i + 1}-vg${i + 1}`,
-      source:       ptVidId,
-      target:       vgId,
+      id: `tpl-e-pv${i + 1}-vg${i + 1}`,
+      source: ptVidId,
+      target: vgId,
       targetHandle: "prompt",
-      animated:     false,
-      style:        edgeStyle("prompt"),
+      animated: false,
+      style: edgeStyle("prompt"),
+    });
+  }
+
+  // ── Avatar image asset node — single source connected to all 4 IG ref inputs ──
+  const avatarId = "tpl-avatar";
+  nodes.push({
+    id: avatarId,
+    type: "imageInputNode",
+    position: { x: -380, y: 160 },
+    style: { width: 260 },
+    data: {
+      label:             "Avatar",
+      status:            "idle",
+      r2Url:             "https://pub-73a59b956f1c4a7db2934522c13d8027.r2.dev/workflow-template/avatar.png",
+      imageNaturalRatio: "9 / 16",
+    },
+  });
+
+  for (let i = 0; i < 4; i++) {
+    edges.push({
+      id: `tpl-e-avatar-ig${i + 1}`,
+      source: avatarId,
+      target: `tpl-ig-${i + 1}`,
+      targetHandle: "image",
+      animated: false,
+      style: edgeStyle("image"),
     });
   }
 
   return {
     nodes,
     edges,
-    nodeCounters: { promptNode: 8, generateNode: 4, videoGeneratorNode: 4 },
+    nodeCounters: { promptNode: 8, generateNode: 4, videoGeneratorNode: 4, imageInputNode: 1 },
   };
 }

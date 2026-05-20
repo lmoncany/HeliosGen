@@ -11,6 +11,7 @@ import { Search, X, Upload, LayoutGrid } from "lucide-react";
 
 const TOOLBAR_OFFSET_PX = 80;
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
 
 /* Node types replaced by Upload/Assets — hide from search results */
 const HIDDEN_FROM_MENU = new Set(["imageInputNode", "videoInputNode"]);
@@ -425,7 +426,10 @@ export default function AddNodeMenu({ anchorRect, onClose }: AddNodeMenuProps) {
                       accent="#34d399"
                       bg="#052e16"
                       icon={<Upload size={18} strokeWidth={1.8} />}
-                      onClick={() => fileInputRef.current?.click()}
+                      onClick={() => {
+                        if (DEMO_MODE) { useWorkflowStore.getState().setAuthModalOpen(true); return; }
+                        fileInputRef.current?.click();
+                      }}
                     />
                     <CustomRow
                       id="assets"

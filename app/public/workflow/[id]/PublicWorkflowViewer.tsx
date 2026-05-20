@@ -9,6 +9,7 @@ import {
   Edge,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
+import { MousePointer2, Hand } from "lucide-react";
 
 import { ReadOnlyCtx } from "@/lib/readOnlyContext";
 import { useWorkflowStore } from "@/lib/store";
@@ -43,9 +44,13 @@ interface SpaceData {
   viewport: { x: number; y: number; zoom: number } | null;
 }
 
+type ToolId = "select" | "hand";
+
 export default function PublicWorkflowViewer({ id }: { id: string }) {
   const [spaceMeta, setSpaceMeta] = useState<{ name: string; viewport: { x: number; y: number; zoom: number } | null } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [activeTool, setActiveTool] = useState<ToolId>("hand");
+  const [hoveredTool, setHoveredTool] = useState<ToolId | null>(null);
 
   // Controlled mode: read nodes/edges from the store so updateNodeData (used by
   // carousel navigation) causes re-renders.
@@ -115,8 +120,9 @@ export default function PublicWorkflowViewer({ id }: { id: string }) {
           edgeTypes={edgeTypes}
           nodesDraggable={false}
           nodesConnectable={false}
-          elementsSelectable={true}
-          panOnDrag={[1, 2]}
+          elementsSelectable={activeTool === "select"}
+          panOnDrag={activeTool === "hand" ? [0, 1, 2] : [1, 2]}
+          selectionOnDrag={activeTool === "select"}
           panOnScroll={false}
           zoomOnScroll={true}
           zoomOnPinch={true}
@@ -131,6 +137,46 @@ export default function PublicWorkflowViewer({ id }: { id: string }) {
             className="[&>button]:!bg-[#0B0E14] [&>button]:!border-[#1A2030] [&>button]:!text-[#A0A0A0] [&>button:hover]:!text-white"
           />
         </ReactFlow>
+
+        {/* Minimal left toolbar: select + hand */}
+        <div style={{
+          position: "fixed", left: "16px", top: "50%", transform: "translateY(-50%)",
+          zIndex: 100, display: "flex", flexDirection: "column", alignItems: "center", gap: "2px",
+          padding: "8px 5px", borderRadius: "16px",
+          background: "rgba(13,13,15,0.94)",
+          backdropFilter: "blur(20px)", WebkitBackdropFilter: "blur(20px)",
+          border: "1px solid rgba(255,255,255,0.07)",
+          boxShadow: "0 8px 32px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.03) inset",
+          userSelect: "none",
+        }}>
+          {(["select", "hand"] as ToolId[]).map((tool) => {
+            const isActive = activeTool === tool;
+            const isHovered = hoveredTool === tool;
+            return (
+              <button
+                key={tool}
+                title={tool === "select" ? "Select (V)" : "Hand (H)"}
+                onClick={() => setActiveTool(tool)}
+                onMouseEnter={() => setHoveredTool(tool)}
+                onMouseLeave={() => setHoveredTool(null)}
+                style={{
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  width: "34px", height: "34px", borderRadius: "10px",
+                  border: "none", cursor: "pointer", flexShrink: 0,
+                  transition: "background 150ms, color 150ms",
+                  background: isActive
+                    ? "rgba(255,255,255,0.92)"
+                    : isHovered ? "rgba(255,255,255,0.08)" : "transparent",
+                  color: isActive ? "#111" : isHovered ? "#fff" : "rgba(255,255,255,0.6)",
+                }}
+              >
+                {tool === "select"
+                  ? <MousePointer2 size={15} strokeWidth={1.8} />
+                  : <Hand size={15} strokeWidth={1.8} />}
+              </button>
+            );
+          })}
+        </div>
 
         <div style={{
           position: "fixed", bottom: 16, right: 16,

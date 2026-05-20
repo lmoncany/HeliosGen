@@ -11,6 +11,7 @@ import { sha256Hex } from "@/lib/assetHash";
 type VideoInputNodeType = Node<NodeData, "videoInputNode">;
 
 const MAX_BYTES = 100 * 1024 * 1024; // 100 MB
+const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
 const IMAGE_HANDLES = new Set(["startFrame", "endFrame", "resource", "image"]);
 
 const VIDEO_SRC_COLORS: Record<string, string> = {
@@ -281,6 +282,7 @@ export default function VideoInputNode({ id, data, selected }: NodeProps<VideoIn
   // ── Video upload ─────────────────────────────────────────────────────────────
 
   const loadFile = useCallback(async (file: File) => {
+    if (DEMO_MODE) { useWorkflowStore.getState().setAuthModalOpen(true); return; }
     setUploadErr(null);
 
     if (!file.type.startsWith("video/")) { setUploadErr("Please select a video file"); return; }
@@ -583,7 +585,7 @@ export default function VideoInputNode({ id, data, selected }: NodeProps<VideoIn
         })()}
 
         <div
-          className="relative w-full h-full overflow-hidden rounded-[7px] group/player"
+          className="absolute inset-0 overflow-hidden rounded-[7px] group/player"
           onMouseEnter={onHoverPlay}
           onMouseLeave={onHoverPause}
           onPointerDownCapture={() => {
@@ -838,7 +840,7 @@ export default function VideoInputNode({ id, data, selected }: NodeProps<VideoIn
                 <div className="absolute bottom-2 left-0 right-0 flex justify-center items-center px-2.5 opacity-0 group-hover/player:opacity-100 transition-opacity z-10 node-slide-reveal">
                   <button
                     onMouseDown={(e) => e.stopPropagation()}
-                    onClick={() => fileRef.current?.click()}
+                    onClick={() => { if (DEMO_MODE) { useWorkflowStore.getState().setAuthModalOpen(true); return; } fileRef.current?.click(); }}
                     className="h-6 px-3 rounded-full bg-black/50 backdrop-blur-sm border border-white/10 text-[10px] text-[#CCCCCC] hover:text-white hover:bg-black/70 transition-colors pointer-events-auto"
                   >replace</button>
                 </div>
@@ -1236,7 +1238,7 @@ export default function VideoInputNode({ id, data, selected }: NodeProps<VideoIn
         <div
           onDrop={onDrop}
           onDragOver={(e) => e.preventDefault()}
-          onClick={() => fileRef.current?.click()}
+          onClick={() => { if (DEMO_MODE) { useWorkflowStore.getState().setAuthModalOpen(true); return; } fileRef.current?.click(); }}
           className="border border-dashed border-[#22d3ee]/20 hover:border-[#22d3ee]/40 rounded-md cursor-pointer transition-colors py-8 text-center"
         >
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#22d3ee" strokeWidth="1.5" strokeLinecap="round" className="mx-auto mb-2 opacity-40">
