@@ -1102,7 +1102,7 @@ export default function VideoGeneratorNode({ id, data, selected }: NodeProps<Vid
 
       {/* ── Full-card media container — all controls overlaid inside ── */}
       <div
-        className="relative bg-[#0D1119] group/player group/gen"
+        className="relative bg-[#2a2d35] group/player group/gen"
         style={{
           aspectRatio: (data.imageNaturalRatio as string | undefined) ?? aspectRatio.replace(":", " / "),
           width: "100%",
@@ -1124,23 +1124,23 @@ export default function VideoGeneratorNode({ id, data, selected }: NodeProps<Vid
               }}
             >
               {generations.map((entry, i) => (
-                <div key={i} style={{ minWidth: "100%", height: "100%", flexShrink: 0, position: "relative", background: "#0D1119" }}>
+                <div key={i} style={{ minWidth: "100%", height: "100%", flexShrink: 0, position: "relative", background: "#2a2d35" }}>
                   {entry === null ? (
-                    <div className="absolute inset-0" style={{ background: "#0D1119" }} />
+                    <div className="absolute inset-0" style={{ background: "#2a2d35" }} />
                   ) : typeof entry === "object" ? (
-                    <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 px-4 text-center z-20">
+                    <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 px-4 text-center z-20" style={{ background: "#2a2427" }}>
                       <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
                         <circle cx="12" cy="12" r="10" fill="#1a0a0a" stroke="#5a1a1a" strokeWidth="1.5" />
                         <path d="M12 7v5" stroke="#c04040" strokeWidth="2" strokeLinecap="round" />
                         <circle cx="12" cy="16" r="1" fill="#c04040" />
                       </svg>
                       {(entry.error === "moderation_blocked" || entry.error?.includes?.("moderation_blocked") || entry.error?.includes?.("flagged as sensitive")) ? (
-                        <div className="flex items-center justify-center gap-1.5 text-[10px] text-[#555]">
+                        <div className="flex items-center justify-center gap-1.5 text-[10px] text-[#f87171]">
                           <ShieldBan size={12} strokeWidth={1.5} className="shrink-0" />
                           <span>NSFW content detected</span>
                         </div>
                       ) : (
-                        <p className="text-[10px] text-[#555] leading-snug break-words">{entry.error}</p>
+                        <p className="text-[10px] text-[#f87171] leading-snug break-words">{entry.error}</p>
                       )}
                       <button
                         onMouseDown={(e) => e.stopPropagation()}
@@ -1200,12 +1200,12 @@ export default function VideoGeneratorNode({ id, data, selected }: NodeProps<Vid
                 const msg = (data.errorMsg as string) ?? "Generation failed";
                 const isNsfw = msg === "moderation_blocked" || msg.includes("moderation_blocked") || msg.includes("flagged as sensitive");
                 return isNsfw ? (
-                  <div className="flex items-center gap-1.5 text-[#555] text-[10px]">
+                  <div className="flex items-center gap-1.5 text-[#f87171] text-[10px]">
                     <ShieldBan size={12} strokeWidth={1.5} className="shrink-0" />
                     <span>NSFW content detected</span>
                   </div>
                 ) : (
-                  <p className="text-[#555] text-[10px] leading-[1.5] break-words">{msg}</p>
+                  <p className="text-[#f87171] text-[10px] leading-[1.5] break-words">{msg}</p>
                 );
               })()}
             </div>

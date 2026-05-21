@@ -27,7 +27,7 @@ function httpsPost(
   url: string,
   headers: Record<string, string>,
   body: string,
-  timeoutMs = 300_000, // Azure image gen (gpt-image-2) can be slow; 300s gives ample headroom
+  timeoutMs = 1_000_000, // Azure image gen (gpt-image-2) can be slow; 1000s gives ample headroom
 ): Promise<{ ok: boolean; status: number; text: () => Promise<string> }> {
   return new Promise((resolve, reject) => {
     const u       = new URL(url);
@@ -160,7 +160,7 @@ async function resolveImages(imageUrls: string[]): Promise<string[]> {
 }
 
 
-export const maxDuration = 300;
+export const maxDuration = 1000;
 
 export async function POST(req: NextRequest) {
   const {

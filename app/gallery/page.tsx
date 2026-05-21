@@ -2299,7 +2299,7 @@ function GalleryInner() {
                     height: "100%",
                     position: "relative",
                     overflow: "hidden",
-                    background: pg.error ? "rgba(8,12,20,0.95)" : "#0B0E14",
+                    background: pg.error ? "#2a2427" : "#2a2d35",
                   }}>
                         {pg.error ? (
                           <>
