@@ -1854,7 +1854,7 @@ function GalleryInner() {
     setRefImages(prev => [...prev, { id: randomUUID(), objectUrl: url, cdnUrl: url, uploading: false, error: false }]);
   }, [refImages, maxImgs]);
 
-  const handleCopyPrompt = useCallback((text: string, refUrls?: string[]) => {
+  const handleCopyPrompt = useCallback((text: string, refUrls?: string[], meta?: { model?: string; aspectRatio?: string; quality?: string }) => {
     const newRefs = (refUrls ?? []).map(url => ({
       id: randomUUID(), objectUrl: url, cdnUrl: url, uploading: false, error: false,
     }));
@@ -1913,6 +1913,9 @@ function GalleryInner() {
 
     setTaggedImages(tagged);
     setPrompt(processedText);
+    if (meta?.model) setModelId(meta.model);
+    if (meta?.aspectRatio) setAspectRatio(meta.aspectRatio);
+    if (meta?.quality) setQuality(meta.quality);
     requestAnimationFrame(() => {
       if (inputRef.current) resizeTextarea(inputRef.current);
     });
@@ -4145,7 +4148,7 @@ function GalleryCard({
   item: GalleryItem;
   onOpen?: () => void;
   onAddReference?: (url: string) => void;
-  onCopyPrompt?: (prompt: string, refUrls?: string[]) => void;
+  onCopyPrompt?: (prompt: string, refUrls?: string[], meta?: { model?: string; aspectRatio?: string; quality?: string }) => void;
   onDownload?: (url: string, isVideo: boolean) => Promise<void>;
   onDelete?: (id: string, source: "generation" | "upload") => Promise<void>;
   videoMuted?: boolean;
@@ -4232,7 +4235,7 @@ function GalleryCard({
   const handleCopy = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (!item.prompt) return;
-    onCopyPrompt?.(item.prompt, item.referenceImageUrls);
+    onCopyPrompt?.(item.prompt, item.referenceImageUrls, { model: item.model, aspectRatio: item.aspect_ratio, quality: item.quality });
     setCopied(true);
     setTimeout(() => setCopied(false), 1500);
   };
@@ -4649,7 +4652,7 @@ function renderLightboxPrompt(
 
 // ── Lightbox ──────────────────────────────────────────────────────────────────
 
-function Lightbox({ item, onClose, onCopyPrompt }: { item: GalleryItem; onClose: () => void; onCopyPrompt?: (prompt: string, refUrls?: string[]) => void }) {
+function Lightbox({ item, onClose, onCopyPrompt }: { item: GalleryItem; onClose: () => void; onCopyPrompt?: (prompt: string, refUrls?: string[], meta?: { model?: string; aspectRatio?: string; quality?: string }) => void }) {
   const [visible, setVisible] = useState(false);
   const [fullLoaded, setFullLoaded] = useState(false);
   const [promptExpanded, setPromptExpanded] = useState(false);
@@ -4676,7 +4679,7 @@ function Lightbox({ item, onClose, onCopyPrompt }: { item: GalleryItem; onClose:
   const copyPrompt = () => {
     if (!item.prompt) return;
     navigator.clipboard.writeText(item.prompt).catch(() => { });
-    onCopyPrompt?.(item.prompt, item.referenceImageUrls);
+    onCopyPrompt?.(item.prompt, item.referenceImageUrls, { model: item.model, aspectRatio: item.aspect_ratio, quality: item.quality });
     setCopied(true);
     setTimeout(() => setCopied(false), 1800);
   };
