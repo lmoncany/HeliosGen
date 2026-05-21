@@ -4588,7 +4588,7 @@ function syntaxHighlightJson(json: string): React.ReactNode {
     push(last, m.index);
     if (m[1] !== undefined) {
       if (m[2] !== undefined) {
-        push(m.index, m.index + m[1].length, "#c678dd");
+        push(m.index, m.index + m[1].length, "#06b6d4");
         push(m.index + m[1].length, m.index + m[0].length, "#6b7280");
       } else {
         push(m.index, m.index + m[1].length, "white");
