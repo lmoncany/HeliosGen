@@ -109,6 +109,28 @@ export const NODES: Array<{
     },
   ];
 
+const GEN_NODE_SETTINGS: Record<string, string[]> = {
+  generateNode: ["model", "aspectRatio", "quality", "azureQuality", "azureResolution"],
+  videoGeneratorNode: ["videoModel", "klingMode", "grokResolution", "duration", "aspectRatio", "sound"],
+};
+
+/** Returns settings from the last existing node of `type` to seed a newly created one. */
+export function getLastNodeSettings(
+  type: string,
+  nodes: Array<{ type?: string | null; data: Record<string, unknown> }>,
+): Record<string, unknown> {
+  const keys = GEN_NODE_SETTINGS[type];
+  if (!keys) return {};
+  const matching = nodes.filter((n) => n.type === type);
+  if (!matching.length) return {};
+  const last = matching[matching.length - 1];
+  const out: Record<string, unknown> = {};
+  for (const k of keys) {
+    if (last.data[k] !== undefined) out[k] = last.data[k];
+  }
+  return out;
+}
+
 // Rough pixel footprint per node type — used for placement + collision detection
 export const NODE_SIZE: Record<string, { w: number; h: number }> = {
   assistantNode: { w: 280, h: 200 },

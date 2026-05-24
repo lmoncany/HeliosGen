@@ -20,7 +20,7 @@ import { useWorkflowStore, NodeData } from "@/lib/store";
 import { VIDEO_MODELS } from "@/lib/modelConfig";
 import CuttableEdge from "@/components/edges/CuttableEdge";
 import { topoSort, resolveInputs } from "@/lib/executor";
-import { NODE_SIZE, FALLBACK_SIZE } from "@/lib/nodeTypes";
+import { NODE_SIZE, FALLBACK_SIZE, getLastNodeSettings } from "@/lib/nodeTypes";
 import { edgeStyle } from "@/lib/edgeStyles";
 import { createClient } from "@/lib/supabase/client";
 import { sha256Hex } from "@/lib/assetHash";
@@ -1320,7 +1320,7 @@ export default function WorkflowCanvas() {
       style: type === "imageInputNode" || type === "videoInputNode"
         ? { width: size.w }
         : { width: size.w, height: size.h },
-      data: { label: nodeLabel(type, currentNodes), status: "idle" },
+      data: { label: nodeLabel(type, currentNodes), status: "idle", ...getLastNodeSettings(type, currentNodes) },
     });
   }, [addNode, insertEdge]);
 

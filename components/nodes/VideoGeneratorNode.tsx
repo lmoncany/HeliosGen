@@ -521,6 +521,12 @@ export default function VideoGeneratorNode({ id, data, selected }: NodeProps<Vid
     edges.filter((e) => e.target === id).map((e) => e.targetHandle).filter(Boolean) as string[]
   );
 
+  const MEDIA_INPUT_HANDLES = new Set(["startFrame", "endFrame", "resource", "videoRef", "referenceVideo", "audioRef"]);
+  const hasFailedMediaInput = edges.some(
+    (e) => e.target === id && MEDIA_INPUT_HANDLES.has(e.targetHandle ?? "") &&
+      (nodes.find((n) => n.id === e.source)?.data?.status as string | undefined) === "error"
+  );
+
   // HappyHorse: startFrame and resource are mutually exclusive — hide the other once one is connected
   if (cfg.id === "happyhorse") {
     if (connectedHandles.has("startFrame")) activeHandles.delete("resource");
@@ -1114,8 +1120,11 @@ export default function VideoGeneratorNode({ id, data, selected }: NodeProps<Vid
         <VideoNodeIcon />
         {data.label as string}
       </span>
-      {!connectedHandles.has("prompt") && !cfg.promptOptional && status !== "running" && !data.locked && (
-        <MissingInputWarning messages={["A text node is required"]} />
+      {(!connectedHandles.has("prompt") && !cfg.promptOptional || hasFailedMediaInput) && status !== "running" && !data.locked && (
+        <MissingInputWarning messages={[
+          ...(!connectedHandles.has("prompt") && !cfg.promptOptional ? ["A text node is required"] : []),
+          ...(hasFailedMediaInput ? ["A connected image/video input has no valid content"] : []),
+        ]} />
       )}
 
       {/* ── Source (output) handles — top-right ──────────────────────── */}
@@ -1875,7 +1884,7 @@ export default function VideoGeneratorNode({ id, data, selected }: NodeProps<Vid
               </div>{/* end pills wrapper */}
 
               {/* Generate button — always right */}
-              {!readOnly && <GenerateButton onClick={generate} busy={animBusy} extracting={isExtractingFrames} disabled={promptOverLimit || kieKeySet === false || busy || isExtractingFrames} />}
+              {!readOnly && <GenerateButton onClick={generate} busy={animBusy} extracting={isExtractingFrames} disabled={promptOverLimit || kieKeySet === false || busy || isExtractingFrames || hasFailedMediaInput} warningMessages={hasFailedMediaInput ? ["A connected image/video input has no valid content"] : undefined} />}
             </div>
           );
         })()}

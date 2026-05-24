@@ -532,6 +532,10 @@ export default function GenerateNode({ id, data, selected }: NodeProps<GenerateN
   const promptConnected = edges.some((e) => e.target === id && e.targetHandle === "prompt");
   const imageConnected = edges.some((e) => e.target === id && e.targetHandle === "image");
   const sourceConnected = edges.some((e) => e.source === id);
+  const hasFailedImageInput = edges.some(
+    (e) => e.target === id && e.targetHandle === "image" &&
+      (nodes.find((n) => n.id === e.source)?.data?.status as string | undefined) === "error"
+  );
 
   // ── Submit generation job ────────────────────────────────────────────────────
   const connectedPromptNodeId = edges.find(
@@ -735,8 +739,11 @@ export default function GenerateNode({ id, data, selected }: NodeProps<GenerateN
         </div>
       )}
       <span className="node-above-label">{data.label as string}</span>
-      {!promptConnected && status !== "running" && !data.locked && (
-        <MissingInputWarning messages={["A text node is required"]} />
+      {(!promptConnected || hasFailedImageInput) && status !== "running" && !data.locked && (
+        <MissingInputWarning messages={[
+          ...(!promptConnected ? ["A text node is required"] : []),
+          ...(hasFailedImageInput ? ["The connected image input has no valid content"] : []),
+        ]} />
       )}
 
       {/* ── Icon handles — bottom-anchored, consistent with other nodes ── */}
@@ -1199,7 +1206,7 @@ export default function GenerateNode({ id, data, selected }: NodeProps<GenerateN
           </div>{/* end pills wrapper */}
 
           {/* Generate button — always right */}
-          {!readOnly && <GenerateButton onClick={generate} busy={animBusy} disabled={promptOverLimit || kieKeySet === false || busy} />}
+          {!readOnly && <GenerateButton onClick={generate} busy={animBusy} disabled={promptOverLimit || kieKeySet === false || busy || hasFailedImageInput} warningMessages={hasFailedImageInput ? ["The connected image input has no valid content"] : undefined} />}
         </div>
       </div>
 

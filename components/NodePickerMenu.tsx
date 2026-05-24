@@ -3,7 +3,7 @@ import { useEffect, useRef } from "react";
 import { useReactFlow, Node, Edge } from "@xyflow/react";
 import { useWorkflowStore, NodeData } from "@/lib/store";
 import { edgeStyle, EDGE_COLORS } from "@/lib/edgeStyles";
-import { NODES, NODE_SIZE, FALLBACK_SIZE, NODE_META } from "@/lib/nodeTypes";
+import { NODES, NODE_SIZE, FALLBACK_SIZE, NODE_META, getLastNodeSettings } from "@/lib/nodeTypes";
 import { VIDEO_MODELS, IMAGE_MODELS } from "@/lib/modelConfig";
 
 // Extract the aspect ratio as a float from any source node type
@@ -210,7 +210,7 @@ export default function NodePickerMenu({ dropState, onClose }: Props) {
       type,
       position,
       style: nodeStyle,
-      data: { label, status: "idle", ...extraData },
+      data: { label, status: "idle", ...getLastNodeSettings(type, nodesInStore), ...extraData },
     });
 
     if (isInput) {

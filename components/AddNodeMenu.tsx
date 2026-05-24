@@ -3,7 +3,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useReactFlow } from "@xyflow/react";
 import { useWorkflowStore, NodeData } from "@/lib/store";
-import { NODES, NODE_SIZE, FALLBACK_SIZE, NODE_META } from "@/lib/nodeTypes";
+import { NODES, NODE_SIZE, FALLBACK_SIZE, NODE_META, getLastNodeSettings } from "@/lib/nodeTypes";
 import { getToken } from "@/lib/galleryUtils";
 import { MediaPickerModal } from "@/components/MediaPickerModal";
 
@@ -151,7 +151,7 @@ export default function AddNodeMenu({ anchorRect, onClose }: AddNodeMenuProps) {
           type === "imageInputNode" || type === "videoInputNode"
             ? { width: size.w }
             : { width: size.w, height: size.h },
-        data: { label, status: "idle", ...extraData },
+        data: { label, status: "idle", ...getLastNodeSettings(type, nodesNow), ...extraData },
       });
 
       onClose();
