@@ -4656,26 +4656,29 @@ function renderLightboxPrompt(
 function Lightbox({ item, onClose, onCopyPrompt }: { item: GalleryItem; onClose: () => void; onCopyPrompt?: (prompt: string, refUrls?: string[], meta?: { model?: string; aspectRatio?: string; quality?: string }) => void }) {
   const [visible, setVisible] = useState(false);
   const [fullLoaded, setFullLoaded] = useState(false);
-  const [promptExpanded, setPromptExpanded] = useState(false);
+  const [imgIdx, setImgIdx] = useState(0);
+  const [zoomed, setZoomed] = useState(false);
   const [copied, setCopied] = useState(false);
   const [downloading, setDownloading] = useState(false);
-  const [imgIdx, setImgIdx] = useState(0);
+  const [resolution, setResolution] = useState<string | null>(null);
   const allUrls = item.imageUrls ?? [item.url];
   const lightboxUrl = allUrls[imgIdx] ?? item.url;
 
   useEffect(() => { const id = requestAnimationFrame(() => setVisible(true)); return () => cancelAnimationFrame(id); }, []);
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") { handleClose(); return; }
-      if (e.key === "ArrowLeft") { setFullLoaded(false); setImgIdx(i => Math.max(0, i - 1)); }
-      if (e.key === "ArrowRight") { setFullLoaded(false); setImgIdx(i => Math.min(allUrls.length - 1, i + 1)); }
+      if (e.key === "Escape") { if (zoomed) { setZoomed(false); return; } handleClose(); return; }
+      if (e.key === "ArrowLeft") { setFullLoaded(false); setResolution(null); setImgIdx(i => Math.max(0, i - 1)); }
+      if (e.key === "ArrowRight") { setFullLoaded(false); setResolution(null); setImgIdx(i => Math.min(allUrls.length - 1, i + 1)); }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [allUrls.length]);
+  }, [allUrls.length, zoomed]);
 
   const handleClose = () => { setVisible(false); setTimeout(onClose, 200); };
+
+  const isVideo = item.mediaType === "video";
 
   const copyPrompt = () => {
     if (!item.prompt) return;
@@ -4684,8 +4687,6 @@ function Lightbox({ item, onClose, onCopyPrompt }: { item: GalleryItem; onClose:
     setCopied(true);
     setTimeout(() => setCopied(false), 1800);
   };
-
-  const isVideo = item.mediaType === "video";
 
   const download = async () => {
     if (downloading) return;
@@ -4713,6 +4714,7 @@ function Lightbox({ item, onClose, onCopyPrompt }: { item: GalleryItem; onClose:
     item.model && { label: "Model", value: item.model },
     item.quality && { label: "Quality", value: item.quality.charAt(0).toUpperCase() + item.quality.slice(1) },
     item.aspect_ratio && { label: "Aspect ratio", value: item.aspect_ratio },
+    resolution && { label: "Resolution", value: resolution },
     item.source && { label: "Source", value: item.source === "generation" ? "Generated" : "Uploaded" },
     { label: "Created", value: formatDate(item.created_at) },
   ].filter(Boolean) as { label: string; value: string }[];
@@ -4734,20 +4736,31 @@ function Lightbox({ item, onClose, onCopyPrompt }: { item: GalleryItem; onClose:
     color: "rgba(255,255,255,0.4)", textTransform: "uppercase",
   };
 
+  // When zoomed: media fills the full viewport. When not zoomed: media + right panel side by side.
+  const panelWidth = 300;
+
   return createPortal(
-    <div onClick={handleClose} style={{
+    <div onClick={zoomed ? () => setZoomed(false) : handleClose} style={{
       position: "fixed", inset: 0, zIndex: 9999,
-      display: "flex", alignItems: "flex-start", justifyContent: "center",
+      display: "flex", alignItems: zoomed ? "center" : "flex-start", justifyContent: "center",
       background: `rgba(0,0,0,${visible ? 0.55 : 0})`,
       backdropFilter: visible ? "blur(16px)" : "none",
       WebkitBackdropFilter: visible ? "blur(16px)" : "none",
       transition: "background 200ms ease, backdrop-filter 200ms ease",
-      padding: "24px", gap: "20px",
-      overflowY: "auto",
+      padding: zoomed ? "0" : "24px", gap: zoomed ? "0" : "20px",
+      overflowY: zoomed ? "hidden" : "auto",
     }}>
 
-      {/* ── Media (vertically centered column) ── */}
-      <div style={{ flex: 1, minHeight: "calc(100vh - 48px)", display: "flex", alignItems: "center", justifyContent: "center", position: "relative" }}>
+      {/* ── Media column ── */}
+      <div style={{
+        // When zoomed: break out of flex flow and fill the entire overlay
+        position: zoomed ? "absolute" : "relative",
+        inset: zoomed ? 0 : undefined,
+        flex: zoomed ? undefined : 1,
+        minHeight: zoomed ? undefined : "calc(100vh - 48px)",
+        zIndex: zoomed ? 1 : undefined,
+        display: "flex", alignItems: "center", justifyContent: "center",
+      }}>
 
         {/* Prev button — images only */}
         {!isVideo && allUrls.length > 1 && (
@@ -4755,7 +4768,7 @@ function Lightbox({ item, onClose, onCopyPrompt }: { item: GalleryItem; onClose:
             onClick={e => { e.stopPropagation(); setFullLoaded(false); setImgIdx(i => Math.max(0, i - 1)); }}
             disabled={imgIdx === 0}
             style={{
-              position: "absolute", left: 0, zIndex: 10,
+              position: "absolute", left: 16, zIndex: 10,
               width: 40, height: 40, borderRadius: "50%",
               border: "1px solid rgba(255,255,255,0.15)", background: "rgba(0,0,0,0.5)",
               display: "flex", alignItems: "center", justifyContent: "center",
@@ -4766,12 +4779,24 @@ function Lightbox({ item, onClose, onCopyPrompt }: { item: GalleryItem; onClose:
           </button>
         )}
 
-        <div onClick={e => e.stopPropagation()} style={{
-          position: "relative", flexShrink: 0,
-          maxWidth: "100%",
-          transform: visible ? "scale(1)" : "scale(0.96)", transition: "transform 200ms ease",
-          borderRadius: "12px", overflow: "hidden", boxShadow: "0 32px 80px rgba(0,0,0,0.6)",
-        }}>
+        {/* Media wrapper — click to toggle zoom */}
+        <div
+          onClick={e => { e.stopPropagation(); setZoomed(z => !z); }}
+          style={{
+            position: "relative", flexShrink: 0,
+            // Zoomed: fill the column (which is already inset:0) and center content
+            width: zoomed ? "100%" : undefined,
+            height: zoomed ? "100%" : undefined,
+            maxWidth: zoomed ? "none" : "100%",
+            maxHeight: zoomed ? "none" : "calc(100vh - 48px)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            transform: visible ? "scale(1)" : "scale(0.96)",
+            transition: "transform 200ms ease, border-radius 280ms ease",
+            borderRadius: zoomed ? "0" : "12px",
+            overflow: "hidden", boxShadow: zoomed ? "none" : "0 32px 80px rgba(0,0,0,0.6)",
+            cursor: zoomed ? "zoom-out" : "zoom-in",
+          }}
+        >
           {isVideo ? (
             <video
               key={lightboxUrl}
@@ -4780,14 +4805,19 @@ function Lightbox({ item, onClose, onCopyPrompt }: { item: GalleryItem; onClose:
               loop
               playsInline
               controls
-              onLoadedData={() => setFullLoaded(true)}
+              onClick={e => e.stopPropagation()}
+              onLoadedData={e => { setFullLoaded(true); const v = e.currentTarget; if (v.videoWidth && v.videoHeight) setResolution(`${v.videoWidth} × ${v.videoHeight}`); }}
               style={{
                 display: "block",
-                maxHeight: "calc(100vh - 48px)",
-                maxWidth: "100%",
-                borderRadius: "12px",
+                maxHeight: "100vh",
+                maxWidth: "100vw",
+                width: "auto",
+                height: "auto",
+                objectFit: "contain",
+                borderRadius: zoomed ? "0" : "12px",
                 opacity: fullLoaded ? 1 : 0,
                 transition: "opacity 400ms ease",
+                cursor: "default",
               }}
             />
           ) : (
@@ -4795,14 +4825,15 @@ function Lightbox({ item, onClose, onCopyPrompt }: { item: GalleryItem; onClose:
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img key={`blur-${lightboxUrl}`} src={`/_next/image?url=${encodeURIComponent(lightboxUrl)}&w=828&q=75`} alt="" aria-hidden style={{
                 display: "block",
-                maxHeight: "calc(100vh - 48px)",
-                width: "100%", height: "auto", objectFit: "contain",
+                maxHeight: zoomed ? "100vh" : "calc(100vh - 48px)",
+                maxWidth: zoomed ? "100vw" : "100%",
+                width: "auto", height: "auto",
                 filter: fullLoaded ? "none" : "blur(12px)",
                 transform: fullLoaded ? "scale(1)" : "scale(1.04)",
                 transition: "filter 400ms ease, transform 400ms ease",
               }} />
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img key={`full-${lightboxUrl}`} src={lightboxUrl} alt={item.prompt ?? ""} onLoad={() => setFullLoaded(true)} style={{
+              <img key={`full-${lightboxUrl}`} src={lightboxUrl} alt={item.prompt ?? ""} onLoad={e => { setFullLoaded(true); const img = e.currentTarget; if (img.naturalWidth && img.naturalHeight) setResolution(`${img.naturalWidth} × ${img.naturalHeight}`); }} style={{
                 position: "absolute", inset: 0, display: "block", width: "100%", height: "100%", objectFit: "contain",
                 opacity: fullLoaded ? 1 : 0, transition: "opacity 400ms ease",
               }} />
@@ -4812,7 +4843,7 @@ function Lightbox({ item, onClose, onCopyPrompt }: { item: GalleryItem; onClose:
                   {allUrls.map((_, idx) => (
                     <button
                       key={idx}
-                      onClick={e => { e.stopPropagation(); setFullLoaded(false); setImgIdx(idx); }}
+                      onClick={e => { e.stopPropagation(); setFullLoaded(false); setResolution(null); setImgIdx(idx); }}
                       style={{
                         width: idx === imgIdx ? 16 : 8, height: 8, borderRadius: 4,
                         background: idx === imgIdx ? "#fff" : "rgba(255,255,255,0.4)",
@@ -4832,11 +4863,11 @@ function Lightbox({ item, onClose, onCopyPrompt }: { item: GalleryItem; onClose:
             onClick={e => { e.stopPropagation(); setFullLoaded(false); setImgIdx(i => Math.min(allUrls.length - 1, i + 1)); }}
             disabled={imgIdx === allUrls.length - 1}
             style={{
-              position: "absolute", right: 0, zIndex: 10,
+              position: "absolute", right: zoomed ? "16px" : 0, zIndex: 10,
               width: 40, height: 40, borderRadius: "50%",
               border: "1px solid rgba(255,255,255,0.15)", background: "rgba(0,0,0,0.5)",
               display: "flex", alignItems: "center", justifyContent: "center",
-              cursor: "pointer", opacity: imgIdx === allUrls.length - 1 ? 0.2 : 1, transition: "opacity 150ms",
+              cursor: "pointer", opacity: imgIdx === allUrls.length - 1 ? 0.2 : 1, transition: "opacity 150ms, right 280ms ease",
             }}
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6" /></svg>
@@ -4848,11 +4879,12 @@ function Lightbox({ item, onClose, onCopyPrompt }: { item: GalleryItem; onClose:
       <div
         onClick={e => e.stopPropagation()}
         style={{
-          width: "300px", flexShrink: 0,
+          width: `${panelWidth}px`, flexShrink: 0,
           display: "flex", flexDirection: "column", gap: "12px",
-          opacity: visible ? 1 : 0,
-          transform: visible ? "translateX(0)" : "translateX(14px)",
-          transition: "opacity 220ms ease 80ms, transform 220ms ease 80ms",
+          opacity: zoomed ? 0 : visible ? 1 : 0,
+          transform: zoomed ? `translateX(${panelWidth + 20}px)` : visible ? "translateX(0)" : "translateX(14px)",
+          pointerEvents: zoomed ? "none" : "auto",
+          transition: "opacity 260ms ease, transform 280ms ease",
           background: "rgba(10,12,14,0.85)",
           backdropFilter: "blur(24px)",
           WebkitBackdropFilter: "blur(24px)",
@@ -4866,7 +4898,6 @@ function Lightbox({ item, onClose, onCopyPrompt }: { item: GalleryItem; onClose:
         {/* Prompt section */}
         {item.prompt && (
           <div style={panelStyle}>
-            {/* Reference image thumbnails */}
             {item.referenceImageUrls && item.referenceImageUrls.length > 0 && (
               <div style={{ padding: "14px 16px 0", display: "flex", gap: "8px", flexWrap: "wrap" }}>
                 {item.referenceImageUrls.map((url, i) => (
@@ -4909,12 +4940,7 @@ function Lightbox({ item, onClose, onCopyPrompt }: { item: GalleryItem; onClose:
                 {copied ? "Copied!" : "Copy"}
               </button>
             </div>
-            <div style={{
-              padding: "0 16px 16px",
-              fontSize: "13px", lineHeight: 1.65,
-              maxHeight: "220px",
-              overflowY: "auto",
-            }}>
+            <div style={{ padding: "0 16px 16px", fontSize: "13px", lineHeight: 1.65, maxHeight: "220px", overflowY: "auto" }}>
               {renderLightboxPrompt(item.prompt, item.referenceImageUrls)}
             </div>
           </div>
