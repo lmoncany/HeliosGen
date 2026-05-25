@@ -224,39 +224,44 @@ export const IMAGE_MODELS: ImageModel[] = [
     azureResolutionOptions: ["1k", "2k", "4k"],
     azureApiVersion: "2025-04-01-preview",
     azureResolutionSizeMaps: {
+      // 1K: Azure's three canonical sizes + adapted 4:3/3:4
+      // Constraints: max edge ≤ 3840, both edges multiples of 16,
+      //              ratio ≤ 3:1, total pixels 655 360–8 294 400
       "1k": {
         "auto":  "auto",
-        "1:1":   "1024x1024",
-        "16:9":  "1536x1024",
-        "9:16":  "1024x1536",
-        "4:3":   "1024x768",
-        "3:4":   "768x1024",
+        "1:1":   "1024x1024",  // square
+        "16:9":  "1536x1024",  // landscape (Azure canonical; 3:2 in practice)
+        "9:16":  "1024x1536",  // portrait  (Azure canonical; 2:3 in practice)
+        "4:3":   "1280x960",   // adapted 4:3 — 1 228 800 px, both /16
+        "3:4":   "960x1280",   // adapted 3:4 — 1 228 800 px, both /16
       },
+      // 2K: true 16:9 / 9:16 + 4:3/3:4 at 2K scale
       "2k": {
         "auto":  "auto",
-        "1:1":   "2048x2048",
-        "16:9":  "2048x1152",
-        "9:16":  "1152x2048",
-        "4:3":   "2048x1536",
-        "3:4":   "1536x2048",
+        "1:1":   "2048x2048",  // 2K square — 4 194 304 px
+        "16:9":  "2048x1152",  // 2K landscape — 2 359 296 px
+        "9:16":  "1152x2048",  // 2K portrait  — 2 359 296 px
+        "4:3":   "2048x1536",  // adapted 4:3  — 3 145 728 px, both /16
+        "3:4":   "1536x2048",  // adapted 3:4  — 3 145 728 px, both /16
       },
+      // 4K: true 16:9 / 9:16 + adapted 4:3/3:4 + max-valid square
       "4k": {
         "auto":  "auto",
-        "1:1":   "2880x2880",
-        "16:9":  "3840x2160",
-        "9:16":  "2160x3840",
-        "4:3":   "3072x2304",
-        "3:4":   "2304x3072",
+        "1:1":   "2880x2880",  // max valid square — 8 294 400 px (at limit)
+        "16:9":  "3840x2160",  // 4K landscape — 8 294 400 px (at limit)
+        "9:16":  "2160x3840",  // 4K portrait  — 8 294 400 px (at limit)
+        "4:3":   "3072x2304",  // adapted 4:3  — 7 077 888 px, both /16
+        "3:4":   "2304x3072",  // adapted 3:4  — 7 077 888 px, both /16
       },
     },
-    // Keep azureSizeMap as fallback (used when no azureResolution is specified)
+    // Fallback when no azureResolution tier is selected — defaults to 2K scale
     azureSizeMap: {
       "auto": "auto",
       "1:1":  "1024x1024",
       "16:9": "2048x1152",
       "9:16": "1152x2048",
-      "4:3":  "1536x1024",
-      "3:4":  "1024x1536",
+      "4:3":  "2048x1536",  // proper 4:3 (was "1536x1024" = 3:2 — wrong)
+      "3:4":  "1536x2048",  // proper 3:4 (was "1024x1536" = 2:3 — wrong)
     },
     apiInput: {
       aspectRatioKey: "aspect_ratio",
