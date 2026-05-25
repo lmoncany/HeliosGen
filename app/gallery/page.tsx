@@ -566,6 +566,8 @@ interface SavedSettings {
   sound?: boolean;
   refImageUrls?: string[];
   azureResolution?: string;
+  promptTextMode?: "text" | "json";
+  multiPromptMode?: boolean;
 }
 
 function loadSettings(tab: Tab): Partial<SavedSettings> | null {
@@ -815,7 +817,9 @@ function GalleryInner() {
   useEffect(() => { pendingGensRef.current = pendingGens; }, [pendingGens]);
   const [submitting, setSubmitting] = useState(false);
   const [veoMode, setVeoMode] = useState<"frames" | "references">("frames");
-  const [promptTextMode, setPromptTextMode] = useState<"text" | "json">("text");
+  const [promptTextMode, setPromptTextMode] = useState<"text" | "json">(() => loadSettings(tab)?.promptTextMode ?? "text");
+  const [multiPromptMode, setMultiPromptMode] = useState<boolean>(() => loadSettings(tab)?.multiPromptMode ?? false);
+  const [expandedPromptIdx, setExpandedPromptIdx] = useState<number | null>(null);
   const [genError, setGenError] = useState<string>("");
   const debugMode        = useWorkflowStore((s) => s.debugMode);
   const addToast         = useWorkflowStore((s) => s.addToast);
@@ -1114,6 +1118,15 @@ function GalleryInner() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab]);
 
+  // Resize textarea on initial mount if a saved prompt is already loaded
+  useEffect(() => {
+    if (inputRef.current && prompt && !multiPromptMode) {
+      const el = inputRef.current;
+      requestAnimationFrame(() => resizeTextarea(el));
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   useEffect(() => {
     if (skipNextModelEffect.current) { skipNextModelEffect.current = false; return; }
     const m = models.find(m => m.id === modelId);
@@ -1198,8 +1211,8 @@ function GalleryInner() {
     const refImageUrls = [...new Set(refImages
       .filter(r => r.cdnUrl && !r.uploading && !r.error)
       .map(r => r.cdnUrl!))];
-    saveSettings(tab, { prompt, modelId, aspectRatio, quality, count, duration, mode, sound, refImageUrls, azureResolution });
-  }, [tab, prompt, modelId, aspectRatio, quality, count, duration, mode, sound, refImages, azureResolution]);
+    saveSettings(tab, { prompt, modelId, aspectRatio, quality, count, duration, mode, sound, refImageUrls, azureResolution, promptTextMode, multiPromptMode });
+  }, [tab, prompt, modelId, aspectRatio, quality, count, duration, mode, sound, refImages, azureResolution, promptTextMode, multiPromptMode]);
 
   // Track window width; set initial zoom from breakpoints only if NOT saved
   useEffect(() => {
@@ -1444,9 +1457,10 @@ function GalleryInner() {
 
   // ── Generate ──────────────────────────────────────────────────────────────
 
-  const generateOne = async (token: string): Promise<string> => {
+  const generateOne = async (token: string, promptOverride?: string): Promise<string> => {
+    const effectivePrompt = promptOverride ?? prompt;
     if (!isVideo) {
-      const { resolvedPrompt, extraUrls } = resolveGalleryMentions(prompt, taggedImages);
+      const { resolvedPrompt, extraUrls } = resolveGalleryMentions(effectivePrompt, taggedImages);
       const extraUrlSet = new Set(extraUrls);
       const refUrls = imgModel?.supportsImages ? refImages.filter(r => r.cdnUrl && !r.error && !extraUrlSet.has(r.cdnUrl!)).map(r => r.cdnUrl!) : [];
       const imageUrls = imgModel?.supportsImages ? [...new Set([...extraUrls, ...refUrls])] : [];
@@ -1474,7 +1488,7 @@ function GalleryInner() {
       const vm = VIDEO_MODELS.find(m => m.id === modelId);
       const handles = vm?.handles ?? [];
 
-      const { resolvedPrompt, extraAssets } = resolveGalleryMentions(prompt, taggedImages, vm?.resourceTagFormat ?? "default");
+      const { resolvedPrompt, extraAssets } = resolveGalleryMentions(effectivePrompt, taggedImages, vm?.resourceTagFormat ?? "default");
 
       const startFrameUrl = handles.includes("startFrame") && vidStartFrame?.cdnUrl ? vidStartFrame.cdnUrl : undefined;
       const endFrameUrl   = handles.includes("endFrame")   && vidEndFrame?.cdnUrl   ? vidEndFrame.cdnUrl   : undefined;
@@ -1602,10 +1616,11 @@ function GalleryInner() {
     }
     setGenError("");
 
-    const n = isVideo ? 1 : count;
+    const multiPrompts = multiPromptMode && !isVideo ? prompt.split(/\n\n+/).map(p => p.trim()).filter(Boolean) : null;
+    const n = multiPrompts ? multiPrompts.length : (isVideo ? 1 : count);
     const snapshotRefUrls = [...new Set(refImages.filter(r => r.cdnUrl && !r.error).map(r => r.cdnUrl!))];
-    const newPendings: PendingGen[] = Array.from({ length: n }, () => ({
-      id: randomUUID(), aspectRatio, prompt, referenceImageUrls: snapshotRefUrls, createdAt: new Date().toISOString(), tab, prePending: true,
+    const newPendings: PendingGen[] = Array.from({ length: n }, (_, i) => ({
+      id: randomUUID(), aspectRatio, prompt: multiPrompts ? multiPrompts[i] : prompt, referenceImageUrls: snapshotRefUrls, createdAt: new Date().toISOString(), tab, prePending: true,
     }));
     setPendingGens(prev => [...newPendings, ...prev]);
 
@@ -1654,9 +1669,10 @@ function GalleryInner() {
       }
 
       setSubmitting(true);
+      const promptByPendingId = new Map(newPendings.map((p, i) => [p.id, multiPrompts ? multiPrompts[i] : undefined]));
       let taskIds: string[];
       try {
-        taskIds = await Promise.all(active.map(() => generateOne(token)));
+        taskIds = await Promise.all(active.map(p => generateOne(token, promptByPendingId.get(p.id))));
       } catch (e: unknown) {
         setSubmitting(false);
         const msg = e instanceof Error ? e.message : String(e);
@@ -2727,8 +2743,22 @@ function GalleryInner() {
             flexDirection: "column",
             gap: "10px",
           }}>
-            {/* Prompt input with inline mention chips */}
-            <div style={{ position: "relative", flex: "none" }}>
+            {/* Multi-prompt mode strip */}
+            {multiPromptMode && (
+              <div style={{
+                display: "flex", alignItems: "center", gap: "6px",
+                fontSize: "11px", fontWeight: 500, color: "rgba(255,255,255,0.45)",
+                letterSpacing: "0.02em", marginBottom: "-2px",
+              }}>
+                <span style={{ width: "5px", height: "5px", borderRadius: "50%", background: "#2DD4BF", flexShrink: 0 }} />
+                Multi <strong style={{ color: "#2DD4BF", fontWeight: 600 }}>on</strong>
+                {" · "}
+                {prompt.split(/\n\n+/).filter(p => p.trim()).length} prompt{prompt.split(/\n\n+/).filter(p => p.trim()).length !== 1 ? "s" : ""}
+              </div>
+            )}
+
+            {/* Prompt input with inline mention chips — hidden in multi-prompt mode */}
+            <div style={{ position: "relative", flex: "none", display: multiPromptMode ? "none" : undefined }}>
               {/* Transparent textarea — editing layer */}
               <textarea
                 ref={inputRef}
@@ -2860,6 +2890,194 @@ function GalleryInner() {
                 </div>
               )}
             </div>
+
+            {/* Multi-prompt stack — blocks separated by \n\n */}
+            {multiPromptMode && (() => {
+              const blocks = prompt.split(/\n\n+/).reduce<string[]>((acc, b) => {
+                if (!b.trim() && acc.some(x => !x.trim())) return acc; // max one empty block
+                return [...acc, b];
+              }, []);
+              let promptIndex = 0;
+              return (
+                <div data-prompt-stack="" style={{
+                  display: "flex", flexDirection: "column", gap: "6px",
+                  maxHeight: "204px", overflowY: "auto", scrollbarWidth: "none",
+                }}>
+                  {blocks.map((block, blockIdx) => {
+                    const isNonEmpty = !!block.trim();
+                    const displayIdx = isNonEmpty ? ++promptIndex : null;
+                    const isExpanded = expandedPromptIdx === blockIdx;
+                    return (
+                      <div
+                        key={blockIdx}
+                        onClick={(e) => {
+                          const next = isExpanded ? null : blockIdx;
+                          setExpandedPromptIdx(next);
+                          if (next !== null) {
+                            requestAnimationFrame(() => {
+                              const stack = document.querySelector('[data-prompt-stack]');
+                              const ta = stack?.querySelectorAll<HTMLTextAreaElement>('textarea')[blockIdx];
+                              if (ta) {
+                                ta.focus();
+                                ta.style.height = "auto";
+                                ta.style.height = Math.min(ta.scrollHeight, 330) + "px";
+                              }
+                            });
+                          } else {
+                            const rowEl = e.currentTarget as HTMLElement;
+                            requestAnimationFrame(() => rowEl.scrollIntoView({ block: "nearest", behavior: "smooth" }));
+                          }
+                        }}
+                        style={{
+                          display: "flex", alignItems: "flex-start", gap: "8px",
+                          background: isExpanded ? "rgba(45,212,191,0.04)" : "rgba(255,255,255,0.03)",
+                          border: `1px solid ${isExpanded ? "rgba(45,212,191,0.18)" : isNonEmpty ? "rgba(255,255,255,0.09)" : "rgba(255,255,255,0.04)"}`,
+                          borderRadius: "8px", padding: "7px 10px",
+                          opacity: isNonEmpty ? 1 : 0.4,
+                          cursor: isExpanded ? "default" : "pointer",
+                          transition: "background 120ms, border-color 120ms",
+                          flexShrink: 0,
+                        }}
+                      >
+                        <span style={{
+                          fontSize: "10px", fontWeight: 700, letterSpacing: "0.06em",
+                          color: isNonEmpty ? "#2DD4BF" : "rgba(255,255,255,0.25)",
+                          fontFamily: "monospace", lineHeight: "22px", flexShrink: 0, minWidth: "18px",
+                        }}>
+                          {displayIdx !== null ? String(displayIdx).padStart(2, '0') : "—"}
+                        </span>
+                        <div data-block-wrapper="" style={{ flex: 1, position: "relative", minWidth: 0 }}>
+                        <textarea
+                          value={block}
+                          rows={1}
+                          placeholder={blockIdx === 0 && !isNonEmpty ? "Describe the scene you imagine…" : undefined}
+                          onClick={e => { if (isExpanded) e.stopPropagation(); }}
+                          onScroll={e => {
+                            if (promptTextMode === "json") {
+                              const overlay = (e.target as HTMLElement).closest('[data-block-wrapper]')?.querySelector('[data-block-overlay]') as HTMLElement | null;
+                              if (overlay) overlay.style.transform = `translateY(-${e.currentTarget.scrollTop}px)`;
+                            }
+                          }}
+                          onChange={e => {
+                            const newVal = e.target.value;
+                            if (newVal.includes('\n\n')) {
+                              // Double newline → split into a new block
+                              const splitIdx = newVal.indexOf('\n\n');
+                              const before = newVal.slice(0, splitIdx);
+                              const after = newVal.slice(splitIdx + 2);
+                              const raw = [...blocks.slice(0, blockIdx), before, after, ...blocks.slice(blockIdx + 1)];
+                              const normalized = raw.reduce<string[]>((acc, b) => {
+                                if (!b.trim() && acc.some(x => !x.trim())) return acc;
+                                return [...acc, b];
+                              }, []);
+                              setPrompt(normalized.join('\n\n'));
+                              const focusIdx = blockIdx + 1;
+                              setExpandedPromptIdx(focusIdx);
+                              requestAnimationFrame(() => {
+                                const stack = document.querySelector('[data-prompt-stack]');
+                                const rows = stack?.querySelectorAll<HTMLTextAreaElement>('textarea');
+                                const newRow = rows?.[focusIdx];
+                                if (newRow) {
+                                  newRow.focus();
+                                  newRow.setSelectionRange(0, 0);
+                                  newRow.style.height = "auto";
+                                  newRow.style.height = Math.min(newRow.scrollHeight, 330) + "px";
+                                }
+                              });
+                            } else {
+                              const updated = [...blocks];
+                              updated[blockIdx] = newVal;
+                              setPrompt(updated.join('\n\n'));
+                              if (isExpanded) {
+                                const ta = e.target as HTMLTextAreaElement;
+                                ta.style.height = "auto";
+                                ta.style.height = Math.min(ta.scrollHeight, 330) + "px";
+                              }
+                            }
+                          }}
+                          onKeyDown={e => {
+                            if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !submitting) { e.preventDefault(); generate(); return; }
+                            if (e.key === "Enter" && !isExpanded) {
+                              // Expand collapsed block on Enter instead of inserting newline
+                              e.preventDefault();
+                              setExpandedPromptIdx(blockIdx);
+                              requestAnimationFrame(() => {
+                                const stack = document.querySelector('[data-prompt-stack]');
+                                const ta = stack?.querySelectorAll<HTMLTextAreaElement>('textarea')[blockIdx];
+                                if (ta) {
+                                  ta.focus();
+                                  ta.style.height = "auto";
+                                  ta.style.height = Math.min(ta.scrollHeight, 330) + "px";
+                                  ta.setSelectionRange(ta.value.length, ta.value.length);
+                                }
+                              });
+                              return;
+                            }
+                            if ((e.key === "Backspace" || e.key === "Delete") && !block.trim() && blocks.length > 1) {
+                              e.preventDefault();
+                              const updated = blocks.filter((_, i) => i !== blockIdx);
+                              setPrompt(updated.join('\n\n'));
+                              const focusIdx = Math.max(0, blockIdx - 1);
+                              setExpandedPromptIdx(focusIdx);
+                              requestAnimationFrame(() => {
+                                const stack = document.querySelector('[data-prompt-stack]');
+                                const rows = stack?.querySelectorAll<HTMLTextAreaElement>('textarea');
+                                const target = rows?.[focusIdx];
+                                if (target) {
+                                  target.focus();
+                                  target.setSelectionRange(target.value.length, target.value.length);
+                                  target.style.height = "auto";
+                                  target.style.height = Math.min(target.scrollHeight, 330) + "px";
+                                }
+                              });
+                            }
+                          }}
+                          disabled={submitting}
+                          style={{
+                            display: "block", width: "100%",
+                            background: "transparent", border: "none", outline: "none",
+                            color: promptTextMode === "json" ? "transparent" : (isNonEmpty ? "rgba(255,255,255,0.88)" : "rgba(255,255,255,0.3)"),
+                            caretColor: "#2DD4BF",
+                            fontSize: "13.5px",
+                            fontFamily: promptTextMode === "json" ? "monospace" : "inherit",
+                            lineHeight: "22px",
+                            letterSpacing: promptTextMode === "json" ? "normal" : "-0.01em",
+                            padding: 0, resize: "none",
+                            ...(isExpanded
+                              ? { maxHeight: "330px", overflowY: "auto", scrollbarWidth: "none" }
+                              : { height: "22px", maxHeight: "22px", overflowY: "hidden", whiteSpace: "nowrap" }
+                            ),
+                          } as React.CSSProperties}
+                        />
+                        {promptTextMode === "json" && (
+                          <div aria-hidden style={{ position: "absolute", inset: 0, overflow: "hidden", pointerEvents: "none" }}>
+                            <div
+                              data-block-overlay=""
+                              style={{
+                                fontSize: "13.5px", fontFamily: "monospace", lineHeight: "22px",
+                                whiteSpace: isExpanded ? "pre-wrap" : "nowrap",
+                                wordBreak: "break-word",
+                              }}
+                            >
+                              {syntaxHighlightJson(block)}
+                            </div>
+                          </div>
+                        )}
+                        </div>
+                        <span style={{
+                          fontSize: "10px", fontWeight: 600, color: "rgba(255,255,255,0.25)",
+                          fontFamily: "monospace", lineHeight: "22px", flexShrink: 0,
+                          display: isNonEmpty ? undefined : "none",
+                        }}>
+                          {block.replace(/\n/g, '').length}c
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })()}
+
             {/* Bottom row: controls + generate button — always stays at the bottom, never moves on expand */}
             <div style={{ display: "flex", alignItems: "center", gap: "12px", borderTop: "1px solid rgba(255,255,255,0.05)", paddingTop: "12px", marginTop: "4px" }}>
               {/* Controls group */}
@@ -3057,8 +3275,8 @@ function GalleryInner() {
                   </div>
                 )}
 
-                {/* Count stepper (image only) — last control */}
-                {!isVideo && (
+                {/* Count stepper (image only, hidden in multi-prompt mode) */}
+                {!isVideo && !multiPromptMode && (
                   <div style={{
                     display: "flex",
                     alignItems: "center",
@@ -3099,6 +3317,52 @@ function GalleryInner() {
                       }}
                     >+</button>
                   </div>
+                )}
+
+                {/* Multi-prompt toggle */}
+                {!isVideo && (
+                  <button
+                    onClick={() => {
+                      setMultiPromptMode(m => {
+                        if (m) {
+                          // switching OFF — resize the single textarea once it's visible again
+                          requestAnimationFrame(() => {
+                            if (inputRef.current) resizeTextarea(inputRef.current);
+                          });
+                        }
+                        return !m;
+                      });
+                      setExpandedPromptIdx(null);
+                    }}
+                    disabled={submitting}
+                    style={{
+                      display: "flex", alignItems: "center", gap: "7px",
+                      height: "36px", padding: "0 12px",
+                      borderRadius: "8px",
+                      border: "1px solid rgba(255,255,255,0.1)",
+                      background: multiPromptMode ? "rgba(45,212,191,0.12)" : "rgba(255,255,255,0.05)",
+                      color: multiPromptMode ? "#2DD4BF" : "rgba(255,255,255,0.55)",
+                      fontSize: "13px", fontFamily: "inherit",
+                      cursor: submitting ? "not-allowed" : "pointer",
+                      transition: "background 150ms, color 150ms",
+                      flexShrink: 0,
+                    }}>
+                    <span style={{
+                      width: "28px", height: "16px", borderRadius: "8px",
+                      background: multiPromptMode ? "#2DD4BF" : "rgba(255,255,255,0.18)",
+                      position: "relative", flexShrink: 0,
+                      transition: "background 150ms",
+                    }}>
+                      <span style={{
+                        position: "absolute", top: "2px",
+                        left: multiPromptMode ? "14px" : "2px",
+                        width: "12px", height: "12px", borderRadius: "50%",
+                        background: multiPromptMode ? "#0B3B38" : "#ffffff",
+                        transition: "left 150ms",
+                      }} />
+                    </span>
+                    Multi
+                  </button>
                 )}
 
                 {/* Text / JSON mode toggle */}
