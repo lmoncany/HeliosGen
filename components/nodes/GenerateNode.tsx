@@ -11,6 +11,7 @@ import { useWorkflowStore, NodeData } from "@/lib/store";
 import { createClient } from "@/lib/supabase/client";
 import { resolveInputs } from "@/lib/executor";
 import { useReadOnly } from "@/lib/readOnlyContext";
+import { browserNotify, requestNotificationPermission } from "@/lib/browserNotify";
 
 type GenerateNodeType = Node<NodeData, "generateNode">;
 
@@ -502,6 +503,7 @@ export default function GenerateNode({ id, data, selected }: NodeProps<GenerateN
           gens[slot] = json.imageUrl as string;
           updateNodeData(id, { status: "done", imageUrl: json.imageUrl, taskId: undefined, generations: gens, currentGenIdx: slot });
           clearInterval(interval);
+          browserNotify("Node complete", (data.label as string | undefined) ?? "Image generated");
         } else if (json.status === "error") {
           const storeNode = useWorkflowStore.getState().nodes.find(n => n.id === id);
           const gens = [...((storeNode?.data?.generations as GenEntry[] | undefined) ?? [])] as GenEntry[];
@@ -509,6 +511,7 @@ export default function GenerateNode({ id, data, selected }: NodeProps<GenerateN
           gens[slot] = { error: json.error ?? "Generation failed" };
           updateNodeData(id, { status: "error", errorMsg: json.error, taskId: undefined, generations: gens, currentGenIdx: slot });
           clearInterval(interval);
+          browserNotify("Node failed", json.error ?? "Generation failed");
         } else if (json.status === "not_found") {
           const storeNode = useWorkflowStore.getState().nodes.find(n => n.id === id);
           const gens = [...((storeNode?.data?.generations as GenEntry[] | undefined) ?? [])] as GenEntry[];
@@ -516,6 +519,7 @@ export default function GenerateNode({ id, data, selected }: NodeProps<GenerateN
           gens[slot] = { error: "Job expired or unknown" };
           updateNodeData(id, { status: "error", errorMsg: "Job expired or unknown", taskId: undefined, generations: gens, currentGenIdx: slot });
           clearInterval(interval);
+          browserNotify("Node failed", "Job expired or unknown");
         }
         // "pending" → keep polling
       } catch {
@@ -540,6 +544,7 @@ export default function GenerateNode({ id, data, selected }: NodeProps<GenerateN
   )?.source;
 
   const generate = useCallback(async () => {
+    requestNotificationPermission();
     let accessToken: string;
     if (process.env.NEXT_PUBLIC_GUEST_MODE === "true") {
       accessToken = "guest";

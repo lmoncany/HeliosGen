@@ -14,6 +14,7 @@ import { QuickAssist } from "@/components/QuickAssist";
 import DotCanvasBackground from "@/components/ui/DotCanvasBackground";
 import { Kbd, KbdGroup } from "@/components/ui/kbd";
 import { Button } from "@/components/ui/button";
+import { browserNotify, requestNotificationPermission } from "@/lib/browserNotify";
 
 const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
 
@@ -1613,6 +1614,7 @@ function GalleryInner() {
   const generate = async () => {
     if (kieKeySet === false) return;
     if (!prompt.trim() && !isVideo) return;
+    requestNotificationPermission();
     if (refImages.some(r => r.uploading)) { setGenError("Images still uploading…"); setTimeout(() => setGenError(""), 3_000); return; }
     if (isVideo && [vidStartFrame, vidEndFrame, vidVideoRef, ...vidResources, ...vidRefVideos, ...vidRefAudios].some(r => r?.uploading)) {
       setGenError("References still uploading…"); setTimeout(() => setGenError(""), 3_000); return;
@@ -1713,9 +1715,14 @@ function GalleryInner() {
             });
           }
           window.dispatchEvent(new Event("credits-refresh"));
+          browserNotify(
+            isVideo ? "Video ready" : "Image ready",
+            (pending.prompt || "Your generation is ready").slice(0, 100),
+          );
         } catch (e: unknown) {
           const msg = e instanceof Error ? e.message : String(e);
           setPendingGens(prev => prev.map(p => p.id === pending.id ? { ...p, error: msg } : p));
+          browserNotify("Generation failed", msg.slice(0, 100));
         }
       });
     };
