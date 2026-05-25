@@ -6,7 +6,7 @@ import { createClient } from "@/lib/supabase/client";
 import { IMAGE_MODELS, VIDEO_MODELS } from "@/lib/modelConfig";
 import { useWorkflowStore } from "@/lib/store";
 import type { User } from "@supabase/supabase-js";
-import { ShieldBan } from "lucide-react";
+import { ShieldAlert } from "lucide-react";
 import { GalleryItem, getToken, galleryCache } from "@/lib/galleryUtils";
 import { MediaPickerModal } from "@/components/MediaPickerModal";
 import { useSidebar } from "@/components/ui/sidebar";
@@ -596,6 +596,13 @@ function saveKlingElements(elements: KlingElement[]) {
 function PendingGenTile({ pg, onCancel }: { pg: PendingGen; onCancel: () => void }) {
   return (
     <>
+      {/* Top radial glow — blue-emerald with slow pulse */}
+      <div style={{
+        position: "absolute", top: "-40%", left: "50%", transform: "translateX(-50%)",
+        width: "180%", height: "80%", pointerEvents: "none",
+        background: "radial-gradient(ellipse at 50% 20%, rgba(20,160,140,0.45) 0%, rgba(30,100,200,0.2) 40%, transparent 70%)",
+        animation: "pendingGlow 3s ease-in-out infinite",
+      }} />
       {/* Top: phase label + cancel — same row, wraps to next line if too narrow */}
       <div style={{
         position: "absolute", top: 8, left: 8, right: 8,
@@ -2324,7 +2331,7 @@ function GalleryInner() {
               if (layoutItem.kind === "pending") {
                 const pg = layoutItem.pg;
                 return (
-                  <div key={pg.id} style={{
+                  <div key={pg.id} className={pg.error ? "error-pending-tile" : undefined} style={{
                     width: layoutItem.width,
                     flex: "0 0 auto",
                     height: "100%",
@@ -2334,34 +2341,55 @@ function GalleryInner() {
                   }}>
                         {pg.error ? (
                           <>
+                            {/* Top radial glow */}
+                            <div style={{
+                              position: "absolute", top: "-40%", left: "50%", transform: "translateX(-50%)",
+                              width: "180%", height: "80%", pointerEvents: "none",
+                              background: "radial-gradient(ellipse at 50% 20%, rgba(180,40,40,0.38) 0%, transparent 70%)",
+                            }} />
+                            {/* Error card body */}
                             <div style={{
                               position: "absolute", inset: 0,
                               display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
-                              gap: "10px", padding: "16px 48px 16px 16px",
+                              gap: "8px", padding: "16px 44px 16px 16px",
+                              zIndex: 1,
                             }}>
-                              {(pg.error === "moderation_blocked" || pg.error?.includes?.("moderation_blocked") || pg.error?.includes?.("flagged as sensitive")) ? (
-                                <>
-                                  <ShieldBan size={20} strokeWidth={1.5} style={{ color: "#f87171", flexShrink: 0 }} />
-                                  <p style={{ fontSize: "11px", color: "#f87171", textAlign: "center", lineHeight: 1.45 }}>
-                                    NSFW content detected
-                                  </p>
-                                </>
-                              ) : (
-                                <>
-                                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#f87171" strokeWidth="1.8" strokeLinecap="round">
-                                    <circle cx="12" cy="12" r="10" /><path d="M12 8v4M12 16h.01" />
-                                  </svg>
-                                  <p style={{
-                                    fontSize: "11px", color: "#f87171", textAlign: "center",
-                                    lineHeight: 1.45, wordBreak: "break-word",
-                                    display: "-webkit-box", WebkitLineClamp: 4, WebkitBoxOrient: "vertical", overflow: "hidden",
-                                  }}>
-                                    {pg.error}
-                                  </p>
-                                </>
+                              {/* Icon with border ring + glow */}
+                              <div style={{
+                                width: 40, height: 40, borderRadius: "50%",
+                                border: "1px solid rgba(248,113,113,0.45)",
+                                boxShadow: "0 0 18px 4px rgba(200,50,50,0.35), inset 0 0 8px rgba(248,113,113,0.08)",
+                                background: "rgba(30,10,10,0.6)",
+                                display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
+                              }}>
+                                <ShieldAlert size={18} strokeWidth={1.75} style={{ color: "#f87171" }} />
+                              </div>
+                              {/* Tag */}
+                              <span style={{
+                                fontSize: "10px", fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase",
+                                color: "rgba(248,113,113,0.8)",
+                                background: "rgba(120,30,30,0.35)",
+                                padding: "2px 8px", borderRadius: "4px",
+                              }}>
+                                {(pg.error === "moderation_blocked" || pg.error?.includes?.("moderation_blocked") || pg.error?.includes?.("flagged as sensitive") || pg.error?.includes?.("moderation")) ? "Moderation" : "Failed"}
+                              </span>
+                              {/* Error message */}
+                              <div style={{
+                                fontSize: "11px", color: "rgba(255,255,255,0.75)", textAlign: "center",
+                                lineHeight: 1.5, wordBreak: "break-word",
+                                display: "-webkit-box", WebkitLineClamp: 4, WebkitBoxOrient: "vertical", overflow: "hidden",
+                              }}>
+                                {pg.error}
+                              </div>
+                              {/* Credits refunded — only for moderation */}
+                              {(pg.error === "moderation_blocked" || pg.error?.includes?.("moderation_blocked") || pg.error?.includes?.("flagged as sensitive") || pg.error?.includes?.("moderation")) && (
+                                <div style={{ fontSize: "10px", color: "rgba(255,255,255,0.28)", fontFamily: "monospace", marginTop: 2 }}>
+                                  Credits refunded
+                                </div>
                               )}
                             </div>
-                            <div style={{ position: "absolute", top: 8, right: 8, display: "flex", flexDirection: "column", gap: 5, zIndex: 5 }}>
+                            {/* Action buttons column */}
+                            <div className="error-tile-actions" style={{ position: "absolute", top: 8, right: 8, display: "flex", flexDirection: "column", gap: 5, zIndex: 5 }}>
                               <button className="gallery-action-btn" title="Paste prompt & images" onClick={() => handleCopyPrompt(pg.prompt, pg.referenceImageUrls)}>
                                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                                   <rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
@@ -5428,6 +5456,10 @@ const GALLERY_CSS = `
   .picker-scroll::-webkit-scrollbar { display: none; }
   .seed-input::-webkit-inner-spin-button, .seed-input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
   @keyframes spin { to { transform: rotate(360deg); } }
+  @keyframes pendingGlow {
+    0%, 100% { opacity: 0.55; }
+    50% { opacity: 1; }
+  }
   @keyframes dlRingSpin {
     from { stroke-dashoffset: 75.4; transform: rotate(-90deg); }
     to   { stroke-dashoffset: 0;    transform: rotate(270deg); }
@@ -5556,6 +5588,15 @@ const GALLERY_CSS = `
     pointer-events: none;
   }
   .gallery-item:hover .gallery-actions-top {
+    opacity: 1;
+    pointer-events: auto;
+  }
+  .error-pending-tile .error-tile-actions {
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 160ms ease;
+  }
+  .error-pending-tile:hover .error-tile-actions {
     opacity: 1;
     pointer-events: auto;
   }

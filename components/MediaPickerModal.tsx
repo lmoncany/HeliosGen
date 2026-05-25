@@ -77,6 +77,32 @@ export function MediaPickerModal({
   const [sourceItems, setSourceItems] = useState<GalleryItem[]>([]);
   const [fetching, setFetching] = useState(false);
   const [pos, setPos] = useState({ left: 0, top: 0, bottom: 0, width: 0, isAnchored: false, isCustom: false });
+  const [urlInput, setUrlInput] = useState("");
+  const [urlLoading, setUrlLoading] = useState(false);
+  const [urlError, setUrlError] = useState("");
+
+  const submitUrl = async () => {
+    const trimmed = urlInput.trim();
+    if (!trimmed || urlLoading) return;
+    setUrlError("");
+    setUrlLoading(true);
+    try {
+      const res = await fetch("/api/fetch-url", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: trimmed }),
+      });
+      const data = await res.json() as { cdnUrl?: string; mediaType?: "image" | "video"; error?: string };
+      if (!res.ok || !data.cdnUrl) throw new Error(data.error ?? "Failed to fetch URL");
+      setUrlInput("");
+      onPickUrl(data.cdnUrl, data.mediaType ?? "image");
+      onClose();
+    } catch (e: unknown) {
+      setUrlError(e instanceof Error ? e.message : "Failed to fetch URL");
+    } finally {
+      setUrlLoading(false);
+    }
+  };
 
   useEffect(() => {
     if (!open) return;
@@ -115,7 +141,7 @@ export function MediaPickerModal({
   }, [open, anchorRef, x, y]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) { setUrlInput(""); setUrlError(""); return; }
     setActiveTab(defaultTab);
 
     if (mediaKind === "any") {
@@ -241,6 +267,56 @@ export function MediaPickerModal({
               <path d="M18 6 6 18M6 6l12 12" />
             </svg>
           </button>
+        </div>
+
+        {/* URL input bar */}
+        <div style={{ padding: "10px 18px", borderBottom: "1px solid rgba(255,255,255,0.06)", flexShrink: 0 }}>
+          <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+            <div style={{ flex: 1, position: "relative" }}>
+              <input
+                type="url"
+                placeholder="Paste an image URL…"
+                value={urlInput}
+                onChange={e => { setUrlInput(e.target.value); setUrlError(""); }}
+                onKeyDown={e => { if (e.key === "Enter") submitUrl(); }}
+                style={{
+                  width: "100%", boxSizing: "border-box",
+                  height: "32px", padding: "0 12px",
+                  background: "rgba(255,255,255,0.06)",
+                  border: urlError ? "1px solid rgba(248,113,113,0.5)" : "1px solid rgba(255,255,255,0.1)",
+                  borderRadius: "8px",
+                  color: "rgba(255,255,255,0.85)", fontSize: "12px",
+                  outline: "none", transition: "border-color 150ms",
+                }}
+                onFocus={e => { if (!urlError) e.currentTarget.style.borderColor = "rgba(45,212,191,0.4)"; }}
+                onBlur={e => { if (!urlError) e.currentTarget.style.borderColor = "rgba(255,255,255,0.1)"; }}
+              />
+            </div>
+            <button
+              onClick={submitUrl}
+              disabled={!urlInput.trim() || urlLoading}
+              style={{
+                height: "32px", padding: "0 14px", borderRadius: "8px", border: "none",
+                background: urlInput.trim() && !urlLoading ? "rgba(45,212,191,0.18)" : "rgba(255,255,255,0.05)",
+                color: urlInput.trim() && !urlLoading ? "#2DD4BF" : "rgba(255,255,255,0.25)",
+                fontSize: "12px", fontWeight: 500, cursor: urlInput.trim() && !urlLoading ? "pointer" : "default",
+                transition: "background 150ms, color 150ms", flexShrink: 0,
+                display: "flex", alignItems: "center", gap: "6px",
+              }}
+            >
+              {urlLoading ? (
+                <span style={{ width: "12px", height: "12px", borderRadius: "50%", border: "1.5px solid rgba(45,212,191,0.3)", borderTopColor: "#2DD4BF", display: "inline-block", animation: "spin 0.75s linear infinite" }} />
+              ) : (
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M5 12h14M12 5l7 7-7 7" />
+                </svg>
+              )}
+              Attach
+            </button>
+          </div>
+          {urlError && (
+            <p style={{ margin: "6px 0 0", fontSize: "11px", color: "#f87171" }}>{urlError}</p>
+          )}
         </div>
 
         {/* Scrollable grid */}
