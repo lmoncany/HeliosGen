@@ -4695,9 +4695,9 @@ function GalleryCard({
       {/* ── Gradient overlay + prompt ── */}
       <div className="gallery-overlay">
         {item.prompt && (
-          <p style={{ fontSize: "11px", color: "rgba(255,255,255,0.85)", lineHeight: 1.45, overflow: "hidden", display: "-webkit-box", WebkitLineClamp: 3, WebkitBoxOrient: "vertical", marginBottom: "4px" }}>
-            {item.prompt}
-          </p>
+          <div style={{ fontSize: "11px", lineHeight: 1.45, overflow: "hidden", display: "-webkit-box", WebkitLineClamp: 3, WebkitBoxOrient: "vertical", marginBottom: "4px" }}>
+            {renderLightboxPrompt(item.prompt, item.referenceImageUrls)}
+          </div>
         )}
         <p style={{ fontSize: "10px", color: "rgba(255,255,255,0.35)" }}>
           {[item.model, item.aspect_ratio].filter(Boolean).join(" · ") || (item.source === "upload" ? "Uploaded" : "")}
