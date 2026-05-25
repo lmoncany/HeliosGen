@@ -1265,7 +1265,7 @@ export default function VideoGeneratorNode({ id, data, selected }: NodeProps<Vid
                           <span>NSFW content detected</span>
                         </div>
                       ) : (
-                        <p className="text-[10px] text-[#f87171] leading-snug break-words">{entry.error}</p>
+                        <p className="text-[10px] text-[#f87171] leading-snug break-words w-full">{entry.error}</p>
                       )}
                       <button
                         onMouseDown={(e) => e.stopPropagation()}

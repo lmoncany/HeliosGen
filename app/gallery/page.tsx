@@ -2358,7 +2358,7 @@ function GalleryInner() {
                             <div style={{
                               position: "absolute", inset: 0,
                               display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
-                              gap: "8px", padding: "16px 44px 16px 16px",
+                              gap: "8px", padding: "16px",
                               zIndex: 1,
                             }}>
                               {/* Icon with border ring + glow */}
