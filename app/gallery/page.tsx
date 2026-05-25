@@ -419,6 +419,7 @@ interface PendingGen {
   createdAt?: string;
   tab?: Tab;
   prePending?: boolean;
+  retried?: boolean;
 }
 
 
@@ -2083,16 +2084,15 @@ function GalleryInner() {
     };
 
     // Pending gens are only shown in the "generated" source filter, not "uploaded".
-    const activePendings = sourceFilter === "generated"
-      ? pendingGens.filter(pg => !pg.error && (pg.tab == null || pg.tab === tab))
+    const allPendingVisible = sourceFilter === "generated"
+      ? pendingGens.filter(pg => pg.tab == null || pg.tab === tab)
       : [];
-    const failedPendings = sourceFilter === "generated"
-      ? pendingGens.filter(pg => !!pg.error && (pg.tab == null || pg.tab === tab))
-      : [];
+    const activePendings = allPendingVisible.filter(pg => !pg.error && !pg.retried);
+    const mixedPendings = allPendingVisible.filter(pg => !!pg.error || !!pg.retried);
 
     type Dated = { t: number; entry: GalleryLayoutItem };
     const mixed: Dated[] = [
-      ...failedPendings.map(pg => ({ t: pg.createdAt ? new Date(pg.createdAt).getTime() : Date.now(), entry: toPendingEntry(pg) })),
+      ...mixedPendings.map(pg => ({ t: pg.createdAt ? new Date(pg.createdAt).getTime() : Date.now(), entry: toPendingEntry(pg) })),
       ...filteredItems.map(item => ({ t: new Date(item.created_at).getTime(), entry: { kind: "gallery" as const, item, ratio: toRatio(item.aspect_ratio, item.mediaType, item.url), width: 0 } })),
     ].sort((a, b) => b.t - a.t);
 
@@ -2365,7 +2365,7 @@ function GalleryInner() {
                               </button>
                               <button className="gallery-action-btn" title="Retry" onClick={async () => {
                                 const newId = randomUUID();
-                                const newPending: PendingGen = { id: newId, aspectRatio: pg.aspectRatio, prompt: pg.prompt, referenceImageUrls: pg.referenceImageUrls, createdAt: new Date().toISOString(), tab: pg.tab };
+                                const newPending: PendingGen = { id: newId, aspectRatio: pg.aspectRatio, prompt: pg.prompt, referenceImageUrls: pg.referenceImageUrls, createdAt: pg.createdAt ?? new Date().toISOString(), tab: pg.tab, retried: true };
                                 setPendingGens(prev => [...prev.filter(p => p.id !== pg.id), newPending]);
                                 const token = await getToken();
                                 if (!token) { setPendingGens(prev => prev.map(p => p.id === newId ? { ...p, error: "Please sign in." } : p)); return; }
