@@ -1607,7 +1607,7 @@ function GalleryInner() {
     const newPendings: PendingGen[] = Array.from({ length: n }, () => ({
       id: randomUUID(), aspectRatio, prompt, referenceImageUrls: snapshotRefUrls, createdAt: new Date().toISOString(), tab, prePending: true,
     }));
-    setPendingGens(prev => [...prev, ...newPendings]);
+    setPendingGens(prev => [...newPendings, ...prev]);
 
     // ── Debug mode: log + simulate, no real API call ────────────────────────
     if (debugMode) {
