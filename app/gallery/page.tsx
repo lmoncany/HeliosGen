@@ -2158,6 +2158,11 @@ function GalleryInner() {
     return rows;
   }, [containerWidth, zoom, justifiedRows, GALLERY_GAP]);
 
+  const orderedGalleryItems = useMemo(
+    () => fixedRows.flatMap(r => r.items).filter((i): i is Extract<GalleryLayoutItem, { kind: "gallery" }> => i.kind === "gallery").map(i => i.item),
+    [fixedRows],
+  );
+
   // Fire probes for every uncached item without a stored aspect_ratio.
   // Images: 32px next/image probe (fast). Videos: <video preload="metadata"> probe.
   // Results are non-blocking for video (uses 16:9 default until resolved).
@@ -3603,13 +3608,18 @@ function GalleryInner() {
         document.body,
       )}
 
-      {lightboxItem && (
-        <Lightbox
-          item={lightboxItem}
-          onClose={() => setLightboxItem(null)}
-          onCopyPrompt={handleCopyPrompt}
-        />
-      )}
+      {lightboxItem && (() => {
+        const idx = orderedGalleryItems.findIndex(i => i.id === lightboxItem.id);
+        return (
+          <Lightbox
+            item={lightboxItem}
+            onClose={() => setLightboxItem(null)}
+            onCopyPrompt={handleCopyPrompt}
+            onPrev={idx > 0 ? () => setLightboxItem(orderedGalleryItems[idx - 1]) : undefined}
+            onNext={idx < orderedGalleryItems.length - 1 ? () => setLightboxItem(orderedGalleryItems[idx + 1]) : undefined}
+          />
+        );
+      })()}
 
       {/* Ref media preview modal */}
       {refPreview && (
@@ -4956,7 +4966,7 @@ function renderLightboxPrompt(
 
 // ── Lightbox ──────────────────────────────────────────────────────────────────
 
-function Lightbox({ item, onClose, onCopyPrompt }: { item: GalleryItem; onClose: () => void; onCopyPrompt?: (prompt: string, refUrls?: string[], meta?: { model?: string; aspectRatio?: string; quality?: string }) => void }) {
+function Lightbox({ item, onClose, onCopyPrompt, onPrev, onNext }: { item: GalleryItem; onClose: () => void; onCopyPrompt?: (prompt: string, refUrls?: string[], meta?: { model?: string; aspectRatio?: string; quality?: string }) => void; onPrev?: () => void; onNext?: () => void }) {
   const [visible, setVisible] = useState(false);
   const [fullLoaded, setFullLoaded] = useState(false);
   const [imgIdx, setImgIdx] = useState(0);
@@ -4967,17 +4977,24 @@ function Lightbox({ item, onClose, onCopyPrompt }: { item: GalleryItem; onClose:
   const allUrls = item.imageUrls ?? [item.url];
   const lightboxUrl = allUrls[imgIdx] ?? item.url;
 
+  useEffect(() => { setImgIdx(0); setFullLoaded(false); setResolution(null); }, [item.id]);
   useEffect(() => { const id = requestAnimationFrame(() => setVisible(true)); return () => cancelAnimationFrame(id); }, []);
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key === "Escape") { if (zoomed) { setZoomed(false); return; } handleClose(); return; }
-      if (e.key === "ArrowLeft") { setFullLoaded(false); setResolution(null); setImgIdx(i => Math.max(0, i - 1)); }
-      if (e.key === "ArrowRight") { setFullLoaded(false); setResolution(null); setImgIdx(i => Math.min(allUrls.length - 1, i + 1)); }
+      if (e.key === "ArrowLeft") {
+        if (imgIdx > 0) { setFullLoaded(false); setResolution(null); setImgIdx(i => i - 1); }
+        else onPrev?.();
+      }
+      if (e.key === "ArrowRight") {
+        if (imgIdx < allUrls.length - 1) { setFullLoaded(false); setResolution(null); setImgIdx(i => i + 1); }
+        else onNext?.();
+      }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [allUrls.length, zoomed]);
+  }, [allUrls.length, imgIdx, zoomed, onPrev, onNext]);
 
   const handleClose = () => { setVisible(false); setTimeout(onClose, 200); };
 
