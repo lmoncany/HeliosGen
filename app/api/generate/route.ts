@@ -114,7 +114,7 @@ async function curlMultipartPost(
     }
 
     const args = [
-      "-s", "-m", "180",
+      "-s", "-m", "600",
       "-X", "POST", url,
       "-H", `Authorization: Bearer ${authKey}`,
       "-o", bodyPath,
@@ -141,6 +141,11 @@ async function curlMultipartPost(
 
     console.log("[azure/edits/curl] exit code:", exitCode);
     if (stderr) console.log("[azure/edits/curl] stderr:", stderr);
+
+    if (exitCode !== 0) {
+      const reason = exitCode === 28 ? "timed out (curl -m 600 exceeded)" : `curl exited with code ${exitCode}`;
+      throw new Error(`Azure curl request failed: ${reason}`);
+    }
 
     const status = parseInt(statusStr, 10) || 0;
     const body   = await readFile(bodyPath, "utf-8").catch(() => "");
