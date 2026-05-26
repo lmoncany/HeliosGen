@@ -73,7 +73,7 @@ export default function PromptNode({ id, data, selected }: NodeProps<PromptNodeT
   const selectedRef = useRef(selected);
   const prevSelectedRef = useRef(selected);
 
-  const [textMode, setTextMode] = useState<"text" | "json">("text");
+  const [textMode, setTextMode] = useState<"text" | "json" | "yaml">("text");
   const [mentionQuery, setMentionQuery] = useState<string | null>(null);
   const [selectedIdx, setSelectedIdx] = useState(0);
   const [hasScrollTop, setHasScrollTop] = useState(false);
@@ -147,6 +147,8 @@ export default function PromptNode({ id, data, selected }: NodeProps<PromptNodeT
     if (textMode !== "json" || !localText) return null;
     return getJsonErrorPos(localText);
   }, [textMode, localText]);
+
+
 
   // ── Keep uncontrolled textarea in sync with external store changes ────────
   // (e.g. when the whole canvas is loaded from saved state, or programmatic
@@ -471,6 +473,7 @@ export default function PromptNode({ id, data, selected }: NodeProps<PromptNodeT
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [textMode]);
 
+
   // When modal opens, seed & focus its textarea
   useEffect(() => {
     if (!expandOpen) return;
@@ -626,27 +629,61 @@ export default function PromptNode({ id, data, selected }: NodeProps<PromptNodeT
           </button>
         </div>
 
-        {/* ── Text / JSON tab toggle ───────────────────────────────────────── */}
+        {/* ── JSON / YAML toggle ───────────────────────────────────────────── */}
         <div
           className="shrink-0 flex items-center px-2.5 pt-2 pb-1"
           onMouseDown={(e) => e.stopPropagation()}
         >
-          <div className="flex items-center gap-px rounded-full p-0.5" style={{ background: "rgba(255,255,255,0.06)" }}>
-            <button
-              onClick={(e) => { e.stopPropagation(); setTextMode("text"); }}
-              className="px-2 py-px rounded-full text-[10px] font-medium transition-colors duration-150"
-              style={{ color: textMode === "text" ? "white" : "#555", background: textMode === "text" ? "rgba(255,255,255,0.13)" : "transparent" }}
-            >
-              Text
-            </button>
-            <button
-              onClick={(e) => { e.stopPropagation(); setTextMode("json"); }}
-              className="px-2 py-px rounded-full text-[10px] font-medium transition-colors duration-150"
-              style={{ color: textMode === "json" ? "white" : "#555", background: textMode === "json" ? "rgba(255,255,255,0.13)" : "transparent" }}
-            >
-              JSON
-            </button>
-          </div>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              if (textMode !== "text") {
+                setTextMode("text");
+              } else {
+                const ta = textareaRef.current;
+                const val = ta?.value ?? localText;
+                try {
+                  const formatted = JSON.stringify(JSON.parse(val), null, 2);
+                  if (ta && formatted !== ta.value) {
+                    ta.value = formatted;
+                    setLocalText(formatted);
+                    updateNodeData(id, { prompt: formatted });
+                  }
+                  setTextMode("json");
+                } catch {
+                  const looksLikeYaml = /^(\s*[\w\-./]+\s*:|---|\s*-\s)/m.test(val);
+                  setTextMode(looksLikeYaml ? "yaml" : "json");
+                }
+              }
+            }}
+            className="flex items-center gap-1.5 transition-colors duration-150"
+            style={{
+              background: textMode !== "text" ? "rgba(45,212,191,0.1)" : "rgba(255,255,255,0.05)",
+              color: textMode !== "text" ? "#2DD4BF" : "#555",
+              border: `1px solid ${textMode !== "text" ? "rgba(45,212,191,0.25)" : "rgba(255,255,255,0.07)"}`,
+              borderRadius: 6,
+              padding: "2px 7px 2px 5px",
+              fontSize: 10,
+              fontWeight: 500,
+              cursor: "pointer",
+            }}
+          >
+            <span style={{
+              width: 22, height: 12, borderRadius: 6, flexShrink: 0, position: "relative",
+              background: textMode !== "text" ? "#2DD4BF" : "rgba(255,255,255,0.15)",
+              transition: "background 150ms",
+              display: "inline-block",
+            }}>
+              <span style={{
+                position: "absolute", top: 2,
+                left: textMode !== "text" ? 12 : 2,
+                width: 8, height: 8, borderRadius: "50%",
+                background: textMode !== "text" ? "#0B3B38" : "#fff",
+                transition: "left 150ms",
+              }} />
+            </span>
+            JSON/YAML
+          </button>
         </div>
 
         {/* Padding zone — fills remaining height; clicking here drags the node */}
@@ -656,16 +693,18 @@ export default function PromptNode({ id, data, selected }: NodeProps<PromptNodeT
             ref={textZoneRef}
             className="relative h-full rounded-[7px] overflow-hidden"
           >
-            {/* Highlight overlay — text mode: mention chips; json mode: syntax colours */}
+            {/* Highlight overlay — text mode: mention chips; json/yaml mode: syntax colours */}
             <div
               ref={highlightRef}
               aria-hidden
-              className={`absolute inset-0 px-3 pt-2.5 pb-8 text-[13px] text-white leading-[1.6] pointer-events-none whitespace-pre-wrap break-words select-none${textMode === "json" ? " font-mono" : " overflow-hidden"}`}
-              style={textMode === "json" ? { overflowY: "scroll" } : undefined}
+              className={`absolute inset-0 px-3 pt-2.5 pb-8 text-[13px] text-white leading-[1.6] pointer-events-none whitespace-pre-wrap break-words select-none${textMode !== "text" ? " font-mono" : " overflow-hidden"}`}
+              style={textMode !== "text" ? { overflowY: "scroll" } : undefined}
             >
               {textMode === "json"
                 ? syntaxHighlightJson(localText, jsonErrorPos ?? undefined)
-                : promptMaxLength !== null && localText.length > promptMaxLength
+                : textMode === "yaml"
+                  ? syntaxHighlightYaml(localText)
+                  : promptMaxLength !== null && localText.length > promptMaxLength
                   ? <>
                       {renderWithMentions(localText.slice(0, promptMaxLength), knownLabels)}
                       <span style={{ background: "rgba(239,68,68,0.22)", color: "#f87171", borderRadius: 2 }}>
@@ -691,12 +730,12 @@ export default function PromptNode({ id, data, selected }: NodeProps<PromptNodeT
             React never writes .value, so cursor position is never reset. */}
             <textarea
               ref={textareaRef}
-              className={`prompt-ta relative w-full h-full px-3 pt-2.5 pb-8 bg-transparent text-[13px] leading-[1.6] resize-none outline-none overflow-y-auto z-10${textMode === "json" ? " font-mono" : ""}`}
-              style={{ color: "transparent", caretColor: "white", overscrollBehavior: "contain", ...(textMode === "json" ? { overflowY: "scroll" as const } : {}) }}
+              className={`prompt-ta relative w-full h-full px-3 pt-2.5 pb-8 bg-transparent text-[13px] leading-[1.6] resize-none outline-none overflow-y-auto z-10${textMode !== "text" ? " font-mono" : ""}`}
+              style={{ color: "transparent", caretColor: "white", overscrollBehavior: "contain", ...(textMode !== "text" ? { overflowY: "scroll" as const } : {}) }}
               defaultValue={storePrompt}
               readOnly={readOnly}
               onChange={handleChange}
-              onPaste={textMode === "json" ? () => {
+              onPaste={textMode === "json" ? () => {  // auto-format only for JSON
                 requestAnimationFrame(() => {
                   const ta = textareaRef.current;
                   if (!ta) return;
@@ -1088,6 +1127,62 @@ function getJsonErrorPos(text: string): number | null {
   }
 }
 
+function syntaxHighlightYaml(yaml: string): ReactNode {
+  const lines = yaml.split("\n");
+  const parts: ReactNode[] = [];
+  let k = 0;
+  lines.forEach((line, i) => {
+    if (/^---/.test(line) || /^\.\.\.$/.test(line)) {
+      parts.push(<span key={k++} style={{ color: "#6b7280" }}>{line}</span>);
+    } else {
+      const keyMatch = line.match(/^(\s*(?:-\s+)?)([\w\-./]+)(\s*:)(.*)/);
+      if (keyMatch) {
+        const [, indent, key, colon, rest] = keyMatch;
+        parts.push(<span key={k++}>{indent}</span>);
+        parts.push(<span key={k++} style={{ color: "#06b6d4" }}>{key}</span>);
+        parts.push(<span key={k++} style={{ color: "#6b7280" }}>{colon}</span>);
+        parts.push(<span key={k++}>{colorYamlValue(rest, k)}</span>);
+        k++;
+      } else {
+        const listMatch = line.match(/^(\s*-\s+)(.*)/);
+        if (listMatch) {
+          parts.push(<span key={k++} style={{ color: "#6b7280" }}>{listMatch[1]}</span>);
+          parts.push(<span key={k++}>{colorYamlValue(listMatch[2], k)}</span>);
+          k++;
+        } else {
+          parts.push(<span key={k++}>{line}</span>);
+        }
+      }
+    }
+    if (i < lines.length - 1) parts.push(<span key={k++}>{"\n"}</span>);
+  });
+  return <>{parts}</>;
+}
+
+function colorYamlValue(value: string, baseKey: number): ReactNode {
+  const commentIdx = value.search(/#/);
+  const main = commentIdx >= 0 ? value.slice(0, commentIdx) : value;
+  const comment = commentIdx >= 0 ? value.slice(commentIdx) : "";
+  let k = baseKey * 100;
+  const out: ReactNode[] = [];
+  const trimmed = main.trim();
+  if (/^(true|false|yes|no|on|off)$/i.test(trimmed)) {
+    out.push(<span key={k++} style={{ color: "#a78bfa" }}>{main}</span>);
+  } else if (/^-?\d+(\.\d+)?([eE][+-]?\d+)?$/.test(trimmed) || /^0x[\da-fA-F]+$/.test(trimmed)) {
+    out.push(<span key={k++} style={{ color: "#fb923c" }}>{main}</span>);
+  } else if (/^(null|~)$/.test(trimmed)) {
+    out.push(<span key={k++} style={{ color: "#a78bfa" }}>{main}</span>);
+  } else if (/^['"]/.test(trimmed)) {
+    out.push(<span key={k++} style={{ color: "#86efac" }}>{main}</span>);
+  } else if (trimmed !== "") {
+    out.push(<span key={k++} style={{ color: "rgba(255,255,255,0.82)" }}>{main}</span>);
+  } else {
+    out.push(<span key={k++}>{main}</span>);
+  }
+  if (comment) out.push(<span key={k++} style={{ color: "#4b5563" }}>{comment}</span>);
+  return <>{out}</>;
+}
+
 function syntaxHighlightJson(json: string, errorPos?: number): ReactNode {
   const parts: ReactNode[] = [];
   let k = 0;
@@ -1120,12 +1215,12 @@ function syntaxHighlightJson(json: string, errorPos?: number): ReactNode {
         push(m.index, m.index + m[1].length, "#06b6d4");             // key
         push(m.index + m[1].length, m.index + m[0].length, "#6b7280"); // colon
       } else {
-        push(m.index, m.index + m[1].length, "white");               // string value
+        push(m.index, m.index + m[1].length, "#86efac");             // string value
       }
     } else if (m[3] !== undefined) {
-      push(m.index, m.index + m[3].length, "white");                 // number
+      push(m.index, m.index + m[3].length, "#fb923c");               // number
     } else if (m[4] !== undefined) {
-      push(m.index, m.index + m[4].length, "white");                 // boolean / null
+      push(m.index, m.index + m[4].length, "#a78bfa");               // boolean / null
     } else if (m[5] !== undefined) {
       push(m.index, m.index + m[5].length, "#6b7280");               // punctuation
     }

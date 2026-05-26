@@ -540,6 +540,9 @@ function resizeTextarea(el: HTMLTextAreaElement, maxH = 264) {
 const loadedImageUrls = new Set<string>();
 const naturalRatioCache = new Map<string, string>(); // url → "w / h"
 
+// Module-level store for gallery drag — avoids dataTransfer.getData() browser quirks
+let _galleryDragItem: { url: string; mediaType: string } | null = null;
+
 // Restore previously discovered aspect ratios and loaded state from
 // sessionStorage so the layout is correct immediately on cold page loads.
 if (typeof window !== "undefined") {
@@ -566,7 +569,7 @@ interface SavedSettings {
   sound?: boolean;
   refImageUrls?: string[];
   azureResolution?: string;
-  promptTextMode?: "text" | "json";
+  promptTextMode?: "text" | "json" | "yaml";
   multiPromptMode?: boolean;
 }
 
@@ -824,7 +827,7 @@ function GalleryInner() {
   useEffect(() => { pendingGensRef.current = pendingGens; }, [pendingGens]);
   const [submitting, setSubmitting] = useState(false);
   const [veoMode, setVeoMode] = useState<"frames" | "references">("frames");
-  const [promptTextMode, setPromptTextMode] = useState<"text" | "json">(() => loadSettings(tab)?.promptTextMode ?? "text");
+  const [promptTextMode, setPromptTextMode] = useState<"text" | "json" | "yaml">(() => loadSettings(tab)?.promptTextMode ?? "text");
   const [multiPromptMode, setMultiPromptMode] = useState<boolean>(() => loadSettings(tab)?.multiPromptMode ?? false);
   const [expandedPromptIdx, setExpandedPromptIdx] = useState<number | null>(null);
   const [genError, setGenError] = useState<string>("");
@@ -861,6 +864,7 @@ function GalleryInner() {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pickerTarget, setPickerTarget] = useState<"refImage" | "startFrame" | "endFrame" | "resource" | "videoRef" | "referenceVideo" | null>(null);
   const [pickerUploadKind, setPickerUploadKind] = useState<"image" | "video">("image");
+  const [dragOverSlotKey, setDragOverSlotKey] = useState<string | null>(null);
 
   // Reference images — restored from localStorage on mount
   const [refImages, setRefImages] = useState<RefImage[]>(() => {
@@ -1923,6 +1927,36 @@ function GalleryInner() {
     setRefImages(prev => [...prev, { id: randomUUID(), objectUrl: url, cdnUrl: url, uploading: false, error: false }]);
   }, [refImages, maxImgs]);
 
+  const handleGalleryItemDrop = useCallback((
+    e: React.DragEvent,
+    target: "refImage" | "startFrame" | "endFrame" | "resource" | "videoRef" | "referenceVideo",
+    expectedKind: "image" | "video",
+  ) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragOverSlotKey(null);
+    const dragged = _galleryDragItem;
+    _galleryDragItem = null;
+    if (!dragged) return;
+    const { url, mediaType } = dragged;
+    if (mediaType !== expectedKind) return;
+    const entry: RefImage = { id: randomUUID(), objectUrl: url, cdnUrl: url, uploading: false, error: false };
+    if (target === "refImage") {
+      handleAddReference(url);
+    } else if (target === "startFrame") {
+      setVidStartFrame(entry);
+      if (modelId === "happyhorse") setVidResources([]);
+    } else if (target === "endFrame") {
+      setVidEndFrame(entry);
+    } else if (target === "videoRef") {
+      setVidVideoRef(entry);
+    } else if (target === "resource") {
+      setVidResources(prev => [...prev, entry]);
+    } else if (target === "referenceVideo") {
+      setVidRefVideos(prev => [...prev, entry]);
+    }
+  }, [handleAddReference, modelId]);
+
   const handleCopyPrompt = useCallback((text: string, refUrls?: string[], meta?: { model?: string; aspectRatio?: string; quality?: string }) => {
     const newRefs = (refUrls ?? []).map(url => ({
       id: randomUUID(), objectUrl: url, cdnUrl: url, uploading: false, error: false,
@@ -2675,7 +2709,7 @@ function GalleryInner() {
                   const isRemoving = removingIds.has(img.id);
                   const isHovered = hoveredRefId === img.id;
                   return (
-                    <div key={img.id} onMouseEnter={() => setHoveredRefId(img.id)} onMouseLeave={() => setHoveredRefId(null)} onClick={() => { if (!img.uploading && !img.error) setRefPreview({ url: img.objectUrl, mediaKind: "image" }); }} style={{ position: "relative", width: "64px", height: "64px", borderRadius: "8px", overflow: "hidden", background: "#1A1C1F", flexShrink: 0, border: img.error ? "1px solid rgba(248,113,113,0.4)" : "1px solid rgba(255,255,255,0.08)", cursor: (!img.uploading && !img.error) ? "zoom-in" : "default", animation: isRemoving ? "none" : "refImgIn 260ms cubic-bezier(0.16,1,0.3,1)", ...(isRemoving ? { transition: "opacity 170ms, transform 170ms", opacity: 0, transform: "translateY(-10px) scale(0.92)" } : {}) }}>
+                    <div key={img.id} onMouseEnter={() => setHoveredRefId(img.id)} onMouseLeave={() => setHoveredRefId(null)} onClick={() => { if (!img.uploading && !img.error) setRefPreview({ url: img.objectUrl, mediaKind: "image" }); }} onDragOver={e => { if (!e.dataTransfer.types.includes("application/x-gallery-item")) return; e.preventDefault(); e.stopPropagation(); e.dataTransfer.dropEffect = "copy"; setDragOverSlotKey(`refimg-filled-${img.id}`); }} onDragLeave={() => setDragOverSlotKey(null)} onDrop={e => handleGalleryItemDrop(e, "refImage", "image")} style={{ position: "relative", width: "64px", height: "64px", borderRadius: "8px", overflow: "hidden", background: "#1A1C1F", flexShrink: 0, border: img.error ? "1px solid rgba(248,113,113,0.4)" : dragOverSlotKey === `refimg-filled-${img.id}` ? "2.5px solid #2DD4BF" : "1px solid rgba(255,255,255,0.08)", boxShadow: dragOverSlotKey === `refimg-filled-${img.id}` ? "0 0 0 3px rgba(45,212,191,0.25)" : undefined, cursor: (!img.uploading && !img.error) ? "zoom-in" : "default", animation: isRemoving ? "none" : "refImgIn 260ms cubic-bezier(0.16,1,0.3,1)", ...(isRemoving ? { transition: "opacity 170ms, transform 170ms", opacity: 0, transform: "translateY(-10px) scale(0.92)" } : {}) }}>
                       {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img src={thumbSrc(img.objectUrl)} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
                       {isHovered && !img.uploading && !img.error && (
@@ -2690,9 +2724,15 @@ function GalleryInner() {
                   );
                 })}
                 {canAddImgs && (
-                  <button onClick={() => openPicker("refImage", "image")} disabled={submitting} style={{ width: "64px", height: "64px", borderRadius: "8px", border: "1.5px dashed rgba(255,255,255,0.2)", background: "rgba(255,255,255,0.03)", cursor: submitting ? "not-allowed" : "pointer", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: "4px", color: "rgba(255,255,255,0.45)", flexShrink: 0, transition: "all 140ms" }}>
+                  <button
+                    onClick={() => openPicker("refImage", "image")}
+                    disabled={submitting}
+                    onDragOver={e => { if (!e.dataTransfer.types.includes("application/x-gallery-item")) return; e.preventDefault(); e.stopPropagation(); e.dataTransfer.dropEffect = "copy"; setDragOverSlotKey("refImage-add"); }}
+                    onDragLeave={() => setDragOverSlotKey(null)}
+                    onDrop={e => handleGalleryItemDrop(e, "refImage", "image")}
+                    style={{ width: "64px", height: "64px", borderRadius: "8px", border: dragOverSlotKey === "refImage-add" ? "2.5px solid #2DD4BF" : "1.5px dashed rgba(255,255,255,0.2)", boxShadow: dragOverSlotKey === "refImage-add" ? "0 0 0 3px rgba(45,212,191,0.25)" : undefined, background: dragOverSlotKey === "refImage-add" ? "rgba(45,212,191,0.07)" : "rgba(255,255,255,0.03)", cursor: submitting ? "not-allowed" : "pointer", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: "4px", color: dragOverSlotKey === "refImage-add" ? "#2DD4BF" : "rgba(255,255,255,0.45)", flexShrink: 0, transition: "all 140ms" }}>
                     <span style={{ fontSize: "9px", fontWeight: 700, letterSpacing: "0.04em" }}>IMAGE</span>
-                    <span style={{ fontSize: "8px", color: "rgba(255,255,255,0.3)" }}>
+                    <span style={{ fontSize: "8px", color: dragOverSlotKey === "refImage-add" ? "#2DD4BF" : "rgba(255,255,255,0.3)" }}>
                       {maxImgs - refImages.length} left
                     </span>
 
@@ -2781,9 +2821,9 @@ function GalleryInner() {
                         );
                         }
                         if (slot.kind === "filled") {
-                        const r = slot.ref; const hovId = `slot-${r.id}`;
+                        const r = slot.ref; const hovId = `slot-${r.id}`; const dragKey = `vidfilled-${r.id}`;
                         return (
-                        <div key={r.id} onMouseEnter={() => setHoveredRefId(hovId)} onMouseLeave={() => setHoveredRefId(null)} style={{ position: "relative", width: "64px", height: "64px", borderRadius: "8px", overflow: "hidden", flexShrink: 0, background: "#1a1c1f", border: r.error ? "1px solid rgba(248,113,113,0.4)" : "1px solid rgba(255,255,255,0.12)" }}>
+                        <div key={r.id} onMouseEnter={() => setHoveredRefId(hovId)} onMouseLeave={() => setHoveredRefId(null)} onDragOver={e => { if (slot.mediaKind === "audio" || !e.dataTransfer.types.includes("application/x-gallery-item")) return; e.preventDefault(); e.stopPropagation(); e.dataTransfer.dropEffect = "copy"; setDragOverSlotKey(dragKey); }} onDragLeave={() => setDragOverSlotKey(null)} onDrop={e => { if (slot.mediaKind !== "audio") handleGalleryItemDrop(e, slot.target as any, slot.mediaKind as "image" | "video"); }} style={{ position: "relative", width: "64px", height: "64px", borderRadius: "8px", overflow: "hidden", flexShrink: 0, background: "#1a1c1f", border: r.error ? "1px solid rgba(248,113,113,0.4)" : dragOverSlotKey === dragKey ? "2.5px solid #2DD4BF" : "1px solid rgba(255,255,255,0.12)", boxShadow: dragOverSlotKey === dragKey ? "0 0 0 3px rgba(45,212,191,0.25)" : undefined }}>
                           {slot.mediaKind === "image" ? <img src={thumbSrc(r.objectUrl)} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} /> : slot.mediaKind === "video" ? <video src={r.objectUrl} autoPlay muted loop playsInline style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} /> : <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(255,255,255,0.04)" }}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg></div>}
                           {hoveredRefId === hovId && !r.uploading && !r.error && slot.mediaKind !== "audio" && (
                             <div onClick={() => setRefPreview({ url: r.objectUrl, mediaKind: slot.mediaKind })} style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,0.35)", display: "flex", alignItems: "center", justifyContent: "center", cursor: "zoom-in", zIndex: 1 }}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.9)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg></div>
@@ -2793,10 +2833,11 @@ function GalleryInner() {
                         </div>
                         );
                         }
+                        const vidAddKey = `vidadd-${slot.target}-${idx}`;
                         return (
-                        <button key={`${slot.target}-add-${idx}`} onClick={() => slot.mediaKind === "audio" ? (vidPickTarget.current = slot.target, vidAudioInputRef.current?.click()) : openPicker(slot.target as any, slot.mediaKind)} disabled={submitting} style={{ width: "64px", height: "64px", borderRadius: "8px", flexShrink: 0, border: "1.5px dashed rgba(255,255,255,0.2)", background: "rgba(255,255,255,0.03)", cursor: submitting ? "not-allowed" : "pointer", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: "2px", color: "rgba(255,255,255,0.4)", transition: "all 140ms" }}>
+                        <button key={`${slot.target}-add-${idx}`} onClick={() => slot.mediaKind === "audio" ? (vidPickTarget.current = slot.target, vidAudioInputRef.current?.click()) : openPicker(slot.target as any, slot.mediaKind)} disabled={submitting} onDragOver={e => { if (slot.mediaKind === "audio" || !e.dataTransfer.types.includes("application/x-gallery-item")) return; e.preventDefault(); e.stopPropagation(); e.dataTransfer.dropEffect = "copy"; setDragOverSlotKey(vidAddKey); }} onDragLeave={() => setDragOverSlotKey(null)} onDrop={e => { if (slot.mediaKind !== "audio") handleGalleryItemDrop(e, slot.target as any, slot.mediaKind as "image" | "video"); }} style={{ width: "64px", height: "64px", borderRadius: "8px", flexShrink: 0, border: dragOverSlotKey === vidAddKey ? "2.5px solid #2DD4BF" : "1.5px dashed rgba(255,255,255,0.2)", boxShadow: dragOverSlotKey === vidAddKey ? "0 0 0 3px rgba(45,212,191,0.25)" : undefined, background: dragOverSlotKey === vidAddKey ? "rgba(45,212,191,0.07)" : "rgba(255,255,255,0.03)", cursor: submitting ? "not-allowed" : "pointer", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: "2px", color: dragOverSlotKey === vidAddKey ? "#2DD4BF" : "rgba(255,255,255,0.4)", transition: "all 140ms" }}>
                         <span style={{ fontSize: "9px", fontWeight: 700, letterSpacing: "0.04em" }}>{slot.label === "Ref Video" ? "VIDEO" : slot.label === "Audio" ? "AUDIO" : slot.label.toUpperCase()}</span>
-                        <span style={{ fontSize: "8px", color: "rgba(255,255,255,0.3)" }}>{slot.countLeft} left</span>
+                        <span style={{ fontSize: "8px", color: dragOverSlotKey === vidAddKey ? "#2DD4BF" : "rgba(255,255,255,0.3)" }}>{slot.countLeft} left</span>
                         </button>
                         );
                   })}
@@ -2900,16 +2941,16 @@ function GalleryInner() {
                   style={{
                     display: "block",
                     fontSize: "14.5px",
-                    fontFamily: promptTextMode === "json" ? "monospace" : "inherit",
+                    fontFamily: promptTextMode !== "text" ? "monospace" : "inherit",
                     lineHeight: "22px",
-                    letterSpacing: promptTextMode === "json" ? "normal" : "-0.01em",
+                    letterSpacing: promptTextMode !== "text" ? "normal" : "-0.01em",
                     whiteSpace: "pre-wrap",
                     wordBreak: "break-word",
                     willChange: "transform",
                   }}
                 >
-                  {promptTextMode === "json" ? (
-                    syntaxHighlightJson(prompt)
+                  {promptTextMode !== "text" ? (
+                    promptTextMode === "yaml" ? syntaxHighlightYaml(prompt) : syntaxHighlightJson(prompt)
                   ) : promptMaxLength !== null && prompt.length > promptMaxLength ? (
                     <>
                       {renderGalleryMentions(
@@ -3041,7 +3082,7 @@ function GalleryInner() {
                           onScroll={e => {
                             const st = e.currentTarget.scrollTop;
                             const wrapper = (e.target as HTMLElement).closest('[data-block-wrapper]');
-                            if (promptTextMode === "json") {
+                            if (promptTextMode !== "text") {
                               const overlay = wrapper?.querySelector('[data-block-overlay]') as HTMLElement | null;
                               if (overlay) overlay.style.transform = `translateY(-${st}px)`;
                             } else {
@@ -3141,9 +3182,9 @@ function GalleryInner() {
                             color: "transparent",
                             caretColor: "#2DD4BF",
                             fontSize: "13.5px",
-                            fontFamily: promptTextMode === "json" ? "monospace" : "inherit",
+                            fontFamily: promptTextMode !== "text" ? "monospace" : "inherit",
                             lineHeight: "22px",
-                            letterSpacing: promptTextMode === "json" ? "normal" : "-0.01em",
+                            letterSpacing: promptTextMode !== "text" ? "normal" : "-0.01em",
                             padding: 0, resize: "none",
                             ...(isExpanded
                               ? { maxHeight: "330px", overflowY: "auto", scrollbarWidth: "none" }
@@ -3151,7 +3192,7 @@ function GalleryInner() {
                             ),
                           } as React.CSSProperties}
                         />
-                        {promptTextMode === "json" ? (
+                        {promptTextMode !== "text" ? (
                           <div aria-hidden style={{ position: "absolute", inset: 0, overflow: "hidden", pointerEvents: "none" }}>
                             <div
                               data-block-overlay=""
@@ -3161,7 +3202,7 @@ function GalleryInner() {
                                 wordBreak: "break-word",
                               }}
                             >
-                              {syntaxHighlightJson(block)}
+                              {promptTextMode === "yaml" ? syntaxHighlightYaml(block) : syntaxHighlightJson(block)}
                             </div>
                           </div>
                         ) : (
@@ -3535,18 +3576,23 @@ function GalleryInner() {
                   </button>
                 )}
 
-                {/* Text / JSON mode toggle */}
+                {/* Text / JSON / YAML mode toggle */}
                 <button
                   onClick={() => {
-                    if (promptTextMode === "text") {
+                    if (promptTextMode !== "text") {
+                      setPromptTextMode("text");
+                    } else {
+                      // Auto-detect format
                       try {
                         const formatted = JSON.stringify(JSON.parse(prompt), null, 2);
                         setPrompt(formatted);
                         requestAnimationFrame(() => { if (inputRef.current) resizeTextarea(inputRef.current); });
-                      } catch { /* not valid JSON — switch anyway */ }
-                      setPromptTextMode("json");
-                    } else {
-                      setPromptTextMode("text");
+                        setPromptTextMode("json");
+                      } catch {
+                        // Not JSON — check for YAML patterns
+                        const looksLikeYaml = /^(\s*[\w\-./]+\s*:|---|\s*-\s)/m.test(prompt);
+                        setPromptTextMode(looksLikeYaml ? "yaml" : "json");
+                      }
                     }
                   }}
                   disabled={submitting}
@@ -3555,8 +3601,8 @@ function GalleryInner() {
                     height: "36px", padding: "0 12px",
                     borderRadius: "8px",
                     border: "1px solid rgba(255,255,255,0.1)",
-                    background: promptTextMode === "json" ? "rgba(45,212,191,0.12)" : "rgba(255,255,255,0.05)",
-                    color: promptTextMode === "json" ? "#2DD4BF" : "rgba(255,255,255,0.55)",
+                    background: promptTextMode !== "text" ? "rgba(45,212,191,0.12)" : "rgba(255,255,255,0.05)",
+                    color: promptTextMode !== "text" ? "#2DD4BF" : "rgba(255,255,255,0.55)",
                     fontSize: "13px", fontFamily: "inherit",
                     cursor: submitting ? "not-allowed" : "pointer",
                     transition: "background 150ms, color 150ms, border-color 150ms",
@@ -3564,19 +3610,19 @@ function GalleryInner() {
                   }}>
                   <span style={{
                     width: "28px", height: "16px", borderRadius: "8px",
-                    background: promptTextMode === "json" ? "#2DD4BF" : "rgba(255,255,255,0.18)",
+                    background: promptTextMode !== "text" ? "#2DD4BF" : "rgba(255,255,255,0.18)",
                     position: "relative", flexShrink: 0,
                     transition: "background 150ms",
                   }}>
                     <span style={{
                       position: "absolute", top: "2px",
-                      left: promptTextMode === "json" ? "14px" : "2px",
+                      left: promptTextMode !== "text" ? "14px" : "2px",
                       width: "12px", height: "12px", borderRadius: "50%",
-                      background: promptTextMode === "json" ? "#0B3B38" : "#ffffff",
+                      background: promptTextMode !== "text" ? "#0B3B38" : "#ffffff",
                       transition: "left 150ms",
                     }} />
                   </span>
-                  JSON
+                  JSON/YAML
                 </button>
               </div>{/* end controls group */}
 
@@ -4704,6 +4750,15 @@ function GalleryCard({
     <div
       ref={cardRef}
       className={`gallery-item${selected ? " gallery-item--selected" : ""}${anySelected ? " gallery-item--anyselected" : ""}`}
+      draggable
+      onDragStart={e => {
+        e.stopPropagation();
+        _galleryDragItem = { url: item.url, mediaType: item.mediaType };
+        e.dataTransfer.setData("application/x-gallery-item", "1");
+        e.dataTransfer.setData("text/plain", item.url);
+        e.dataTransfer.effectAllowed = "copy";
+      }}
+      onDragEnd={() => { _galleryDragItem = null; }}
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
       onClick={anySelected ? onSelect : onOpen}
@@ -4725,6 +4780,7 @@ function GalleryCard({
             loop
             playsInline
             preload="metadata"
+            draggable={false}
             onLoadedData={() => {
               setImgLoaded(true);
               loadedImageUrls.add(item.url);
@@ -4750,6 +4806,7 @@ function GalleryCard({
             key={displayUrl}
             src={shouldLoad ? displayUrl : undefined}
             alt={item.prompt ?? ""}
+            draggable={false}
             decoding="async"
             onLoad={(e) => {
               const img = e.currentTarget;
@@ -5034,12 +5091,12 @@ function syntaxHighlightJson(json: string): React.ReactNode {
         push(m.index, m.index + m[1].length, "#06b6d4");
         push(m.index + m[1].length, m.index + m[0].length, "#6b7280");
       } else {
-        push(m.index, m.index + m[1].length, "white");
+        push(m.index, m.index + m[1].length, "#86efac");
       }
     } else if (m[3] !== undefined) {
-      push(m.index, m.index + m[3].length, "white");
+      push(m.index, m.index + m[3].length, "#fb923c");
     } else if (m[4] !== undefined) {
-      push(m.index, m.index + m[4].length, "white");
+      push(m.index, m.index + m[4].length, "#a78bfa");
     } else if (m[5] !== undefined) {
       push(m.index, m.index + m[5].length, "#6b7280");
     }
@@ -5047,6 +5104,67 @@ function syntaxHighlightJson(json: string): React.ReactNode {
   }
   push(last, json.length);
   return <>{parts}</>;
+}
+
+function syntaxHighlightYaml(yaml: string): React.ReactNode {
+  const lines = yaml.split("\n");
+  const parts: React.ReactNode[] = [];
+  let k = 0;
+  lines.forEach((line, i) => {
+    // Directive / document markers
+    if (/^---/.test(line) || /^\.\.\.$/.test(line)) {
+      parts.push(<span key={k++} style={{ color: "#6b7280" }}>{line}</span>);
+    } else {
+      // Key: value  (handles indent + optional list marker)
+      const keyMatch = line.match(/^(\s*(?:-\s+)?)([\w\-./]+)(\s*:)(.*)/);
+      if (keyMatch) {
+        const [, indent, key, colon, rest] = keyMatch;
+        parts.push(<span key={k++}>{indent}</span>);
+        parts.push(<span key={k++} style={{ color: "#06b6d4" }}>{key}</span>);
+        parts.push(<span key={k++} style={{ color: "#6b7280" }}>{colon}</span>);
+        // Color the value portion
+        parts.push(<span key={k++}>{colorYamlValue(rest, k)}</span>);
+        k++;
+      } else {
+        // List item or plain value
+        const listMatch = line.match(/^(\s*-\s+)(.*)/);
+        if (listMatch) {
+          parts.push(<span key={k++} style={{ color: "#6b7280" }}>{listMatch[1]}</span>);
+          parts.push(<span key={k++}>{colorYamlValue(listMatch[2], k)}</span>);
+          k++;
+        } else {
+          parts.push(<span key={k++}>{line}</span>);
+        }
+      }
+    }
+    if (i < lines.length - 1) parts.push(<span key={k++}>{"\n"}</span>);
+  });
+  return <>{parts}</>;
+}
+
+function colorYamlValue(value: string, baseKey: number): React.ReactNode {
+  // Inline comment
+  const commentIdx = value.search(/#/);
+  const main = commentIdx >= 0 ? value.slice(0, commentIdx) : value;
+  const comment = commentIdx >= 0 ? value.slice(commentIdx) : "";
+  let k = baseKey * 100;
+  const out: React.ReactNode[] = [];
+  const trimmed = main.trim();
+  if (/^(true|false|yes|no|on|off)$/i.test(trimmed)) {
+    out.push(<span key={k++} style={{ color: "#a78bfa" }}>{main}</span>);
+  } else if (/^-?\d+(\.\d+)?([eE][+-]?\d+)?$/.test(trimmed) || /^0x[\da-fA-F]+$/.test(trimmed)) {
+    out.push(<span key={k++} style={{ color: "#fb923c" }}>{main}</span>);
+  } else if (/^(null|~)$/.test(trimmed)) {
+    out.push(<span key={k++} style={{ color: "#a78bfa" }}>{main}</span>);
+  } else if (/^['"]/.test(trimmed)) {
+    out.push(<span key={k++} style={{ color: "#86efac" }}>{main}</span>);
+  } else if (trimmed !== "") {
+    out.push(<span key={k++} style={{ color: "rgba(255,255,255,0.82)" }}>{main}</span>);
+  } else {
+    out.push(<span key={k++}>{main}</span>);
+  }
+  if (comment) out.push(<span key={k++} style={{ color: "#4b5563" }}>{comment}</span>);
+  return <>{out}</>;
 }
 
 function renderLightboxPrompt(
