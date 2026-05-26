@@ -396,9 +396,8 @@ function randomUUID(): string {
   });
 }
 
-function thumbSrc(url: string, w = 128): string {
-  if (!url || url.startsWith("blob:") || url.startsWith("data:")) return url;
-  return `/_next/image?url=${encodeURIComponent(url)}&w=${w}&q=75`;
+function thumbSrc(url: string, _w = 128): string {
+  return url;
 }
 
 interface RefImage {
@@ -2243,7 +2242,7 @@ function GalleryInner() {
           bump();
         };
         img.onerror = () => { naturalRatioCache.set(item.url, "4 / 3"); bump(); };
-        img.src = `/_next/image?url=${encodeURIComponent(probeUrl)}&w=32&q=75`;
+        img.src = probeUrl;
       }
     });
 
@@ -4749,7 +4748,7 @@ function GalleryCard({
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             key={displayUrl}
-            src={shouldLoad ? `/_next/image?url=${encodeURIComponent(displayUrl)}&w=828&q=75` : undefined}
+            src={shouldLoad ? displayUrl : undefined}
             alt={item.prompt ?? ""}
             decoding="async"
             onLoad={(e) => {
@@ -5270,7 +5269,7 @@ function Lightbox({ item, onClose, onCopyPrompt, onPrev, onNext }: { item: Galle
           ) : (
             <>
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img key={`blur-${lightboxUrl}`} src={`/_next/image?url=${encodeURIComponent(lightboxUrl)}&w=828&q=75`} alt="" aria-hidden style={{
+              <img key={`blur-${lightboxUrl}`} src={lightboxUrl} alt="" aria-hidden style={{
                 display: "block",
                 maxHeight: zoomed ? "100vh" : "calc(100vh - 48px)",
                 maxWidth: zoomed ? "100vw" : "100%",

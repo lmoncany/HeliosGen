@@ -389,7 +389,7 @@ export function MediaPickerModal({
                       onLoadedMetadata={(e) => { (e.target as HTMLVideoElement).currentTime = 0.001; }}
                     />
                   ) : (
-                    <PickerImage src={`/_next/image?url=${encodeURIComponent(item.url)}&w=128&q=75`} />
+                    <PickerImage src={item.url} />
                   )}
                   {item.mediaType === "video" && (
                     <div className="picker-play-icon" style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", pointerEvents: "none", transition: "opacity 120ms" }}>

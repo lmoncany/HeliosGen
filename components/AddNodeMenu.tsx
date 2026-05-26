@@ -213,8 +213,7 @@ export default function AddNodeMenu({ anchorRect, onClose }: AddNodeMenuProps) {
     async (url: string, mediaType: "image" | "video") => {
       setPickerOpen(false);
       if (mediaType === "image") {
-        // Read dimensions from the thumbnail already cached in the browser
-        const thumbnailSrc = `/_next/image?url=${encodeURIComponent(url)}&w=128&q=75`;
+        const thumbnailSrc = url;
         const ratio = await new Promise<string | undefined>((resolve) => {
           const img = new window.Image();
           let done = false;
