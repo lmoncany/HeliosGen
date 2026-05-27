@@ -87,9 +87,13 @@ export function MediaPickerModal({
     setUrlError("");
     setUrlLoading(true);
     try {
+      const token = await getToken();
       const res = await fetch("/api/fetch-url", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
         body: JSON.stringify({ url: trimmed }),
       });
       const data = await res.json() as { cdnUrl?: string; mediaType?: "image" | "video"; error?: string };
