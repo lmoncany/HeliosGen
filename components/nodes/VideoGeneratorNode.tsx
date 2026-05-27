@@ -1552,18 +1552,20 @@ export default function VideoGeneratorNode({ id, data, selected }: NodeProps<Vid
                 {isPending ? "Pending" : "Generating…"}
               </span>
             </div>
-            <button
-              onMouseDown={(e) => e.stopPropagation()}
-              onClick={(e) => { e.stopPropagation(); handleCancel(); }}
-              className="ml-auto flex items-center gap-1.5 h-7 px-3 rounded-full transition-colors hover:bg-white/10"
-              style={{ background: "rgba(0,0,0,0.58)", backdropFilter: "blur(10px)", border: "1px solid rgba(255,255,255,0.08)", flexShrink: 0 }}
-            >
-              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.7)" strokeWidth="2" strokeLinecap="round">
-                <circle cx="12" cy="12" r="9" />
-                <path d="m6 6 12 12" />
-              </svg>
-              <span className="text-[11px] text-[#ccc] font-medium">Cancel</span>
-            </button>
+            {isPending && (
+              <button
+                onMouseDown={(e) => e.stopPropagation()}
+                onClick={(e) => { e.stopPropagation(); handleCancel(); }}
+                className="ml-auto flex items-center gap-1.5 h-7 px-3 rounded-full transition-colors hover:bg-white/10"
+                style={{ background: "rgba(0,0,0,0.58)", backdropFilter: "blur(10px)", border: "1px solid rgba(255,255,255,0.08)", flexShrink: 0 }}
+              >
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.7)" strokeWidth="2" strokeLinecap="round">
+                  <circle cx="12" cy="12" r="9" />
+                  <path d="m6 6 12 12" />
+                </svg>
+                <span className="text-[11px] text-[#ccc] font-medium">Cancel</span>
+              </button>
+            )}
           </div>
         )}
 

@@ -639,26 +639,28 @@ function PendingGenTile({ pg, onCancel }: { pg: PendingGen; onCancel: () => void
           </span>
         </div>
 
-        {/* Cancel pill */}
-        <button
-          onClick={onCancel}
-          style={{
-            flexShrink: 0,
-            display: "flex", alignItems: "center", gap: "5px",
-            height: "26px", padding: "0 10px", borderRadius: "999px",
-            background: "rgba(0,0,0,0.58)", backdropFilter: "blur(10px)",
-            border: "1px solid rgba(255,255,255,0.08)", cursor: "pointer",
-            transition: "background 140ms",
-          }}
-          onMouseEnter={e => (e.currentTarget.style.background = "rgba(255,255,255,0.1)")}
-          onMouseLeave={e => (e.currentTarget.style.background = "rgba(0,0,0,0.58)")}
-        >
-          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.7)" strokeWidth="2" strokeLinecap="round">
-            <circle cx="12" cy="12" r="9" />
-            <path d="m6 6 12 12" />
-          </svg>
-          <span style={{ fontSize: "11px", color: "#ccc", fontWeight: 500 }}>Cancel</span>
-        </button>
+        {/* Cancel pill — only before generation starts */}
+        {pg.prePending && (
+          <button
+            onClick={onCancel}
+            style={{
+              flexShrink: 0,
+              display: "flex", alignItems: "center", gap: "5px",
+              height: "26px", padding: "0 10px", borderRadius: "999px",
+              background: "rgba(0,0,0,0.58)", backdropFilter: "blur(10px)",
+              border: "1px solid rgba(255,255,255,0.08)", cursor: "pointer",
+              transition: "background 140ms",
+            }}
+            onMouseEnter={e => (e.currentTarget.style.background = "rgba(255,255,255,0.1)")}
+            onMouseLeave={e => (e.currentTarget.style.background = "rgba(0,0,0,0.58)")}
+          >
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.7)" strokeWidth="2" strokeLinecap="round">
+              <circle cx="12" cy="12" r="9" />
+              <path d="m6 6 12 12" />
+            </svg>
+            <span style={{ fontSize: "11px", color: "#ccc", fontWeight: 500 }}>Cancel</span>
+          </button>
+        )}
       </div>
 
       {/* Bottom: prompt */}
