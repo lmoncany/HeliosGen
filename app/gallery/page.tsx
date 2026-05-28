@@ -6,7 +6,7 @@ import { createClient } from "@/lib/supabase/client";
 import { IMAGE_MODELS, VIDEO_MODELS } from "@/lib/modelConfig";
 import { useWorkflowStore } from "@/lib/store";
 import type { User } from "@supabase/supabase-js";
-import { ShieldAlert } from "lucide-react";
+import { Maximize2, Minimize2, ShieldAlert } from "lucide-react";
 import { GalleryItem, getToken, galleryCache } from "@/lib/galleryUtils";
 import { useFolderStore } from "@/lib/folderStore";
 import { MediaPickerModal } from "@/components/MediaPickerModal";
@@ -887,6 +887,7 @@ function GalleryInner() {
   const [promptTextMode, setPromptTextMode] = useState<"text" | "json" | "yaml">(() => loadSettings(tab)?.promptTextMode ?? "text");
   const [multiPromptMode, setMultiPromptMode] = useState<boolean>(() => loadSettings(tab)?.multiPromptMode ?? false);
   const [expandedPromptIdx, setExpandedPromptIdx] = useState<number | null>(null);
+  const [promptExpanded, setPromptExpanded] = useState(false);
   const [genError, setGenError] = useState<string>("");
   const debugMode        = useWorkflowStore((s) => s.debugMode);
   const addToast         = useWorkflowStore((s) => s.addToast);
@@ -1223,6 +1224,13 @@ function GalleryInner() {
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (inputRef.current && !multiPromptMode) {
+      const maxH = promptExpanded ? window.innerHeight * 0.75 - 220 : 264;
+      requestAnimationFrame(() => { if (inputRef.current) resizeTextarea(inputRef.current, maxH); });
+    }
+  }, [promptExpanded, multiPromptMode]);
 
   useEffect(() => {
     if (skipNextModelEffect.current) { skipNextModelEffect.current = false; return; }
@@ -2909,12 +2917,13 @@ function GalleryInner() {
         style={{
           position: "fixed",
           bottom: "32px",
-          left: isMobile ? "50%" : state === "collapsed" ? "calc(var(--sidebar-width-icon) / 2 + 50%)" : "calc(var(--sidebar-width) / 2 + 50%)",
-          transform: `translateX(-50%) translateY(${anySelected ? "200px" : "0"})`,
-          opacity: anySelected ? 0 : 1,
-          transition: "transform 350ms cubic-bezier(0.4,0,0.2,1), opacity 240ms ease, left 200ms ease-linear",
-          pointerEvents: anySelected ? "none" : "auto",
-          width: "min(860px, calc(100vw - 32px))",
+          left: promptExpanded ? "50%" : (isMobile ? "50%" : state === "collapsed" ? "calc(var(--sidebar-width-icon) / 2 + 50%)" : "calc(var(--sidebar-width) / 2 + 50%)"),
+          transform: `translateX(-50%) translateY(${anySelected && !promptExpanded ? "200px" : "0"})`,
+          opacity: anySelected && !promptExpanded ? 0 : 1,
+          transition: "transform 350ms cubic-bezier(0.4,0,0.2,1), opacity 240ms ease, left 350ms cubic-bezier(0.4,0,0.2,1), width 350ms cubic-bezier(0.4,0,0.2,1), height 350ms cubic-bezier(0.4,0,0.2,1)",
+          pointerEvents: anySelected && !promptExpanded ? "none" : "auto",
+          width: promptExpanded ? "75vw" : "min(860px, calc(100vw - 32px))",
+          height: promptExpanded ? "75vh" : "auto",
           zIndex: 200,
         }}
       >
@@ -2935,6 +2944,7 @@ function GalleryInner() {
         )}
 
         <div style={{
+          position: "relative",
           background: "rgba(14,16,18,0.55)",
           backdropFilter: "blur(48px)",
           WebkitBackdropFilter: "blur(48px)",
@@ -2942,7 +2952,42 @@ function GalleryInner() {
           borderRadius: "18px",
           boxShadow: "0 28px 80px rgba(0,0,0,0.9), 0 4px 20px rgba(0,0,0,0.5)",
           overflow: "hidden",
+          height: promptExpanded ? "100%" : undefined,
+          display: promptExpanded ? "flex" : undefined,
+          flexDirection: promptExpanded ? "column" : undefined,
         }}>
+
+          {/* Expand / collapse button */}
+          <button
+            onClick={() => setPromptExpanded(v => !v)}
+            title={promptExpanded ? "Collapse prompt" : "Expand prompt"}
+            style={{
+              position: "absolute",
+              top: "10px",
+              right: "12px",
+              width: "26px",
+              height: "26px",
+              borderRadius: "8px",
+              border: "none",
+              background: "rgba(255,255,255,0.06)",
+              color: "rgba(255,255,255,0.35)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              cursor: "pointer",
+              zIndex: 10,
+              transition: "background 140ms, color 140ms",
+              flexShrink: 0,
+            }}
+            onMouseEnter={e => { e.currentTarget.style.background = "rgba(255,255,255,0.12)"; e.currentTarget.style.color = "rgba(255,255,255,0.75)"; }}
+            onMouseLeave={e => { e.currentTarget.style.background = "rgba(255,255,255,0.06)"; e.currentTarget.style.color = "rgba(255,255,255,0.35)"; }}
+          >
+            {promptExpanded ? (
+              <Minimize2 size={12} strokeWidth={2.2} />
+            ) : (
+              <Maximize2 size={12} strokeWidth={2.2} />
+            )}
+          </button>
 
           {/* ── Reference image thumbnails (Always visible, integrated) ── */}
           <div style={{ maxHeight: "200px", overflowY: "auto", borderBottom: "none" }}>
@@ -3096,6 +3141,8 @@ function GalleryInner() {
             display: "flex",
             flexDirection: "column",
             gap: "10px",
+            flex: promptExpanded ? 1 : undefined,
+            overflowY: promptExpanded ? "auto" : undefined,
           }}>
             {/* Multi-prompt mode strip */}
             {multiPromptMode && (
@@ -3164,7 +3211,7 @@ function GalleryInner() {
                   letterSpacing: promptTextMode !== "text" ? "normal" : "-0.01em",
                   padding: 0,
                   resize: "none",
-                  maxHeight: "264px",
+                  maxHeight: promptExpanded ? "calc(75vh - 220px)" : "264px",
                   overflowY: "auto",
                   scrollbarWidth: "none",
                 } as React.CSSProperties}
