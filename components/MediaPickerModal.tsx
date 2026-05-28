@@ -1,5 +1,5 @@
 "use client";
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { GalleryItem, galleryCache, getToken } from "@/lib/galleryUtils";
 
@@ -58,24 +58,38 @@ export function MediaPickerModal({
   mediaKind,
   onClose,
   onPickUrl,
+  onDeselect,
   onUpload,
   anchorRef,
   x,
   y,
+  selectedUrls,
+  maxCount,
 }: {
   open: boolean;
   mediaKind: "image" | "video" | "any";
   onClose: () => void;
   onPickUrl: (url: string, mediaType: "image" | "video") => void;
+  onDeselect?: (url: string) => void;
   onUpload?: () => void;
   anchorRef?: React.RefObject<HTMLElement | null>;
   x?: number;
   y?: number;
+  selectedUrls?: string[];
+  maxCount?: number;
 }) {
   const defaultTab: TabId = mediaKind === "image" ? "image-gen" : mediaKind === "video" ? "video-gen" : "uploads";
   const [activeTab, setActiveTab] = useState<TabId>(defaultTab);
   const [sourceItems, setSourceItems] = useState<GalleryItem[]>([]);
   const [fetching, setFetching] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const imagePageRef = useRef(0);
+  const videoPageRef = useRef(0);
+  const imageHasMoreRef = useRef(true);
+  const videoHasMoreRef = useRef(true);
+  const loadingMoreRef = useRef(false);
+  const activeTabRef = useRef<TabId>(defaultTab);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState({ left: 0, top: 0, bottom: 0, width: 0, isAnchored: false, isCustom: false });
   const [urlInput, setUrlInput] = useState("");
   const [urlLoading, setUrlLoading] = useState(false);
@@ -123,6 +137,10 @@ export function MediaPickerModal({
       targetLeft = rect.left;
       targetBottom = window.innerHeight - rect.top + 6;
       targetWidth = rect.width;
+      // Clamp so the modal never overflows the top of the viewport
+      const modalH = 88 + 0.25 * (targetWidth - 64);
+      targetBottom = Math.min(targetBottom, window.innerHeight - modalH - 8);
+      targetBottom = Math.max(targetBottom, 8);
       anchored = true;
     } else if (x !== undefined && y !== undefined) {
       // Position at cursor
@@ -144,9 +162,62 @@ export function MediaPickerModal({
     });
   }, [open, anchorRef, x, y]);
 
+  const loadMore = useCallback(async () => {
+    if (loadingMoreRef.current) return;
+    const needsImg = (mediaKind === "image" || mediaKind === "any") && imageHasMoreRef.current;
+    const needsVid = (mediaKind === "video" || mediaKind === "any") && videoHasMoreRef.current;
+    if (!needsImg && !needsVid) return;
+
+    loadingMoreRef.current = true;
+    setLoadingMore(true);
+    try {
+      const token = await getToken();
+      if (!token) return;
+      const fetches: Promise<void>[] = [];
+      if (needsImg) {
+        const nextPage = imagePageRef.current + 1;
+        fetches.push(
+          fetch(`/api/gallery?type=image&page=${nextPage}`, { headers: { Authorization: `Bearer ${token}` } })
+            .then(r => r.ok ? r.json() as Promise<{ items: GalleryItem[]; hasMore: boolean }> : null)
+            .then(data => {
+              if (!data) return;
+              imageHasMoreRef.current = data.hasMore;
+              imagePageRef.current = nextPage;
+              setSourceItems(prev => mergeByNewest(prev, data.items));
+            })
+        );
+      }
+      if (needsVid) {
+        const nextPage = videoPageRef.current + 1;
+        fetches.push(
+          fetch(`/api/gallery?type=video&page=${nextPage}`, { headers: { Authorization: `Bearer ${token}` } })
+            .then(r => r.ok ? r.json() as Promise<{ items: GalleryItem[]; hasMore: boolean }> : null)
+            .then(data => {
+              if (!data) return;
+              videoHasMoreRef.current = data.hasMore;
+              videoPageRef.current = nextPage;
+              setSourceItems(prev => mergeByNewest(prev, data.items));
+            })
+        );
+      }
+      await Promise.all(fetches);
+    } finally {
+      loadingMoreRef.current = false;
+      setLoadingMore(false);
+    }
+  }, [mediaKind]);
+
   useEffect(() => {
     if (!open) { setUrlInput(""); setUrlError(""); return; }
     setActiveTab(defaultTab);
+    activeTabRef.current = defaultTab;
+
+    // Reset pagination
+    imagePageRef.current = 0;
+    videoPageRef.current = 0;
+    imageHasMoreRef.current = true;
+    videoHasMoreRef.current = true;
+    loadingMoreRef.current = false;
 
     if (mediaKind === "any") {
       const cached = [
@@ -169,16 +240,20 @@ export function MediaPickerModal({
           fetch("/api/gallery?type=video&page=0", { headers: { Authorization: `Bearer ${token}` } }),
         ]);
         const [imgData, vidData] = await Promise.all([
-          imgRes.ok ? (imgRes.json() as Promise<{ items: GalleryItem[] }>) : Promise.resolve({ items: [] as GalleryItem[] }),
-          vidRes.ok ? (vidRes.json() as Promise<{ items: GalleryItem[] }>) : Promise.resolve({ items: [] as GalleryItem[] }),
+          imgRes.ok ? (imgRes.json() as Promise<{ items: GalleryItem[]; hasMore: boolean }>) : Promise.resolve({ items: [] as GalleryItem[], hasMore: false }),
+          vidRes.ok ? (vidRes.json() as Promise<{ items: GalleryItem[]; hasMore: boolean }>) : Promise.resolve({ items: [] as GalleryItem[], hasMore: false }),
         ]);
+        imageHasMoreRef.current = imgData.hasMore;
+        videoHasMoreRef.current = vidData.hasMore;
         setSourceItems(prev => mergeByNewest(prev, [...imgData.items, ...vidData.items]));
       } else {
         const res = await fetch(`/api/gallery?type=${mediaKind}&page=0`, {
           headers: { Authorization: `Bearer ${token}` },
         });
         if (res.ok) {
-          const data = await res.json() as { items: GalleryItem[] };
+          const data = await res.json() as { items: GalleryItem[]; hasMore: boolean };
+          if (mediaKind === "image") imageHasMoreRef.current = data.hasMore;
+          else videoHasMoreRef.current = data.hasMore;
           setSourceItems(prev => mergeByNewest(prev, data.items));
         }
       }
@@ -186,6 +261,28 @@ export function MediaPickerModal({
     })();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, mediaKind]);
+
+  // Keep activeTabRef in sync
+  useEffect(() => { activeTabRef.current = activeTab; }, [activeTab]);
+
+  // Infinite scroll for the picker
+  useEffect(() => {
+    const el = scrollContainerRef.current;
+    if (!el || !open) return;
+
+    const checkAndLoad = () => {
+      if (loadingMoreRef.current) return;
+      const needsImg = (mediaKind === "image" || mediaKind === "any") && imageHasMoreRef.current;
+      const needsVid = (mediaKind === "video" || mediaKind === "any") && videoHasMoreRef.current;
+      if (!needsImg && !needsVid) return;
+      if (el.scrollHeight - el.scrollTop - el.clientHeight < 300) {
+        loadMore();
+      }
+    };
+
+    el.addEventListener("scroll", checkAndLoad, { passive: true });
+    return () => el.removeEventListener("scroll", checkAndLoad);
+  }, [open, mediaKind, loadMore, loadingMore]);
 
   const displayItems = useMemo(() => {
     if (activeTab === "uploads")   return sourceItems.filter((i) => i.source === "upload");
@@ -256,10 +353,21 @@ export function MediaPickerModal({
               </button>
             );
           })}
+          {maxCount !== undefined && (
+            <span style={{
+              marginLeft: "8px", fontSize: "11px", fontWeight: 500,
+              padding: "3px 8px", borderRadius: "100px",
+              background: (selectedUrls?.length ?? 0) >= maxCount ? "rgba(45,212,191,0.15)" : "rgba(255,255,255,0.07)",
+              color: (selectedUrls?.length ?? 0) >= maxCount ? "#2DD4BF" : "rgba(255,255,255,0.4)",
+              flexShrink: 0,
+            }}>
+              {selectedUrls?.length ?? 0}/{maxCount}
+            </span>
+          )}
           <button
             onClick={onClose}
             style={{
-              marginLeft: "auto", width: "28px", height: "28px", borderRadius: "50%", flexShrink: 0,
+              marginLeft: maxCount !== undefined ? "4px" : "auto", width: "28px", height: "28px", borderRadius: "50%", flexShrink: 0,
               background: "rgba(255,255,255,0.07)", border: "none",
               color: "rgba(255,255,255,0.6)", cursor: "pointer",
               display: "flex", alignItems: "center", justifyContent: "center", transition: "background 120ms",
@@ -324,7 +432,7 @@ export function MediaPickerModal({
         </div>
 
         {/* Scrollable grid */}
-        <div className="picker-scroll" style={{ flex: 1, overflowY: "auto", overflowX: "hidden", padding: "14px 18px 18px" }}>
+        <div ref={scrollContainerRef} className="picker-scroll" style={{ flex: 1, overflowY: "auto", overflowX: "hidden", padding: "14px 18px 18px" }}>
           {fetching && displayItems.length === 0 ? (
             <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "200px" }}>
               <span style={{ width: "24px", height: "24px", borderRadius: "50%", border: "2px solid rgba(255,255,255,0.1)", borderTopColor: "#2DD4BF", display: "inline-block", animation: "spin 0.75s linear infinite" }} />
@@ -356,62 +464,85 @@ export function MediaPickerModal({
                 </button>
               )}
 
-              {displayItems.map((item) => (
-                <button
-                  key={item.id}
-                  onClick={() => onPickUrl(item.url, item.mediaType)}
-                  style={{
-                    position: "relative", aspectRatio: "1", borderRadius: "8px", overflow: "hidden",
-                    background: "#1a1c1f", border: "2px solid transparent",
-                    cursor: "pointer", padding: 0,
-                    transition: "border-color 110ms, transform 110ms",
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.borderColor = "rgba(255,255,255,0.5)";
-                    e.currentTarget.style.transform = "scale(1.04)";
-                    const v = e.currentTarget.querySelector("video");
-                    if (v) v.play().catch(() => {});
-                    const overlay = e.currentTarget.querySelector<HTMLElement>(".picker-play-icon");
-                    if (overlay) overlay.style.opacity = "0";
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.borderColor = "transparent";
-                    e.currentTarget.style.transform = "scale(1)";
-                    const v = e.currentTarget.querySelector("video");
-                    if (v) { v.pause(); v.currentTime = 0; }
-                    const overlay = e.currentTarget.querySelector<HTMLElement>(".picker-play-icon");
-                    if (overlay) overlay.style.opacity = "1";
-                  }}
-                >
-                  {item.mediaType === "video" ? (
-                    <video
-                      src={item.url}
-                      muted
-                      playsInline
-                      preload="metadata"
-                      style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
-                      onLoadedMetadata={(e) => { (e.target as HTMLVideoElement).currentTime = 0.001; }}
-                    />
-                  ) : (
-                    <PickerImage src={item.url} />
-                  )}
-                  {item.mediaType === "video" && (
-                    <div className="picker-play-icon" style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", pointerEvents: "none", transition: "opacity 120ms" }}>
-                      <div style={{ width: "26px", height: "26px", borderRadius: "50%", background: "rgba(0,0,0,0.55)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                        <svg width="9" height="9" viewBox="0 0 24 24" fill="white">
-                          <polygon points="5 3 19 12 5 21 5 3" />
+              {displayItems.map((item) => {
+                const isSelected = selectedUrls?.includes(item.url) ?? false;
+                const atLimit = maxCount !== undefined && (selectedUrls?.length ?? 0) >= maxCount;
+                const isDisabled = !isSelected && atLimit;
+                return (
+                  <button
+                    key={item.id}
+                    onClick={() => {
+                      if (isSelected) { onDeselect?.(item.url); return; }
+                      if (!isDisabled) onPickUrl(item.url, item.mediaType);
+                    }}
+                    style={{
+                      position: "relative", aspectRatio: "1", borderRadius: "8px", overflow: "hidden",
+                      background: "#1a1c1f",
+                      border: isSelected ? "2px solid #2DD4BF" : "2px solid transparent",
+                      cursor: isDisabled ? "not-allowed" : "pointer", padding: 0,
+                      transition: "border-color 110ms, transform 110ms, opacity 110ms",
+                      opacity: isDisabled ? 0.35 : 1,
+                    }}
+                    onMouseEnter={(e) => {
+                      if (isDisabled) return;
+                      if (!isSelected) e.currentTarget.style.borderColor = "rgba(255,255,255,0.5)";
+                      e.currentTarget.style.transform = "scale(1.04)";
+                      const v = e.currentTarget.querySelector("video");
+                      if (v) v.play().catch(() => {});
+                      const overlay = e.currentTarget.querySelector<HTMLElement>(".picker-play-icon");
+                      if (overlay) overlay.style.opacity = "0";
+                    }}
+                    onMouseLeave={(e) => {
+                      if (!isSelected) e.currentTarget.style.borderColor = "transparent";
+                      e.currentTarget.style.transform = "scale(1)";
+                      const v = e.currentTarget.querySelector("video");
+                      if (v) { v.pause(); v.currentTime = 0; }
+                      const overlay = e.currentTarget.querySelector<HTMLElement>(".picker-play-icon");
+                      if (overlay) overlay.style.opacity = "1";
+                    }}
+                  >
+                    {item.mediaType === "video" ? (
+                      <video
+                        src={item.url}
+                        muted
+                        playsInline
+                        preload="metadata"
+                        style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+                        onLoadedMetadata={(e) => { (e.target as HTMLVideoElement).currentTime = 0.001; }}
+                      />
+                    ) : (
+                      <PickerImage src={item.url} />
+                    )}
+                    {item.mediaType === "video" && (
+                      <div className="picker-play-icon" style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", pointerEvents: "none", transition: "opacity 120ms" }}>
+                        <div style={{ width: "26px", height: "26px", borderRadius: "50%", background: "rgba(0,0,0,0.55)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                          <svg width="9" height="9" viewBox="0 0 24 24" fill="white">
+                            <polygon points="5 3 19 12 5 21 5 3" />
+                          </svg>
+                        </div>
+                      </div>
+                    )}
+                    {isSelected && (
+                      <div style={{ position: "absolute", top: "4px", right: "4px", width: "18px", height: "18px", borderRadius: "50%", background: "#2DD4BF", display: "flex", alignItems: "center", justifyContent: "center", pointerEvents: "none" }}>
+                        <svg width="9" height="9" viewBox="0 0 12 12" fill="none" stroke="#000" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                          <polyline points="2 6 5 9 10 3" />
                         </svg>
                       </div>
-                    </div>
-                  )}
-                </button>
-              ))}
+                    )}
+                  </button>
+                );
+              })}
 
               {displayItems.length === 0 && !fetching && (
                 <div style={{ gridColumn: "1 / -1", padding: "48px 0", textAlign: "center", color: "rgba(255,255,255,0.22)", fontSize: "13px" }}>
                   Nothing here yet
                 </div>
               )}
+            </div>
+          )}
+          {loadingMore && (
+            <div style={{ padding: "16px", display: "flex", justifyContent: "center" }}>
+              <span style={{ width: "18px", height: "18px", borderRadius: "50%", border: "2px solid rgba(255,255,255,0.1)", borderTopColor: "#2DD4BF", display: "inline-block", animation: "spin 0.75s linear infinite" }} />
             </div>
           )}
         </div>

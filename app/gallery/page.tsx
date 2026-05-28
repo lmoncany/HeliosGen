@@ -940,6 +940,7 @@ function GalleryInner() {
   // Media picker
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pickerTarget, setPickerTarget] = useState<"refImage" | "startFrame" | "endFrame" | "resource" | "videoRef" | "referenceVideo" | null>(null);
+  const pickerTargetRef = useRef<typeof pickerTarget>(null);
   const [pickerUploadKind, setPickerUploadKind] = useState<"image" | "video">("image");
   const [dragOverSlotKey, setDragOverSlotKey] = useState<string | null>(null);
 
@@ -1289,25 +1290,22 @@ function GalleryInner() {
   useEffect(() => { loadingMoreRef.current = loadingMore; }, [loadingMore]);
   useEffect(() => { hasMoreRef.current = hasMore; }, [hasMore]);
 
-  // Infinite scroll — recreate observer after each load so the callback re-fires if sentinel
-  // is already in view (IntersectionObserver only fires on intersection *changes* otherwise)
+  // Infinite scroll — scroll events are reliable; the immediate checkAndLoad() call handles
+  // the case where content doesn't fill the container after a page loads (no scroll event fires)
   useEffect(() => {
-    const sentinel = sentinelRef.current;
     const container = gridOuterRef.current;
-    if (!sentinel || !container || !hasMore) return;
+    if (!container || !hasMore) return;
 
-    const observer = new IntersectionObserver((entries) => {
-      if (entries[0].isIntersecting && hasMoreRef.current && !loadingRef.current && !loadingMoreRef.current) {
+    const checkAndLoad = () => {
+      if (!hasMoreRef.current || loadingRef.current || loadingMoreRef.current) return;
+      if (container.scrollHeight - container.scrollTop - container.clientHeight < 800) {
         loadItems(tabRef.current, pageRef.current + 1);
       }
-    }, {
-      root: container,
-      rootMargin: "800px 0px"
-    });
-    observer.observe(sentinel);
-    return () => observer.disconnect();
-  // loading/loadingMore in deps so observer is recreated after each page finishes,
-  // forcing an immediate intersection check when sentinel is still in view
+    };
+
+    container.addEventListener("scroll", checkAndLoad, { passive: true });
+    checkAndLoad();
+    return () => container.removeEventListener("scroll", checkAndLoad);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hasMore, loadItems, loading, loadingMore]);
 
@@ -1514,38 +1512,52 @@ function GalleryInner() {
   // ── Media picker ──────────────────────────────────────────────────────────
 
   const openPicker = (target: NonNullable<typeof pickerTarget>, uploadKind: "image" | "video") => {
+    pickerTargetRef.current = target;
     setPickerTarget(target);
     setPickerUploadKind(uploadKind);
     setPickerOpen(true);
   };
 
   const handlePickerSelect = (url: string) => {
-    setPickerOpen(false);
-    if (!pickerTarget) return;
-    if (pickerTarget === "refImage") {
+    const target = pickerTargetRef.current;
+    const isMulti = target === "refImage" || target === "resource" || target === "referenceVideo";
+    if (!isMulti) setPickerOpen(false);
+    if (!target) return;
+    if (target === "refImage") {
       handleAddReference(url);
       return;
     }
     const isDup = (slots: RefImage[]) => slots.some(r => r.cdnUrl === url || r.objectUrl === url);
-    const showDup = () => { setRefError("Already attached."); setTimeout(() => setRefError(""), 3000); };
 
-    if (pickerTarget === "resource") {
-      if (isDup(vidResources)) { showDup(); return; }
+    if (target === "resource") {
+      if (isDup(vidResources)) return;
       if (modelId === "happyhorse") setVidStartFrame(null);
       setVidResources(prev => [...prev, { id: randomUUID(), objectUrl: url, cdnUrl: url, uploading: false, error: false }]);
       return;
     }
-    if (pickerTarget === "referenceVideo") {
-      if (isDup(vidRefVideos)) { showDup(); return; }
+    if (target === "referenceVideo") {
+      if (isDup(vidRefVideos)) return;
       setVidRefVideos(prev => [...prev, { id: randomUUID(), objectUrl: url, cdnUrl: url, uploading: false, error: false }]);
       return;
     }
     const entry: RefImage = { id: randomUUID(), objectUrl: url, cdnUrl: url, uploading: false, error: false };
-    if (pickerTarget === "startFrame") {
+    if (target === "startFrame") {
       setVidStartFrame(entry);
       if (modelId === "happyhorse") setVidResources([]);
-    } else if (pickerTarget === "endFrame") setVidEndFrame(entry);
-    else if (pickerTarget === "videoRef") setVidVideoRef(entry);
+    } else if (target === "endFrame") setVidEndFrame(entry);
+    else if (target === "videoRef") setVidVideoRef(entry);
+  };
+
+  const handlePickerDeselect = (url: string) => {
+    const target = pickerTargetRef.current;
+    if (target === "refImage") {
+      setRefImages(prev => prev.filter(r => r.cdnUrl !== url && r.objectUrl !== url));
+      setTaggedImages(prev => prev.filter(t => t.url !== url));
+    } else if (target === "resource") {
+      setVidResources(prev => prev.filter(r => r.cdnUrl !== url && r.objectUrl !== url));
+    } else if (target === "referenceVideo") {
+      setVidRefVideos(prev => prev.filter(r => r.cdnUrl !== url && r.objectUrl !== url));
+    }
   };
 
   const handlePickerUpload = () => {
@@ -4184,8 +4196,21 @@ function GalleryInner() {
         mediaKind={pickerUploadKind}
         onClose={() => setPickerOpen(false)}
         onPickUrl={handlePickerSelect}
+        onDeselect={handlePickerDeselect}
         onUpload={handlePickerUpload}
         anchorRef={promptBarRef}
+        selectedUrls={
+          pickerTarget === "refImage" ? refImages.filter(r => r.cdnUrl).map(r => r.cdnUrl!) :
+          pickerTarget === "resource" ? vidResources.filter(r => r.cdnUrl).map(r => r.cdnUrl!) :
+          pickerTarget === "referenceVideo" ? vidRefVideos.filter(r => r.cdnUrl).map(r => r.cdnUrl!) :
+          undefined
+        }
+        maxCount={
+          pickerTarget === "refImage" ? maxImgs :
+          pickerTarget === "resource" ? (vidModel?.maxResources ?? 3) :
+          pickerTarget === "referenceVideo" ? (vidModel?.maxReferenceVideos ?? 3) :
+          undefined
+        }
       />
 
       <ElementPickerModal
