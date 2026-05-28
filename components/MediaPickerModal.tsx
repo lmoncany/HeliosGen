@@ -311,7 +311,7 @@ export function MediaPickerModal({
         ];
 
   return createPortal(
-    <div style={{ position: "fixed", inset: 0, zIndex: 100000, display: "flex", alignItems: "center", justifyContent: "center", pointerEvents: "none" }}>
+    <div data-prompt-overlay="" style={{ position: "fixed", inset: 0, zIndex: 100000, display: "flex", alignItems: "center", justifyContent: "center", pointerEvents: "none" }}>
       <style>{SHIMMER_CSS}</style>
       <div
         onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}

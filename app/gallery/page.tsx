@@ -624,6 +624,13 @@ interface SavedSettings {
   azureResolution?: string;
   promptTextMode?: "text" | "json" | "yaml";
   multiPromptMode?: boolean;
+  vidStartFrameUrl?: string | null;
+  vidEndFrameUrl?: string | null;
+  vidResourceUrls?: string[];
+  vidVideoRefUrl?: string | null;
+  vidRefVideoUrls?: string[];
+  vidRefAudioUrls?: string[];
+  vidElements?: KlingElement[];
 }
 
 function loadSettings(tab: Tab): Partial<SavedSettings> | null {
@@ -954,13 +961,14 @@ function GalleryInner() {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Video reference state
-  const [vidStartFrame, setVidStartFrame] = useState<RefImage | null>(null);
-  const [vidEndFrame, setVidEndFrame]     = useState<RefImage | null>(null);
-  const [vidResources, setVidResources]   = useState<RefImage[]>([]);
-  const [vidVideoRef, setVidVideoRef]     = useState<RefImage | null>(null);
-  const [vidRefVideos, setVidRefVideos]   = useState<RefImage[]>([]);
-  const [vidRefAudios, setVidRefAudios]   = useState<RefImage[]>([]);
-  const [vidElements, setVidElements]     = useState<KlingElement[]>([]);
+  const urlToRef = (url: string): RefImage => ({ id: url, objectUrl: url, cdnUrl: url, uploading: false, error: false });
+  const [vidStartFrame, setVidStartFrame] = useState<RefImage | null>(() => { const u = loadSettings(tab)?.vidStartFrameUrl; return u ? urlToRef(u) : null; });
+  const [vidEndFrame, setVidEndFrame]     = useState<RefImage | null>(() => { const u = loadSettings(tab)?.vidEndFrameUrl;   return u ? urlToRef(u) : null; });
+  const [vidResources, setVidResources]   = useState<RefImage[]>(() => (loadSettings(tab)?.vidResourceUrls ?? []).map(urlToRef));
+  const [vidVideoRef, setVidVideoRef]     = useState<RefImage | null>(() => { const u = loadSettings(tab)?.vidVideoRefUrl;   return u ? urlToRef(u) : null; });
+  const [vidRefVideos, setVidRefVideos]   = useState<RefImage[]>(() => (loadSettings(tab)?.vidRefVideoUrls ?? []).map(urlToRef));
+  const [vidRefAudios, setVidRefAudios]   = useState<RefImage[]>(() => (loadSettings(tab)?.vidRefAudioUrls ?? []).map(urlToRef));
+  const [vidElements, setVidElements]     = useState<KlingElement[]>(() => loadSettings(tab)?.vidElements ?? []);
   const [elementPickerOpen, setElementPickerOpen] = useState(false);
   const vidImgInputRef   = useRef<HTMLInputElement>(null);
   const vidVideoInputRef = useRef<HTMLInputElement>(null);
@@ -1206,9 +1214,14 @@ function GalleryInner() {
         return savedPrompt.includes(`@${label}`) ? [{ label, refId: url, url }] : [];
       })
     );
-    setVidStartFrame(null); setVidEndFrame(null); setVidResources([]);
-    setVidVideoRef(null); setVidRefVideos([]); setVidRefAudios([]);
-    setVidElements([]);
+    const toRef = (url: string): RefImage => ({ id: url, objectUrl: url, cdnUrl: url, uploading: false, error: false });
+    setVidStartFrame(saved?.vidStartFrameUrl ? toRef(saved.vidStartFrameUrl) : null);
+    setVidEndFrame(saved?.vidEndFrameUrl ? toRef(saved.vidEndFrameUrl) : null);
+    setVidResources((saved?.vidResourceUrls ?? []).map(toRef));
+    setVidVideoRef(saved?.vidVideoRefUrl ? toRef(saved.vidVideoRefUrl) : null);
+    setVidRefVideos((saved?.vidRefVideoUrls ?? []).map(toRef));
+    setVidRefAudios((saved?.vidRefAudioUrls ?? []).map(toRef));
+    setVidElements(saved?.vidElements ?? []);
     const restoredPrompt = saved?.prompt ?? "";
     if (restoredPrompt && inputRef.current) {
       const el = inputRef.current;
@@ -1314,8 +1327,18 @@ function GalleryInner() {
     const refImageUrls = [...new Set(refImages
       .filter(r => r.cdnUrl && !r.uploading && !r.error)
       .map(r => r.cdnUrl!))];
-    saveSettings(tab, { prompt, modelId, aspectRatio, quality, count, duration, mode, sound, refImageUrls, azureResolution, promptTextMode, multiPromptMode });
-  }, [tab, prompt, modelId, aspectRatio, quality, count, duration, mode, sound, refImages, azureResolution, promptTextMode, multiPromptMode]);
+    const readyCdnUrl = (r: RefImage) => !r.uploading && !r.error && !!r.cdnUrl;
+    saveSettings(tab, {
+      prompt, modelId, aspectRatio, quality, count, duration, mode, sound, refImageUrls, azureResolution, promptTextMode, multiPromptMode,
+      vidStartFrameUrl: vidStartFrame?.cdnUrl ?? null,
+      vidEndFrameUrl: vidEndFrame?.cdnUrl ?? null,
+      vidResourceUrls: vidResources.filter(readyCdnUrl).map(r => r.cdnUrl!),
+      vidVideoRefUrl: vidVideoRef?.cdnUrl ?? null,
+      vidRefVideoUrls: vidRefVideos.filter(readyCdnUrl).map(r => r.cdnUrl!),
+      vidRefAudioUrls: vidRefAudios.filter(readyCdnUrl).map(r => r.cdnUrl!),
+      vidElements,
+    });
+  }, [tab, prompt, modelId, aspectRatio, quality, count, duration, mode, sound, refImages, azureResolution, promptTextMode, multiPromptMode, vidStartFrame, vidEndFrame, vidResources, vidVideoRef, vidRefVideos, vidRefAudios, vidElements]);
 
   // Track window width; set initial zoom from breakpoints only if NOT saved
   useEffect(() => {
@@ -1918,8 +1941,9 @@ function GalleryInner() {
   // Sync: remove chips whose @label was deleted from the prompt
   useEffect(() => {
     setTaggedImages(prev => prev.filter(t => prompt.includes(`@${t.label}`)));
-    if (inputRef.current) {
-      resizeTextarea(inputRef.current);
+    if (inputRef.current && !multiPromptMode) {
+      const maxH = promptExpanded ? window.innerHeight * 0.75 - 220 : 264;
+      resizeTextarea(inputRef.current, maxH);
     }
     if (overlayInnerRef.current) {
       const st = inputRef.current?.scrollTop ?? 0;
@@ -1964,6 +1988,34 @@ function GalleryInner() {
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
   }, [atMenuOpen]);
+
+  // Close element picker on outside click — does NOT collapse the prompt
+  useEffect(() => {
+    if (!elementPickerOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (!(e.target as HTMLElement).closest("[data-element-picker-modal]")) {
+        setElementPickerOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [elementPickerOpen]);
+
+  // Collapse expanded prompt on outside click — passes through to gallery
+  useEffect(() => {
+    if (!promptExpanded) return;
+    const handler = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (target.closest("[data-prompt-overlay]")) return;
+      if (target.closest("[data-element-picker-modal]")) return;
+      if (target.closest("[data-at-menu]")) return;
+      if (promptBarRef.current && !promptBarRef.current.contains(target)) {
+        setPromptExpanded(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [promptExpanded]);
 
   const insertMention = (ref: RefImage & { kind?: "image" | "video" | "audio"; label?: string }) => {
     const label = ref.label || "img1";
@@ -3182,7 +3234,7 @@ function GalleryInner() {
                   const text = e.target.value;
                   const cursor = e.target.selectionStart ?? text.length;
                   setPrompt(text);
-                  resizeTextarea(e.target);
+                  resizeTextarea(e.target, promptExpanded ? window.innerHeight * 0.75 - 220 : 264);
                   if (!isVideo) {
                     const match = text.slice(0, cursor).match(/@(\w*)$/);
                     setMentionQuery(match ? match[1] : null);
@@ -3332,11 +3384,7 @@ function GalleryInner() {
                             requestAnimationFrame(() => {
                               const stack = document.querySelector('[data-prompt-stack]');
                               const ta = stack?.querySelectorAll<HTMLTextAreaElement>('textarea')[blockIdx];
-                              if (ta) {
-                                ta.focus();
-                                ta.style.height = "auto";
-                                ta.style.height = Math.min(ta.scrollHeight, 330) + "px";
-                              }
+                              if (ta) ta.focus();
                             });
                           } else {
                             const rowEl = e.currentTarget as HTMLElement;
@@ -3421,19 +3469,12 @@ function GalleryInner() {
                                   activeBlockRef.current = newRow;
                                   newRow.focus();
                                   newRow.setSelectionRange(0, 0);
-                                  newRow.style.height = "auto";
-                                  newRow.style.height = Math.min(newRow.scrollHeight, 330) + "px";
                                 }
                               });
                             } else {
                               const updated = [...blocks];
                               updated[blockIdx] = newVal;
                               setPrompt(updated.join('\n\n'));
-                              if (isExpanded) {
-                                const ta = e.target as HTMLTextAreaElement;
-                                ta.style.height = "auto";
-                                ta.style.height = Math.min(ta.scrollHeight, 330) + "px";
-                              }
                             }
                           }}
                           onKeyDown={e => {
@@ -3453,8 +3494,6 @@ function GalleryInner() {
                                 const ta = stack?.querySelectorAll<HTMLTextAreaElement>('textarea')[blockIdx];
                                 if (ta) {
                                   ta.focus();
-                                  ta.style.height = "auto";
-                                  ta.style.height = Math.min(ta.scrollHeight, 330) + "px";
                                   ta.setSelectionRange(ta.value.length, ta.value.length);
                                 }
                               });
@@ -3473,8 +3512,6 @@ function GalleryInner() {
                                 if (target) {
                                   target.focus();
                                   target.setSelectionRange(target.value.length, target.value.length);
-                                  target.style.height = "auto";
-                                  target.style.height = Math.min(target.scrollHeight, 330) + "px";
                                 }
                               });
                             }
@@ -3491,7 +3528,7 @@ function GalleryInner() {
                             letterSpacing: promptTextMode !== "text" ? "normal" : "-0.01em",
                             padding: 0, resize: "none",
                             ...(isExpanded
-                              ? { maxHeight: "330px", overflowY: "auto", scrollbarWidth: "none" }
+                              ? { fieldSizing: "content", maxHeight: "330px", overflowY: "auto", scrollbarWidth: "none" }
                               : { height: "22px", maxHeight: "22px", overflowY: "hidden", whiteSpace: "nowrap" }
                             ),
                           } as React.CSSProperties}
@@ -4102,6 +4139,7 @@ function GalleryInner() {
       {/* Ref media preview modal */}
       {refPreview && (
         <div
+          data-prompt-overlay=""
           onClick={() => setRefPreview(null)}
           style={{
             position: "fixed", inset: 0, zIndex: 99000,
@@ -4372,9 +4410,9 @@ function ElementPickerModal({
   };
 
   return createPortal(
-    <div style={{ position: "fixed", inset: 0, zIndex: 9100, display: "flex", alignItems: "center", justifyContent: "center", pointerEvents: "none" }}>
+    <div data-prompt-overlay="" style={{ position: "fixed", inset: 0, zIndex: 9100, display: "flex", alignItems: "center", justifyContent: "center", pointerEvents: "none" }}>
       <div onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }} style={{ position: "absolute", inset: 0, pointerEvents: "auto" }} />
-      <div style={{
+      <div data-element-picker-modal="" style={{
         position: "relative",
         width: "min(520px, calc(100vw - 32px))",
         maxHeight: "80vh",
