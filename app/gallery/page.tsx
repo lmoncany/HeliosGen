@@ -470,14 +470,22 @@ function resolveGalleryMentions(
   if (!spans.length) return { resolvedPrompt: text, extraUrls: [], extraAssets: [] };
   const extraUrls: string[] = [];
   const extraAssets: { url: string; kind: "image" | "video" | "audio" }[] = [];
+  const seenUrlIndex = new Map<string, number>(); // url → 1-based slot already assigned
   let resolvedPrompt = "";
   let lastEnd = 0;
   let n = 1;
   for (const span of spans) {
     resolvedPrompt += text.slice(lastEnd, span.start);
-    resolvedPrompt += tagFormat === "grok" ? `@image${n++} ` : `<<<image ${n++}>>>`;
-    extraUrls.push(span.url);
-    extraAssets.push({ url: span.url, kind: span.kind });
+    let slot: number;
+    if (seenUrlIndex.has(span.url)) {
+      slot = seenUrlIndex.get(span.url)!;
+    } else {
+      slot = n++;
+      seenUrlIndex.set(span.url, slot);
+      extraUrls.push(span.url);
+      extraAssets.push({ url: span.url, kind: span.kind });
+    }
+    resolvedPrompt += tagFormat === "grok" ? `@image${slot} ` : `<<<image ${slot}>>>`;
     lastEnd = span.end;
   }
   resolvedPrompt += text.slice(lastEnd);
@@ -595,6 +603,9 @@ const naturalRatioCache = new Map<string, string>(); // url → "w / h"
 
 // Module-level store for gallery drag — avoids dataTransfer.getData() browser quirks
 let _galleryDragItem: { url: string; mediaType: string } | null = null;
+let _reorderDragItem: { id: string; listTarget: "refImage" | "resource" | "referenceVideo" | "audioRef" } | null = null;
+let _reorderOverId: string | null = null; // last non-ghost item entered during reorder drag
+let _reorderJustDropped = false; // set synchronously in handleReorderDrop; read in onClick to block accidental preview open
 
 // Restore previously discovered aspect ratios and loaded state from
 // sessionStorage so the layout is correct immediately on cold page loads.
@@ -631,6 +642,7 @@ interface SavedSettings {
   vidRefVideoUrls?: string[];
   vidRefAudioUrls?: string[];
   vidElements?: KlingElement[];
+  taggedImages?: TaggedImage[];
 }
 
 function loadSettings(tab: Tab): Partial<SavedSettings> | null {
@@ -798,6 +810,96 @@ function GalleryLoggedOut({ tab }: { tab: Tab }) {
   );
 }
 
+// ── Tag renumbering helper ─────────────────────────────────────────────────────
+
+function removeTagAndRenumber(
+  removedRefId: string,
+  removedUrl: string | null,
+  currentTaggedImages: TaggedImage[],
+  currentPrompt: string,
+): { newTaggedImages: TaggedImage[]; newPrompt: string } {
+  const removedTag = currentTaggedImages.find(
+    t => t.refId === removedRefId || (removedUrl != null && t.url === removedUrl),
+  );
+  if (!removedTag) return { newTaggedImages: currentTaggedImages, newPrompt: currentPrompt };
+
+  const m = removedTag.label.match(/^([^\d]*)(\d+)$/);
+  if (!m) {
+    return {
+      newTaggedImages: currentTaggedImages.filter(t => t !== removedTag),
+      newPrompt: currentPrompt.replace(new RegExp(`@${removedTag.label}\\b`, 'g'), ''),
+    };
+  }
+
+  const prefix = m[1];
+  const removedN = parseInt(m[2]);
+
+  const newTaggedImages = currentTaggedImages
+    .filter(t => t !== removedTag)
+    .map(t => {
+      const tm = t.label.match(/^([^\d]*)(\d+)$/);
+      if (!tm || tm[1] !== prefix) return t;
+      const n = parseInt(tm[2]);
+      return n > removedN ? { ...t, label: `${prefix}${n - 1}` } : t;
+    });
+
+  // Remove the deleted tag from prompt, then renumber higher ones ascending
+  // (ascending order avoids regex collision: @img2→@img1 before @img3→@img2)
+  let newPrompt = currentPrompt.replace(new RegExp(`@${prefix}${removedN}\\b`, 'g'), '');
+
+  const higherNs = currentTaggedImages
+    .filter(t => t !== removedTag)
+    .flatMap(t => { const tm = t.label.match(/^([^\d]*)(\d+)$/); return tm && tm[1] === prefix && parseInt(tm[2]) > removedN ? [parseInt(tm[2])] : []; })
+    .sort((a, b) => a - b);
+
+  for (const n of higherNs) {
+    newPrompt = newPrompt.replace(new RegExp(`@${prefix}${n}\\b`, 'g'), `@${prefix}${n - 1}`);
+  }
+
+  return { newTaggedImages, newPrompt };
+}
+
+function getDisplayOrder(arr: RefImage[], draggingId: string | null, overId: string | null): RefImage[] {
+  if (!draggingId || !overId || draggingId === overId) return arr;
+  const dragIdx = arr.findIndex(r => r.id === draggingId);
+  const overIdx = arr.findIndex(r => r.id === overId);
+  if (dragIdx === -1 || overIdx === -1) return arr;
+  const next = [...arr];
+  const [moved] = next.splice(dragIdx, 1);
+  next.splice(overIdx, 0, moved);
+  return next;
+}
+
+function reorderAndRenumberTags(
+  _oldArr: RefImage[],
+  newArr: RefImage[],
+  prefix: string,
+  currentTaggedImages: TaggedImage[],
+  currentPrompt: string,
+): { newTaggedImages: TaggedImage[]; newPrompt: string } {
+  // Build label → RefImage mapping for the new order.
+  // @imgN is a positional reference to the Nth attached item; when the user
+  // reorders, we update the URL/refId behind each label rather than renaming
+  // labels in the prompt — that way resolveGalleryMentions produces extraUrls
+  // in the new order and <<<image N>>> in the resolved prompt matches the
+  // dragged position.
+  const labelToRef = new Map<string, RefImage>();
+  for (let i = 0; i < newArr.length; i++) {
+    labelToRef.set(`${prefix}${i + 1}`, newArr[i]);
+  }
+
+  let changed = false;
+  const newTaggedImages = currentTaggedImages.map(t => {
+    const ref = labelToRef.get(t.label);
+    if (!ref || ref.id === t.refId) return t;
+    changed = true;
+    return { ...t, refId: ref.id, url: ref.cdnUrl ?? ref.objectUrl };
+  });
+
+  if (!changed) return { newTaggedImages: currentTaggedImages, newPrompt: currentPrompt };
+  return { newTaggedImages, newPrompt: currentPrompt };
+}
+
 // ── Inner page ────────────────────────────────────────────────────────────────
 
 function GalleryInner() {
@@ -950,6 +1052,8 @@ function GalleryInner() {
   const pickerTargetRef = useRef<typeof pickerTarget>(null);
   const [pickerUploadKind, setPickerUploadKind] = useState<"image" | "video">("image");
   const [dragOverSlotKey, setDragOverSlotKey] = useState<string | null>(null);
+  const [reorderOverId, setReorderOverId] = useState<string | null>(null);
+  const [draggingId, setDraggingId] = useState<string | null>(null);
 
   // Reference images — restored from localStorage on mount
   const [refImages, setRefImages] = useState<RefImage[]>(() => {
@@ -980,6 +1084,8 @@ function GalleryInner() {
   // @ mention state — tagged images also restored from localStorage
   const [taggedImages, setTaggedImages] = useState<TaggedImage[]>(() => {
     const s = loadSettings(tab);
+    if (s?.taggedImages?.length) return s.taggedImages;
+    // fallback: reconstruct from refImageUrls for backwards compat
     const urls = s?.refImageUrls ?? [];
     const p = s?.prompt ?? "";
     return urls.flatMap((url, idx) => {
@@ -1209,10 +1315,12 @@ function GalleryInner() {
       return savedUrls.map(url => ({ id: url, objectUrl: url, cdnUrl: url, uploading: false, error: false }));
     });
     setTaggedImages(
-      savedUrls.flatMap((url, idx) => {
-        const label = `img${idx + 1}`;
-        return savedPrompt.includes(`@${label}`) ? [{ label, refId: url, url }] : [];
-      })
+      saved?.taggedImages?.length
+        ? saved.taggedImages
+        : savedUrls.flatMap((url, idx) => {
+            const label = `img${idx + 1}`;
+            return savedPrompt.includes(`@${label}`) ? [{ label, refId: url, url }] : [];
+          })
     );
     const toRef = (url: string): RefImage => ({ id: url, objectUrl: url, cdnUrl: url, uploading: false, error: false });
     setVidStartFrame(saved?.vidStartFrameUrl ? toRef(saved.vidStartFrameUrl) : null);
@@ -1337,8 +1445,9 @@ function GalleryInner() {
       vidRefVideoUrls: vidRefVideos.filter(readyCdnUrl).map(r => r.cdnUrl!),
       vidRefAudioUrls: vidRefAudios.filter(readyCdnUrl).map(r => r.cdnUrl!),
       vidElements,
+      taggedImages,
     });
-  }, [tab, prompt, modelId, aspectRatio, quality, count, duration, mode, sound, refImages, azureResolution, promptTextMode, multiPromptMode, vidStartFrame, vidEndFrame, vidResources, vidVideoRef, vidRefVideos, vidRefAudios, vidElements]);
+  }, [tab, prompt, modelId, aspectRatio, quality, count, duration, mode, sound, refImages, azureResolution, promptTextMode, multiPromptMode, vidStartFrame, vidEndFrame, vidResources, vidVideoRef, vidRefVideos, vidRefAudios, vidElements, taggedImages]);
 
   // Track window width; set initial zoom from breakpoints only if NOT saved
   useEffect(() => {
@@ -1367,6 +1476,23 @@ function GalleryInner() {
   // Re-run once the full layout is mounted (after auth loads and user is present)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authLoaded, user]);
+
+  // Cancel reorder drag if pointer released outside any item
+  useEffect(() => {
+    if (!draggingId) return;
+    const cancel = () => {
+      _reorderDragItem = null;
+      _reorderOverId = null;
+      setDraggingId(null);
+      setReorderOverId(null);
+    };
+    document.addEventListener('pointerup', cancel);
+    document.addEventListener('pointercancel', cancel);
+    return () => {
+      document.removeEventListener('pointerup', cancel);
+      document.removeEventListener('pointercancel', cancel);
+    };
+  }, [draggingId]);
 
   // ── Image upload ──────────────────────────────────────────────────────────
 
@@ -1431,6 +1557,8 @@ function GalleryInner() {
     }
     // React state as a backup so any re-render in the window doesn't reset the styles
     setRemovingIds(prev => new Set(prev).add(id));
+    const removedImg = refImages.find(r => r.id === id);
+    const { newTaggedImages, newPrompt } = removeTagAndRenumber(id, removedImg?.cdnUrl ?? null, taggedImages, prompt);
     setTimeout(() => {
       setRemovingIds(prev => { const s = new Set(prev); s.delete(id); return s; });
       setRefImages(prev => {
@@ -1438,6 +1566,8 @@ function GalleryInner() {
         if (img) URL.revokeObjectURL(img.objectUrl);
         return prev.filter(r => r.id !== id);
       });
+      setTaggedImages(newTaggedImages);
+      setPrompt(newPrompt);
     }, 190);
   };
 
@@ -1472,19 +1602,29 @@ function GalleryInner() {
       error: false,
     }));
 
+    const isSeedanceModel = modelId === "seedance-2" || modelId === "seedance-2-fast";
     if (isSingle) {
       const [entry] = newEntries;
       if (target === "startFrame") {
         setVidStartFrame(entry);
         if (modelId === "happyhorse") setVidResources([]);
-      } else if (target === "endFrame") setVidEndFrame(entry);
-      else setVidVideoRef(entry);
+        if (isSeedanceModel) { setVidResources([]); setVidRefVideos([]); setVidRefAudios([]); }
+      } else if (target === "endFrame") {
+        setVidEndFrame(entry);
+        if (isSeedanceModel) { setVidResources([]); setVidRefVideos([]); setVidRefAudios([]); }
+      } else setVidVideoRef(entry);
     } else {
       if (target === "resource") {
         if (modelId === "happyhorse") setVidStartFrame(null);
+        if (isSeedanceModel) { setVidStartFrame(null); setVidEndFrame(null); }
         setVidResources(prev => [...prev, ...newEntries]);
-      } else if (target === "referenceVideo") setVidRefVideos(prev => [...prev, ...newEntries]);
-      else                             setVidRefAudios(prev => [...prev, ...newEntries]);
+      } else if (target === "referenceVideo") {
+        if (isSeedanceModel) { setVidStartFrame(null); setVidEndFrame(null); }
+        setVidRefVideos(prev => [...prev, ...newEntries]);
+      } else {
+        if (isSeedanceModel) { setVidStartFrame(null); setVidEndFrame(null); }
+        setVidRefAudios(prev => [...prev, ...newEntries]);
+      }
     }
 
     const token = await getToken();
@@ -1524,12 +1664,29 @@ function GalleryInner() {
   };
 
   const removeVidRef = (id: string, target: "startFrame" | "endFrame" | "resource" | "videoRef" | "referenceVideo" | "audioRef") => {
-    if (target === "startFrame")      setVidStartFrame(null);
-    else if (target === "endFrame")   setVidEndFrame(null);
-    else if (target === "videoRef")   setVidVideoRef(null);
-    else if (target === "resource")   setVidResources(prev => prev.filter(r => r.id !== id));
-    else if (target === "referenceVideo") setVidRefVideos(prev => prev.filter(r => r.id !== id));
-    else                              setVidRefAudios(prev => prev.filter(r => r.id !== id));
+    let removedUrl: string | null = null;
+    if (target === "startFrame") {
+      removedUrl = vidStartFrame?.cdnUrl ?? null;
+      setVidStartFrame(null);
+    } else if (target === "endFrame") {
+      removedUrl = vidEndFrame?.cdnUrl ?? null;
+      setVidEndFrame(null);
+    } else if (target === "videoRef") {
+      removedUrl = vidVideoRef?.cdnUrl ?? null;
+      setVidVideoRef(null);
+    } else if (target === "resource") {
+      removedUrl = vidResources.find(r => r.id === id)?.cdnUrl ?? null;
+      setVidResources(prev => prev.filter(r => r.id !== id));
+    } else if (target === "referenceVideo") {
+      removedUrl = vidRefVideos.find(r => r.id === id)?.cdnUrl ?? null;
+      setVidRefVideos(prev => prev.filter(r => r.id !== id));
+    } else {
+      removedUrl = vidRefAudios.find(r => r.id === id)?.cdnUrl ?? null;
+      setVidRefAudios(prev => prev.filter(r => r.id !== id));
+    }
+    const { newTaggedImages, newPrompt } = removeTagAndRenumber(id, removedUrl, taggedImages, prompt);
+    setTaggedImages(newTaggedImages);
+    setPrompt(newPrompt);
   };
 
   // ── Media picker ──────────────────────────────────────────────────────────
@@ -1552,14 +1709,17 @@ function GalleryInner() {
     }
     const isDup = (slots: RefImage[]) => slots.some(r => r.cdnUrl === url || r.objectUrl === url);
 
+    const isSeedancePicker = modelId === "seedance-2" || modelId === "seedance-2-fast";
     if (target === "resource") {
       if (isDup(vidResources)) return;
       if (modelId === "happyhorse") setVidStartFrame(null);
+      if (isSeedancePicker) { setVidStartFrame(null); setVidEndFrame(null); }
       setVidResources(prev => [...prev, { id: randomUUID(), objectUrl: url, cdnUrl: url, uploading: false, error: false }]);
       return;
     }
     if (target === "referenceVideo") {
       if (isDup(vidRefVideos)) return;
+      if (isSeedancePicker) { setVidStartFrame(null); setVidEndFrame(null); }
       setVidRefVideos(prev => [...prev, { id: randomUUID(), objectUrl: url, cdnUrl: url, uploading: false, error: false }]);
       return;
     }
@@ -1567,19 +1727,33 @@ function GalleryInner() {
     if (target === "startFrame") {
       setVidStartFrame(entry);
       if (modelId === "happyhorse") setVidResources([]);
-    } else if (target === "endFrame") setVidEndFrame(entry);
-    else if (target === "videoRef") setVidVideoRef(entry);
+      if (isSeedancePicker) { setVidResources([]); setVidRefVideos([]); setVidRefAudios([]); }
+    } else if (target === "endFrame") {
+      setVidEndFrame(entry);
+      if (isSeedancePicker) { setVidResources([]); setVidRefVideos([]); setVidRefAudios([]); }
+    } else if (target === "videoRef") setVidVideoRef(entry);
   };
 
   const handlePickerDeselect = (url: string) => {
     const target = pickerTargetRef.current;
     if (target === "refImage") {
+      const removedImg = refImages.find(r => r.cdnUrl === url || r.objectUrl === url);
+      const { newTaggedImages, newPrompt } = removeTagAndRenumber(removedImg?.id ?? "", url, taggedImages, prompt);
       setRefImages(prev => prev.filter(r => r.cdnUrl !== url && r.objectUrl !== url));
-      setTaggedImages(prev => prev.filter(t => t.url !== url));
+      setTaggedImages(newTaggedImages);
+      setPrompt(newPrompt);
     } else if (target === "resource") {
+      const removedRef = vidResources.find(r => r.cdnUrl === url || r.objectUrl === url);
+      const { newTaggedImages, newPrompt } = removeTagAndRenumber(removedRef?.id ?? "", url, taggedImages, prompt);
       setVidResources(prev => prev.filter(r => r.cdnUrl !== url && r.objectUrl !== url));
+      setTaggedImages(newTaggedImages);
+      setPrompt(newPrompt);
     } else if (target === "referenceVideo") {
+      const removedRef = vidRefVideos.find(r => r.cdnUrl === url || r.objectUrl === url);
+      const { newTaggedImages, newPrompt } = removeTagAndRenumber(removedRef?.id ?? "", url, taggedImages, prompt);
       setVidRefVideos(prev => prev.filter(r => r.cdnUrl !== url && r.objectUrl !== url));
+      setTaggedImages(newTaggedImages);
+      setPrompt(newPrompt);
     }
   };
 
@@ -1780,21 +1954,35 @@ function GalleryInner() {
     // ── Debug mode: log + simulate, no real API call ────────────────────────
     if (debugMode) {
       const dbgVm = isVideo ? VIDEO_MODELS.find(m => m.id === modelId) : undefined;
-      const { resolvedPrompt: dbgPrompt, extraUrls: dbgExtra } = resolveGalleryMentions(prompt, taggedImages, dbgVm?.resourceTagFormat ?? "default");
+      const { resolvedPrompt: dbgPrompt, extraUrls: dbgExtra, extraAssets: dbgAssets } = resolveGalleryMentions(prompt, taggedImages, dbgVm?.resourceTagFormat ?? "default");
       const dbgExtraSet = new Set(dbgExtra);
       const dbgRefUrls = refImages.filter(r => r.cdnUrl && !r.error && !dbgExtraSet.has(r.cdnUrl!)).map(r => r.cdnUrl!);
       const dbgAzureBaseUrl    = (() => { try { return localStorage.getItem("aiui-azure-base-url") ?? ""; } catch { return ""; } })();
       const dbgAzureDeployment = (() => { try { return JSON.parse(localStorage.getItem("aiui-azure-endpoints") ?? "{}")[modelId] ?? ""; } catch { return ""; } })();
       const dbgProvider        = (() => { try { return JSON.parse(localStorage.getItem("aiui-model-providers") ?? "{}")[modelId] ?? "kie"; } catch { return "kie"; } })();
       const dbgIsAzure = !!(dbgAzureBaseUrl && dbgAzureDeployment && dbgProvider === "azure");
+      const dbgTaggedImageUrls = dbgAssets.filter(a => a.kind === "image").map(a => a.url);
+      const dbgTaggedVideoUrls = dbgAssets.filter(a => a.kind === "video").map(a => a.url);
+      const dbgTaggedAudioUrls = dbgAssets.filter(a => a.kind === "audio").map(a => a.url);
+      const dbgExtraImageSet = new Set(dbgTaggedImageUrls);
+      const dbgExtraVideoSet = new Set(dbgTaggedVideoUrls);
+      const dbgExtraAudioSet = new Set(dbgTaggedAudioUrls);
       console.log("[Gallery Debug] Generate request:", {
         type: isVideo ? "video" : "image",
         prompt: dbgPrompt, model: modelId, aspectRatio, quality,
         provider: dbgIsAzure ? "azure" : "kie",
         ...(dbgIsAzure ? { azureBaseUrl: dbgAzureBaseUrl, azureDeployment: dbgAzureDeployment, azureQuality: quality, azureResolution } : {}),
-        ...(isVideo
-          ? { duration, mode }
-          : { imageUrls: [...new Set([...dbgExtra, ...dbgRefUrls])], count: n }),
+        ...(isVideo ? {
+          duration, mode,
+          startFrameUrl:       vidStartFrame?.cdnUrl ?? null,
+          endFrameUrl:         vidEndFrame?.cdnUrl   ?? null,
+          taggedImageUrls:     dbgTaggedImageUrls,
+          taggedVideoUrls:     dbgTaggedVideoUrls,
+          taggedAudioUrls:     dbgTaggedAudioUrls,
+          resourceUrls:        vidResources.filter(r => r.cdnUrl && !r.error && !dbgExtraImageSet.has(r.cdnUrl!)).map(r => r.cdnUrl!),
+          referenceVideoUrls:  vidRefVideos.filter(r => r.cdnUrl && !r.error && !dbgExtraVideoSet.has(r.cdnUrl!)).map(r => r.cdnUrl!),
+          referenceAudioUrls:  vidRefAudios.filter(r => r.cdnUrl && !r.error && !dbgExtraAudioSet.has(r.cdnUrl!)).map(r => r.cdnUrl!),
+        } : { imageUrls: [...new Set([...dbgExtra, ...dbgRefUrls])], count: n }),
       });
       setTimeout(() => {
         setPendingGens(prev => prev.filter(p => !newPendings.some(np => np.id === p.id)));
@@ -2089,6 +2277,11 @@ function GalleryInner() {
   const vidRefHandles = (vidModel?.handles ?? []).filter(h => h !== "prompt");
   const hasVidRefs = isVideo && (!!vidStartFrame || !!vidEndFrame || !!vidVideoRef || vidResources.length > 0 || vidElements.length > 0 || vidRefVideos.length > 0 || vidRefAudios.length > 0);
 
+  const displayRefImages    = getDisplayOrder(refImages,    draggingId, reorderOverId);
+  const displayVidResources = getDisplayOrder(vidResources, draggingId, reorderOverId);
+  const displayVidRefVideos = getDisplayOrder(vidRefVideos, draggingId, reorderOverId);
+  const displayVidRefAudios = getDisplayOrder(vidRefAudios, draggingId, reorderOverId);
+
   const vidRequiresPrompt = isVideo && !!(vidModel?.apiInput.promptMaxLength);
   const canGenerate = kieKeySet === false ? false : submitting ? false : promptOverLimit ? false : (vidRequiresPrompt || !isVideo) ? prompt.trim().length > 0 : true;
 
@@ -2121,16 +2314,51 @@ function GalleryInner() {
     } else if (target === "startFrame") {
       setVidStartFrame(entry);
       if (modelId === "happyhorse") setVidResources([]);
+      if (modelId === "seedance-2" || modelId === "seedance-2-fast") { setVidResources([]); setVidRefVideos([]); setVidRefAudios([]); }
     } else if (target === "endFrame") {
       setVidEndFrame(entry);
+      if (modelId === "seedance-2" || modelId === "seedance-2-fast") { setVidResources([]); setVidRefVideos([]); setVidRefAudios([]); }
     } else if (target === "videoRef") {
       setVidVideoRef(entry);
     } else if (target === "resource") {
+      if (modelId === "seedance-2" || modelId === "seedance-2-fast") { setVidStartFrame(null); setVidEndFrame(null); }
       setVidResources(prev => [...prev, entry]);
     } else if (target === "referenceVideo") {
+      if (modelId === "seedance-2" || modelId === "seedance-2-fast") { setVidStartFrame(null); setVidEndFrame(null); }
       setVidRefVideos(prev => [...prev, entry]);
     }
   }, [handleAddReference, modelId]);
+
+  const handleReorderDrop = (targetId: string, listTarget: "refImage" | "resource" | "referenceVideo" | "audioRef") => {
+    const dragId = _reorderDragItem?.id;
+    _reorderDragItem = null;
+    _reorderOverId = null;
+    setReorderOverId(null);
+    setDraggingId(null);
+    if (!dragId || dragId === targetId) return;
+    _reorderJustDropped = true;
+    setTimeout(() => { _reorderJustDropped = false; }, 300);
+
+    let oldArr: RefImage[];
+    let setter: (fn: (prev: RefImage[]) => RefImage[]) => void;
+    if (listTarget === "refImage")         { oldArr = refImages;    setter = setRefImages; }
+    else if (listTarget === "resource")    { oldArr = vidResources; setter = setVidResources; }
+    else if (listTarget === "referenceVideo") { oldArr = vidRefVideos; setter = setVidRefVideos; }
+    else                                   { oldArr = vidRefAudios; setter = setVidRefAudios; }
+
+    const dragIdx = oldArr.findIndex(r => r.id === dragId);
+    const targetIdx = oldArr.findIndex(r => r.id === targetId);
+    if (dragIdx === -1 || targetIdx === -1) return;
+
+    const newArr = [...oldArr];
+    const [moved] = newArr.splice(dragIdx, 1);
+    newArr.splice(targetIdx, 0, moved);
+    setter(() => newArr);
+
+    const { newTaggedImages, newPrompt } = reorderAndRenumberTags(oldArr, newArr, "img", taggedImages, prompt);
+    setTaggedImages(newTaggedImages);
+    setPrompt(newPrompt);
+  };
 
   const handleCopyPrompt = useCallback((text: string, refUrls?: string[], meta?: { model?: string; aspectRatio?: string; quality?: string }) => {
     const newRefs = (refUrls ?? []).map(url => ({
@@ -3056,16 +3284,17 @@ function GalleryInner() {
           {/* ── Reference image thumbnails (Always visible, integrated) ── */}
           <div style={{ maxHeight: "200px", overflowY: "auto", borderBottom: "none" }}>
             {!isVideo && imgModel?.supportsImages && (hasRefImgs || canAddImgs) && (
-              <div style={{ padding: "14px 16px 0", display: "flex", gap: "10px", flexWrap: "wrap", alignItems: "flex-start", paddingBottom: "14px" }}>
-                {refImages.map(img => {
+              <div style={{ padding: "14px 16px 0", display: "flex", gap: "10px", flexWrap: "wrap", alignItems: "flex-start", paddingBottom: "14px" }} onPointerUp={() => { if (_reorderDragItem?.listTarget === "refImage") { _reorderDragItem = null; _reorderOverId = null; setDraggingId(null); setReorderOverId(null); } }}>
+                {displayRefImages.map(img => {
                   const isRemoving = removingIds.has(img.id);
                   const isHovered = hoveredRefId === img.id;
+                  const isDragging = draggingId === img.id;
                   return (
-                    <div key={img.id} onMouseEnter={() => setHoveredRefId(img.id)} onMouseLeave={() => setHoveredRefId(null)} onClick={() => { if (!img.uploading && !img.error) setRefPreview({ url: img.objectUrl, mediaKind: "image" }); }} onDragOver={e => { if (!e.dataTransfer.types.includes("application/x-gallery-item")) return; e.preventDefault(); e.stopPropagation(); e.dataTransfer.dropEffect = "copy"; setDragOverSlotKey(`refimg-filled-${img.id}`); }} onDragLeave={() => setDragOverSlotKey(null)} onDrop={e => handleGalleryItemDrop(e, "refImage", "image")} style={{ position: "relative", width: "64px", height: "64px", borderRadius: "8px", overflow: "hidden", background: "#1A1C1F", flexShrink: 0, border: img.error ? "1px solid rgba(248,113,113,0.4)" : dragOverSlotKey === `refimg-filled-${img.id}` ? "2.5px solid #2DD4BF" : "1px solid rgba(255,255,255,0.08)", boxShadow: dragOverSlotKey === `refimg-filled-${img.id}` ? "0 0 0 3px rgba(45,212,191,0.25)" : undefined, cursor: (!img.uploading && !img.error) ? "zoom-in" : "default", animation: isRemoving ? "none" : "refImgIn 260ms cubic-bezier(0.16,1,0.3,1)", ...(isRemoving ? { transition: "opacity 170ms, transform 170ms", opacity: 0, transform: "translateY(-10px) scale(0.92)" } : {}) }}>
+                    <div key={img.id} onMouseDown={e => e.preventDefault()} onPointerDown={e => { if (refImages.length <= 1 || img.uploading || img.error) return; _reorderDragItem = { id: img.id, listTarget: "refImage" }; _reorderOverId = null; setDraggingId(img.id); }} onPointerEnter={() => { if (!_reorderDragItem || _reorderDragItem.id === img.id || _reorderDragItem.listTarget !== "refImage") return; _reorderOverId = img.id; setReorderOverId(img.id); }} onPointerUp={e => { const info = _reorderDragItem; if (!info || info.listTarget !== "refImage") return; e.stopPropagation(); if (_reorderOverId) e.preventDefault(); const target = _reorderOverId ?? img.id; handleReorderDrop(target, "refImage"); }} onMouseEnter={() => { if (!draggingId) setHoveredRefId(img.id); }} onMouseLeave={() => setHoveredRefId(null)} onClick={() => { if (_reorderJustDropped) { _reorderJustDropped = false; return; } if (!img.uploading && !img.error && !draggingId) setRefPreview({ url: img.objectUrl, mediaKind: "image" }); }} onDragOver={e => { if (!e.dataTransfer.types.includes("application/x-gallery-item")) return; e.preventDefault(); e.stopPropagation(); e.dataTransfer.dropEffect = "copy"; setDragOverSlotKey(`refimg-filled-${img.id}`); }} onDragLeave={() => setDragOverSlotKey(null)} onDrop={e => handleGalleryItemDrop(e, "refImage", "image")} style={{ position: "relative", width: "64px", height: "64px", borderRadius: "8px", overflow: "hidden", background: "#1A1C1F", flexShrink: 0, touchAction: refImages.length > 1 ? "none" : undefined, transition: "border 120ms, box-shadow 120ms, opacity 120ms", border: img.error ? "1px solid rgba(248,113,113,0.4)" : dragOverSlotKey === `refimg-filled-${img.id}` ? "2.5px solid #2DD4BF" : "1px solid rgba(255,255,255,0.08)", boxShadow: dragOverSlotKey === `refimg-filled-${img.id}` ? "0 0 0 3px rgba(45,212,191,0.25)" : undefined, cursor: (!img.uploading && !img.error) ? (refImages.length > 1 ? (draggingId === img.id ? "grabbing" : "grab") : "zoom-in") : "default", animation: isRemoving ? "none" : (isDragging ? "none" : "refImgIn 260ms cubic-bezier(0.16,1,0.3,1)"), opacity: isDragging ? 0.3 : undefined, ...(isRemoving ? { transition: "opacity 170ms, transform 170ms", opacity: 0, transform: "translateY(-10px) scale(0.92)" } : {}) }}>
                       {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img src={thumbSrc(img.objectUrl)} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
                       {isHovered && !img.uploading && !img.error && (
-                        <div onClick={() => setRefPreview({ url: img.objectUrl, mediaKind: "image" })} style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,0.35)", display: "flex", alignItems: "center", justifyContent: "center", cursor: "zoom-in" }}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.9)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg></div>
+                        <div onClick={e => { if (_reorderJustDropped || draggingId) { _reorderJustDropped = false; e.stopPropagation(); return; } e.stopPropagation(); setRefPreview({ url: img.objectUrl, mediaKind: "image" }); }} style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,0.35)", display: "flex", alignItems: "center", justifyContent: "center", cursor: "zoom-in" }}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.9)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg></div>
                       )}
                       <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, padding: "8px 4px 3px", background: "linear-gradient(to top, rgba(0,0,0,0.8) 0%, transparent 100%)", textAlign: "center" }}><span style={{ fontSize: "8px", fontWeight: 700, letterSpacing: "0.04em", color: "rgba(255,255,255,0.85)", textTransform: "uppercase" }}>Image</span></div>
                       {img.uploading && (<div style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,0.55)", display: "flex", alignItems: "center", justifyContent: "center" }}><span style={{ width: "14px", height: "14px", borderRadius: "50%", border: "2px solid rgba(255,255,255,0.2)", borderTopColor: "#2DD4BF", display: "inline-block", animation: "spin 0.75s linear infinite" }} /></div>)}
@@ -3110,7 +3339,7 @@ function GalleryInner() {
                 }
                 if (isHappyHorse && h === "startFrame" && vidResources.length > 0) continue;
                 if (isHappyHorse && h === "resource" && vidStartFrame) continue;
-                const isSeedance = vidModel?.id === "seedance-2-fast";
+                const isSeedance = vidModel?.id === "seedance-2" || vidModel?.id === "seedance-2-fast";
                 const seedanceHasFrame = !!(vidStartFrame || vidEndFrame);
                 const seedanceHasRef   = vidResources.length > 0 || vidRefVideos.length > 0 || vidRefAudios.length > 0;
                 if (isSeedance && seedanceHasFrame && (h === "resource" || h === "referenceVideo" || h === "audioRef")) continue;
@@ -3131,24 +3360,24 @@ function GalleryInner() {
                   } else {
                     const maxRes = vidModel?.maxResources ?? 3;
                     const resLabel = vidModel?.id === "happyhorse" ? "Character" : "Image";
-                    vidResources.forEach(r => slots.push({ kind: "filled", target: h, mediaKind: "image", label: resLabel, ref: r }));
+                    displayVidResources.forEach(r => slots.push({ kind: "filled", target: h, mediaKind: "image", label: resLabel, ref: r }));
                     if (vidResources.length < maxRes)
                       slots.push({ kind: "add", target: h, mediaKind: "image", label: resLabel, countLeft: maxRes - vidResources.length });
                   }
                 } else if (h === "referenceVideo") {
                   const maxRefVid = vidModel?.maxReferenceVideos ?? 3;
-                  vidRefVideos.forEach(r => slots.push({ kind: "filled", target: h, mediaKind: "video", label: "Ref Video", ref: r }));
+                  displayVidRefVideos.forEach(r => slots.push({ kind: "filled", target: h, mediaKind: "video", label: "Ref Video", ref: r }));
                   if (vidRefVideos.length < maxRefVid)
                     slots.push({ kind: "add", target: h, mediaKind: "video", label: "Ref Video", countLeft: maxRefVid - vidRefVideos.length });
                 } else if (h === "audioRef") {
                   const maxRefAud = vidModel?.maxReferenceAudios ?? 3;
-                  vidRefAudios.forEach(r => slots.push({ kind: "filled", target: h, mediaKind: "audio", label: "Audio", ref: r }));
+                  displayVidRefAudios.forEach(r => slots.push({ kind: "filled", target: h, mediaKind: "audio", label: "Audio", ref: r }));
                   if (vidRefAudios.length < maxRefAud)
                     slots.push({ kind: "add", target: h, mediaKind: "audio", label: "Audio", countLeft: maxRefAud - vidRefAudios.length });
                 }
               }
               return (
-                <div style={{ padding: "14px 16px 14px", display: "flex", gap: "10px", flexWrap: "wrap", alignItems: "flex-start" }}>
+                <div style={{ padding: "14px 16px 14px", display: "flex", gap: "10px", flexWrap: "wrap", alignItems: "flex-start" }} onPointerUp={() => { if (_reorderDragItem) { _reorderDragItem = null; _reorderOverId = null; setDraggingId(null); setReorderOverId(null); } }}>
                   {slots.map((slot, idx) => {
                     if (slot.kind === "element-filled") {
                       const el = slot.element; const thumb = el.imageUrls[0]; const hovId = `elem-${el.id}`;
@@ -3174,11 +3403,14 @@ function GalleryInner() {
                         }
                         if (slot.kind === "filled") {
                         const r = slot.ref; const hovId = `slot-${r.id}`; const dragKey = `vidfilled-${r.id}`;
+                        const isMultiTarget = slot.target === "resource" || slot.target === "referenceVideo" || slot.target === "audioRef";
+                        const listForSlot = slot.target === "resource" ? vidResources : slot.target === "referenceVideo" ? vidRefVideos : vidRefAudios;
+                        const isSlotDragging = draggingId === r.id;
                         return (
-                        <div key={r.id} onMouseEnter={() => setHoveredRefId(hovId)} onMouseLeave={() => setHoveredRefId(null)} onDragOver={e => { if (slot.mediaKind === "audio" || !e.dataTransfer.types.includes("application/x-gallery-item")) return; e.preventDefault(); e.stopPropagation(); e.dataTransfer.dropEffect = "copy"; setDragOverSlotKey(dragKey); }} onDragLeave={() => setDragOverSlotKey(null)} onDrop={e => { if (slot.mediaKind !== "audio") handleGalleryItemDrop(e, slot.target as any, slot.mediaKind as "image" | "video"); }} style={{ position: "relative", width: "64px", height: "64px", borderRadius: "8px", overflow: "hidden", flexShrink: 0, background: "#1a1c1f", border: r.error ? "1px solid rgba(248,113,113,0.4)" : dragOverSlotKey === dragKey ? "2.5px solid #2DD4BF" : "1px solid rgba(255,255,255,0.12)", boxShadow: dragOverSlotKey === dragKey ? "0 0 0 3px rgba(45,212,191,0.25)" : undefined }}>
+                        <div key={r.id} onMouseDown={e => e.preventDefault()} onPointerDown={e => { if (!isMultiTarget || listForSlot.length <= 1 || r.uploading || r.error) return; _reorderDragItem = { id: r.id, listTarget: slot.target as "resource"|"referenceVideo"|"audioRef" }; _reorderOverId = null; setDraggingId(r.id); }} onPointerEnter={() => { if (!_reorderDragItem || _reorderDragItem.id === r.id || _reorderDragItem.listTarget !== slot.target) return; _reorderOverId = r.id; setReorderOverId(r.id); }} onPointerUp={e => { const info = _reorderDragItem; if (!info || info.listTarget !== slot.target) return; e.stopPropagation(); if (_reorderOverId) e.preventDefault(); const target = _reorderOverId ?? r.id; handleReorderDrop(target, slot.target as "resource"|"referenceVideo"|"audioRef"); }} onMouseEnter={() => { if (!draggingId) setHoveredRefId(hovId); }} onMouseLeave={() => setHoveredRefId(null)} onDragOver={e => { if (slot.mediaKind === "audio" || !e.dataTransfer.types.includes("application/x-gallery-item")) return; e.preventDefault(); e.stopPropagation(); e.dataTransfer.dropEffect = "copy"; setDragOverSlotKey(dragKey); }} onDragLeave={() => setDragOverSlotKey(null)} onDrop={e => { if (slot.mediaKind !== "audio") handleGalleryItemDrop(e, slot.target as any, slot.mediaKind as "image" | "video"); }} style={{ position: "relative", width: "64px", height: "64px", borderRadius: "8px", overflow: "hidden", flexShrink: 0, background: "#1a1c1f", touchAction: (isMultiTarget && listForSlot.length > 1) ? "none" : undefined, transition: "border 120ms, box-shadow 120ms, opacity 120ms", border: r.error ? "1px solid rgba(248,113,113,0.4)" : dragOverSlotKey === dragKey ? "2.5px solid #2DD4BF" : "1px solid rgba(255,255,255,0.12)", boxShadow: dragOverSlotKey === dragKey ? "0 0 0 3px rgba(45,212,191,0.25)" : undefined, opacity: isSlotDragging ? 0.3 : undefined, cursor: (isMultiTarget && listForSlot.length > 1 && !r.uploading && !r.error) ? (draggingId === r.id ? "grabbing" : "grab") : undefined }}>
                           {slot.mediaKind === "image" ? <img src={thumbSrc(r.objectUrl)} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} /> : slot.mediaKind === "video" ? <video src={r.objectUrl} autoPlay muted loop playsInline style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} /> : <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(255,255,255,0.04)" }}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg></div>}
                           {hoveredRefId === hovId && !r.uploading && !r.error && slot.mediaKind !== "audio" && (
-                            <div onClick={() => setRefPreview({ url: r.objectUrl, mediaKind: slot.mediaKind })} style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,0.35)", display: "flex", alignItems: "center", justifyContent: "center", cursor: "zoom-in", zIndex: 1 }}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.9)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg></div>
+                            <div onClick={() => { if (_reorderJustDropped || draggingId) { _reorderJustDropped = false; return; } setRefPreview({ url: r.objectUrl, mediaKind: slot.mediaKind }); }} style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,0.35)", display: "flex", alignItems: "center", justifyContent: "center", cursor: "zoom-in", zIndex: 1 }}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.9)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg></div>
                           )}
                           <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, padding: "8px 4px 3px", background: "linear-gradient(to top, rgba(0,0,0,0.8) 0%, transparent 100%)", textAlign: "center" }}><span style={{ fontSize: "8px", fontWeight: 700, letterSpacing: "0.04em", color: "rgba(255,255,255,0.85)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", display: "block", padding: "0 4px" }}>{slot.label.toUpperCase()}</span></div>
                           <button onClick={() => removeVidRef(r.id, slot.target)} style={{ position: "absolute", top: "3px", right: "3px", width: "16px", height: "16px", borderRadius: "50%", background: "rgba(0,0,0,0.7)", border: "1px solid rgba(255,255,255,0.15)", color: "rgba(255,255,255,0.85)", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", padding: 0, transition: "background 120ms", zIndex: 2 }}><svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
@@ -4028,24 +4260,27 @@ function GalleryInner() {
           style={{
             position: "fixed",
             left: promptBarRef.current.getBoundingClientRect().left,
-            bottom: window.innerHeight - promptBarRef.current.getBoundingClientRect().top + 6,
+            bottom: Math.max(8, window.innerHeight - promptBarRef.current.getBoundingClientRect().top + 6),
             width: promptBarRef.current.getBoundingClientRect().width,
+            maxHeight: `${promptBarRef.current.getBoundingClientRect().top - 16}px`,
             background: "#0E1012",
             border: "1px solid rgba(255,255,255,0.1)",
             borderRadius: "14px",
             boxShadow: "0 8px 48px rgba(0,0,0,0.75), 0 2px 12px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.04)",
             overflow: "hidden",
+            display: "flex",
+            flexDirection: "column",
             zIndex: 9999,
             animation: "dropIn 130ms cubic-bezier(0.16,1,0.3,1)",
           }}
           onMouseDown={e => e.preventDefault()}
         >
-          <div style={{ padding: "6px 12px 4px", borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
+          <div style={{ padding: "6px 12px 4px", borderBottom: "1px solid rgba(255,255,255,0.05)", flexShrink: 0 }}>
             <span style={{ fontSize: "10px", color: "rgba(255,255,255,0.28)", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 500 }}>
               {isVideo ? "Reference assets" : "Gallery images"}
             </span>
           </div>
-          <div style={{ maxHeight: "280px", overflowY: "auto", padding: "4px" }}>
+          <div style={{ maxHeight: "280px", overflowY: "auto", padding: "4px", flex: 1, minHeight: 0 }}>
             {filteredMentions.map((ref, idx) => (
               <button
                 key={ref.id}
@@ -4095,21 +4330,30 @@ function GalleryInner() {
         <div
           style={{
             position: "fixed",
-            left: chipPreview.rect.left + chipPreview.rect.width / 2,
-            bottom: window.innerHeight - chipPreview.rect.top + 8,
+            left: Math.max(110, Math.min(
+              chipPreview.rect.left + chipPreview.rect.width / 2,
+              window.innerWidth - 110,
+            )),
+            ...(chipPreview.rect.top > 190
+              ? { bottom: window.innerHeight - chipPreview.rect.top + 8 }
+              : { top: chipPreview.rect.bottom + 8 }),
             transform: "translateX(-50%)",
             zIndex: 99999,
             pointerEvents: "none",
           }}
         >
-          {/* Inner: animation only — no positioning transform */}
+          {/* Inner: animation + scroll so popup never overflows viewport */}
           <div
             style={{
               borderRadius: "10px",
-              overflow: "hidden",
+              overflowY: "auto",
+              overflowX: "hidden",
               boxShadow: "0 8px 32px rgba(0,0,0,0.65), 0 2px 8px rgba(0,0,0,0.4)",
               border: "1px solid rgba(255,255,255,0.08)",
               animation: "dropIn 140ms cubic-bezier(0.16,1,0.3,1)",
+              maxHeight: chipPreview.rect.top > 190
+                ? `${Math.min(200, chipPreview.rect.top - 16)}px`
+                : `${Math.min(200, window.innerHeight - chipPreview.rect.bottom - 16)}px`,
             }}
           >
             {/* eslint-disable-next-line @next/next/no-img-element */}
