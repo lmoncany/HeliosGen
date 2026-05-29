@@ -2197,6 +2197,7 @@ function GalleryInner() {
       if (target.closest("[data-prompt-overlay]")) return;
       if (target.closest("[data-element-picker-modal]")) return;
       if (target.closest("[data-at-menu]")) return;
+      if (target.closest("[data-custom-dropdown-portal]")) return;
       if (promptBarRef.current && !promptBarRef.current.contains(target)) {
         setPromptExpanded(false);
       }
@@ -3601,7 +3602,7 @@ function GalleryInner() {
               return (
                 <div data-prompt-stack="" style={{
                   display: "flex", flexDirection: "column", gap: "6px",
-                  maxHeight: "204px", overflowY: "auto", scrollbarWidth: "none",
+                  maxHeight: promptExpanded ? "calc(75vh - 220px)" : "204px", overflowY: "auto", scrollbarWidth: "none",
                 }}>
                   {blocks.map((block, blockIdx) => {
                     const isNonEmpty = !!block.trim();
@@ -4984,6 +4985,7 @@ function CustomDropdown({
       {open && createPortal(
         <div
           ref={dropRef}
+          data-custom-dropdown-portal=""
           style={{
             position: "fixed",
             left: pos.left,
