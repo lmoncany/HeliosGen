@@ -129,7 +129,7 @@ async function curlMultipartPost(
 
     console.log("[azure/edits/curl] args:", args.map((a) => (a.startsWith("Bearer ") ? "Bearer ***" : a)));
 
-    const { statusStr, stderr, exitCode } = await new Promise<{ statusStr: string; stderr: string; exitCode: number }>((resolve, reject) => {
+    const runCurl = () => new Promise<{ statusStr: string; stderr: string; exitCode: number }>((resolve, reject) => {
       let out = "";
       let err = "";
       const proc = spawn("curl", args);
@@ -139,11 +139,17 @@ async function curlMultipartPost(
       proc.on("error",  (e) => reject(new Error(`curl spawn failed: ${e.message}`)));
     });
 
-    console.log("[azure/edits/curl] exit code:", exitCode);
-    if (stderr) console.log("[azure/edits/curl] stderr:", stderr);
+    let statusStr: string, stderr: string, exitCode: number;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      ({ statusStr, stderr, exitCode } = await runCurl());
+      console.log(`[azure/edits/curl] attempt ${attempt} exit code:`, exitCode);
+      if (stderr) console.log("[azure/edits/curl] stderr:", stderr);
+      if (exitCode !== 35) break; // 35 = SSL handshake failure — retry
+      if (attempt < 3) await new Promise((r) => setTimeout(r, 1000 * attempt));
+    }
 
-    if (exitCode !== 0) {
-      const reason = exitCode === 28 ? "timed out (curl -m 600 exceeded)" : `curl exited with code ${exitCode}`;
+    if (exitCode! !== 0) {
+      const reason = exitCode! === 28 ? "timed out (curl -m 600 exceeded)" : `curl exited with code ${exitCode}`;
       throw new Error(`Azure curl request failed: ${reason}`);
     }
 

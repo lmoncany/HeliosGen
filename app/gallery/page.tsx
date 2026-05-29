@@ -6,7 +6,7 @@ import { createClient } from "@/lib/supabase/client";
 import { IMAGE_MODELS, VIDEO_MODELS } from "@/lib/modelConfig";
 import { useWorkflowStore } from "@/lib/store";
 import type { User } from "@supabase/supabase-js";
-import { Maximize2, Minimize2, ShieldAlert } from "lucide-react";
+import { Maximize2, Minimize2, ShieldAlert, X } from "lucide-react";
 import { GalleryItem, getToken, galleryCache } from "@/lib/galleryUtils";
 import { useFolderStore } from "@/lib/folderStore";
 import { MediaPickerModal } from "@/components/MediaPickerModal";
@@ -3251,6 +3251,41 @@ function GalleryInner() {
           flexDirection: promptExpanded ? "column" : undefined,
         }}>
 
+          {/* Clear prompt button */}
+          {(prompt || refImages.length > 0 || taggedImages.length > 0) && (
+            <button
+              onClick={() => {
+                refImages.forEach(r => URL.revokeObjectURL(r.objectUrl));
+                setPrompt("");
+                setRefImages([]);
+                setTaggedImages([]);
+              }}
+              title="Clear prompt"
+              style={{
+                position: "absolute",
+                top: "10px",
+                right: "46px",
+                width: "26px",
+                height: "26px",
+                borderRadius: "8px",
+                border: "none",
+                background: "rgba(255,255,255,0.06)",
+                color: "rgba(255,255,255,0.35)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                cursor: "pointer",
+                zIndex: 10,
+                transition: "background 140ms, color 140ms",
+                flexShrink: 0,
+              }}
+              onMouseEnter={e => { e.currentTarget.style.background = "rgba(248,113,113,0.15)"; e.currentTarget.style.color = "rgba(248,113,113,0.8)"; }}
+              onMouseLeave={e => { e.currentTarget.style.background = "rgba(255,255,255,0.06)"; e.currentTarget.style.color = "rgba(255,255,255,0.35)"; }}
+            >
+              <X size={12} strokeWidth={2.5} />
+            </button>
+          )}
+
           {/* Expand / collapse button */}
           <button
             onClick={() => setPromptExpanded(v => !v)}
@@ -3457,7 +3492,7 @@ function GalleryInner() {
             )}
 
             {/* Prompt input with inline mention chips — hidden in multi-prompt mode */}
-            <div style={{ position: "relative", flex: "none", display: multiPromptMode ? "none" : undefined }}>
+            <div style={{ position: "relative", flex: promptExpanded ? "1 1 0" : "none", minHeight: 0, overflow: promptExpanded ? "hidden" : undefined, display: multiPromptMode ? "none" : undefined }}>
               {/* Transparent textarea — editing layer */}
               <textarea
                 ref={inputRef}
@@ -3468,7 +3503,7 @@ function GalleryInner() {
                   const text = e.target.value;
                   const cursor = e.target.selectionStart ?? text.length;
                   setPrompt(text);
-                  resizeTextarea(e.target, promptExpanded ? window.innerHeight * 0.75 - 220 : 264);
+                  if (!promptExpanded) resizeTextarea(e.target, 264);
                   if (!isVideo) {
                     const match = text.slice(0, cursor).match(/@(\w*)$/);
                     setMentionQuery(match ? match[1] : null);
@@ -3498,6 +3533,7 @@ function GalleryInner() {
                   position: "relative",
                   display: "block",
                   width: "100%",
+                  ...(promptExpanded ? { height: "100%", maxHeight: "none" } : { maxHeight: "264px" }),
                   background: "transparent",
                   border: "none",
                   outline: "none",
@@ -3509,7 +3545,6 @@ function GalleryInner() {
                   letterSpacing: promptTextMode !== "text" ? "normal" : "-0.01em",
                   padding: 0,
                   resize: "none",
-                  maxHeight: promptExpanded ? "calc(75vh - 220px)" : "264px",
                   overflowY: "auto",
                   scrollbarWidth: "none",
                 } as React.CSSProperties}
