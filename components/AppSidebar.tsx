@@ -161,6 +161,23 @@ function GitHubButtons() {
 // ── Module-level drag tracker (avoids stale closures across re-renders) ──────
 let _dragFolderId: string | null = null;
 
+// ── Clean failed pending generations from localStorage + notify gallery page ──
+function cleanFailedJobs(folderId: string | null) {
+  try {
+    const stored = localStorage.getItem("aiui-pending-gens");
+    if (stored) {
+      const parsed = JSON.parse(stored) as Array<{ error?: string; folderId?: string | null }>;
+      const cleaned = parsed.filter(pg => {
+        if (!pg.error) return true;
+        if (folderId === null) return false;
+        return pg.folderId !== folderId;
+      });
+      localStorage.setItem("aiui-pending-gens", JSON.stringify(cleaned));
+    }
+  } catch {}
+  window.dispatchEvent(new CustomEvent("clean-failed-jobs", { detail: { folderId } }));
+}
+
 // ── FolderRow — defined at module level so React never remounts it on parent re-renders ──
 interface FolderRowProps {
   folder: import("@/lib/folderStore").Folder;
@@ -392,6 +409,18 @@ const FolderRow = React.memo(function FolderRow({
             Rename
           </button>
           <button
+            onClick={e => { e.stopPropagation(); setMenuOpen(false); cleanFailedJobs(folder.id); }}
+            style={{
+              display: "block", width: "100%", textAlign: "left",
+              padding: "6px 10px", borderRadius: 5, fontSize: 12,
+              color: "rgba(255,255,255,0.72)", background: "none", border: "none", cursor: "pointer",
+            }}
+            onMouseEnter={e => (e.currentTarget.style.background = "rgba(255,255,255,0.06)")}
+            onMouseLeave={e => (e.currentTarget.style.background = "none")}
+          >
+            Clean failed jobs
+          </button>
+          <button
             onClick={e => { e.stopPropagation(); setMenuOpen(false); onDelete(folder.id); }}
             style={{
               display: "block", width: "100%", textAlign: "left",
@@ -432,6 +461,103 @@ const FolderRow = React.memo(function FolderRow({
             </div>
           )}
         </>
+      )}
+    </React.Fragment>
+  );
+});
+
+// ── AllAssetsRow — "All assets" item with its own "..." menu ─────────────────
+interface AllAssetsRowProps {
+  isActive: boolean;
+  count: number;
+  onSelect: () => void;
+}
+
+const AllAssetsRow = React.memo(function AllAssetsRow({ isActive, count, onSelect }: AllAssetsRowProps) {
+  const [menuOpen, setMenuOpen] = React.useState(false);
+  const [menuPos, setMenuPos] = React.useState<{ x: number; y: number } | null>(null);
+  const menuRef = React.useRef<HTMLDivElement>(null);
+  const btnRef = React.useRef<HTMLButtonElement>(null);
+
+  React.useEffect(() => {
+    if (!menuOpen) return;
+    function handle(e: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setMenuOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handle);
+    return () => document.removeEventListener("mousedown", handle);
+  }, [menuOpen]);
+
+  function openMenu(e: React.MouseEvent) {
+    e.stopPropagation();
+    const rect = btnRef.current!.getBoundingClientRect();
+    setMenuPos({ x: rect.right, y: rect.bottom + 4 });
+    setMenuOpen(true);
+  }
+
+  return (
+    <React.Fragment>
+      <div
+        onClick={onSelect}
+        className={cn(
+          "group flex items-center gap-2 px-2 py-2 rounded-lg cursor-pointer transition-colors",
+          isActive ? "bg-white/[0.07]" : "hover:bg-white/[0.04]"
+        )}
+      >
+        <LayoutGrid size={13} className={cn("shrink-0", isActive ? "text-white/70" : "text-white/35")} />
+        <span className={cn(
+          "flex-1 text-[12px] truncate leading-tight",
+          isActive ? "text-white/90" : "text-white/55"
+        )}>
+          All assets
+        </span>
+        {count > 0 && (
+          <span style={{ fontSize: 10, color: "rgba(255,255,255,0.25)", flexShrink: 0, fontVariantNumeric: "tabular-nums" }}>
+            {count}
+          </span>
+        )}
+        <button
+          ref={btnRef}
+          onClick={openMenu}
+          className="w-5 h-5 rounded flex items-center justify-center opacity-0 group-hover:opacity-100 text-white/35 hover:text-white/70 hover:bg-white/[0.08] transition-all shrink-0"
+        >
+          <MoreHorizontal size={12} />
+        </button>
+      </div>
+
+      {menuOpen && menuPos && (
+        <div
+          ref={menuRef}
+          onMouseDown={e => e.preventDefault()}
+          style={{
+            position: "fixed",
+            left: menuPos.x,
+            top: menuPos.y,
+            transform: "translateX(-100%)",
+            zIndex: 9999,
+            background: "#16181f",
+            border: "1px solid rgba(255,255,255,0.09)",
+            borderRadius: 8,
+            padding: 4,
+            minWidth: 130,
+            boxShadow: "0 6px 24px rgba(0,0,0,0.6)",
+          }}
+        >
+          <button
+            onClick={e => { e.stopPropagation(); setMenuOpen(false); cleanFailedJobs(null); }}
+            style={{
+              display: "block", width: "100%", textAlign: "left",
+              padding: "6px 10px", borderRadius: 5, fontSize: 12,
+              color: "rgba(255,255,255,0.72)", background: "none", border: "none", cursor: "pointer",
+            }}
+            onMouseEnter={e => (e.currentTarget.style.background = "rgba(255,255,255,0.06)")}
+            onMouseLeave={e => (e.currentTarget.style.background = "none")}
+          >
+            Clean failed jobs
+          </button>
+        </div>
       )}
     </React.Fragment>
   );
@@ -706,29 +832,11 @@ export function AppSidebar() {
           {/* Folder list — max 7 rows, scrollable */}
           <div className="flex flex-col gap-0.5" style={{ maxHeight: "calc(7 * 36px)", overflowY: "auto" }}>
             {/* All assets row */}
-            <div
-              onClick={() => selectFolder(null)}
-              className={cn(
-                "group flex items-center gap-2 px-2 py-2 rounded-lg cursor-pointer transition-colors",
-                selectedFolderId === null ? "bg-white/[0.07]" : "hover:bg-white/[0.04]"
-              )}
-            >
-              <LayoutGrid size={13} className={cn("shrink-0", selectedFolderId === null ? "text-white/70" : "text-white/35")} />
-              <span className={cn(
-                "flex-1 text-[12px] truncate leading-tight",
-                selectedFolderId === null ? "text-white/90" : "text-white/55"
-              )}>
-                All assets
-              </span>
-              {pathname === "/gallery" && (() => {
-                const c = tab === "videos" ? galleryVideoCount : galleryImageCount;
-                return c > 0 ? (
-                  <span style={{ fontSize: 10, color: "rgba(255,255,255,0.25)", flexShrink: 0, fontVariantNumeric: "tabular-nums" }}>
-                    {c}
-                  </span>
-                ) : null;
-              })()}
-            </div>
+            <AllAssetsRow
+              isActive={selectedFolderId === null}
+              count={pathname === "/gallery" ? (tab === "videos" ? galleryVideoCount : galleryImageCount) : 0}
+              onSelect={() => selectFolder(null)}
+            />
 
             {/* Recursive folder tree — root folders only, children rendered inside FolderRow */}
             {buildTree(null).map((folder) => (

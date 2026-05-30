@@ -1130,6 +1130,20 @@ function GalleryInner() {
     try { localStorage.setItem("aiui-pending-gens", JSON.stringify(pendingGens)); } catch { }
   }, [pendingGens]);
 
+  // Handle "Clean failed jobs" dispatched from the sidebar
+  useEffect(() => {
+    function handle(e: Event) {
+      const { folderId } = (e as CustomEvent<{ folderId: string | null }>).detail;
+      setPendingGens(prev => prev.filter(pg => {
+        if (!pg.error) return true;
+        if (folderId === null) return false;
+        return pg.folderId !== folderId;
+      }));
+    }
+    window.addEventListener("clean-failed-jobs", handle);
+    return () => window.removeEventListener("clean-failed-jobs", handle);
+  }, []);
+
   // On mount, resume polling for any pending gens that were in-flight before the refresh
   useEffect(() => {
     const toResume = pendingGens.filter(p => p.taskId && !p.error);
@@ -3252,13 +3266,20 @@ function GalleryInner() {
         }}>
 
           {/* Clear prompt button */}
-          {(prompt || refImages.length > 0 || taggedImages.length > 0) && (
+          {(prompt || refImages.length > 0 || taggedImages.length > 0 || vidElements.length > 0 || vidStartFrame || vidEndFrame || vidVideoRef || vidResources.length > 0 || vidRefVideos.length > 0 || vidRefAudios.length > 0) && (
             <button
               onClick={() => {
                 refImages.forEach(r => URL.revokeObjectURL(r.objectUrl));
                 setPrompt("");
                 setRefImages([]);
                 setTaggedImages([]);
+                setVidElements([]);
+                setVidStartFrame(null);
+                setVidEndFrame(null);
+                setVidVideoRef(null);
+                setVidResources([]);
+                setVidRefVideos([]);
+                setVidRefAudios([]);
               }}
               title="Clear prompt"
               style={{
