@@ -210,7 +210,7 @@ export function MediaPickerModal({
   }, [mediaKind]);
 
   useEffect(() => {
-    if (!open) { setUrlInput(""); setUrlError(""); return; }
+    if (!open) { setUrlInput(""); setUrlError(""); setPreviewItem(null); return; }
     setActiveTab(defaultTab);
     activeTabRef.current = defaultTab;
 
@@ -291,6 +291,33 @@ export function MediaPickerModal({
     if (activeTab === "image-gen") return sourceItems.filter((i) => i.source === "generation" && i.mediaType === "image");
     return sourceItems.filter((i) => i.source === "generation" && i.mediaType === "video");
   }, [activeTab, sourceItems]);
+
+  useEffect(() => {
+    if (!previewItem) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+        e.preventDefault();
+        const idx = displayItems.findIndex(i => i.id === previewItem.id);
+        if (idx === -1) return;
+        const nextIdx = e.key === "ArrowLeft" ? idx - 1 : idx + 1;
+        if (nextIdx >= 0 && nextIdx < displayItems.length) setPreviewItem(displayItems[nextIdx]);
+      } else if (e.key === "Enter") {
+        e.preventDefault();
+        const isSelected = selectedUrls?.includes(previewItem.url) ?? false;
+        const atLimit = maxCount !== undefined && (selectedUrls?.length ?? 0) >= maxCount;
+        if (isSelected) {
+          onDeselect?.(previewItem.url);
+        } else if (!atLimit) {
+          onPickUrl(previewItem.url, previewItem.mediaType);
+        }
+        setPreviewItem(null);
+      } else if (e.key === "Escape") {
+        setPreviewItem(null);
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [previewItem, displayItems, selectedUrls, maxCount, onPickUrl, onDeselect]);
 
   if (!open) return null;
 
@@ -589,6 +616,29 @@ export function MediaPickerModal({
           >
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
           </button>
+          {(() => {
+            const idx = displayItems.findIndex(i => i.id === previewItem.id);
+            return (
+              <>
+                {idx > 0 && (
+                  <button
+                    onClick={(e) => { e.stopPropagation(); setPreviewItem(displayItems[idx - 1]); }}
+                    style={{ position: "absolute", left: "20px", top: "50%", transform: "translateY(-50%)", width: "40px", height: "40px", borderRadius: "50%", background: "rgba(255,255,255,0.1)", border: "1px solid rgba(255,255,255,0.15)", color: "rgba(255,255,255,0.8)", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+                  </button>
+                )}
+                {idx < displayItems.length - 1 && (
+                  <button
+                    onClick={(e) => { e.stopPropagation(); setPreviewItem(displayItems[idx + 1]); }}
+                    style={{ position: "absolute", right: "20px", top: "50%", transform: "translateY(-50%)", width: "40px", height: "40px", borderRadius: "50%", background: "rgba(255,255,255,0.1)", border: "1px solid rgba(255,255,255,0.15)", color: "rgba(255,255,255,0.8)", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+                  </button>
+                )}
+              </>
+            );
+          })()}
         </div>,
         document.body,
       )}
