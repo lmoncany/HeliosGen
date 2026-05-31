@@ -844,7 +844,7 @@ function removeTagAndRenumber(
     });
 
   // Remove the deleted tag from prompt, then renumber higher ones ascending
-  // (ascending order avoids regex collision: @img2→@img1 before @img3→@img2)
+  // (ascending order avoids regex collision: @image2→@image1 before @image3→@image2)
   let newPrompt = currentPrompt.replace(new RegExp(`@${prefix}${removedN}\\b`, 'g'), '');
 
   const higherNs = currentTaggedImages
@@ -878,7 +878,7 @@ function reorderAndRenumberTags(
   currentPrompt: string,
 ): { newTaggedImages: TaggedImage[]; newPrompt: string } {
   // Build label → RefImage mapping for the new order.
-  // @imgN is a positional reference to the Nth attached item; when the user
+  // @imageN is a positional reference to the Nth attached item; when the user
   // reorders, we update the URL/refId behind each label rather than renaming
   // labels in the prompt — that way resolveGalleryMentions produces extraUrls
   // in the new order and <<<image N>>> in the resolved prompt matches the
@@ -1089,7 +1089,7 @@ function GalleryInner() {
     const urls = s?.refImageUrls ?? [];
     const p = s?.prompt ?? "";
     return urls.flatMap((url, idx) => {
-      const label = `img${idx + 1}`;
+      const label = `image${idx + 1}`;
       return p.includes(`@${label}`) ? [{ label, refId: url, url }] : [];
     });
   });
@@ -1332,7 +1332,7 @@ function GalleryInner() {
       saved?.taggedImages?.length
         ? saved.taggedImages
         : savedUrls.flatMap((url, idx) => {
-            const label = `img${idx + 1}`;
+            const label = `image${idx + 1}`;
             return savedPrompt.includes(`@${label}`) ? [{ label, refId: url, url }] : [];
           })
     );
@@ -2088,7 +2088,7 @@ function GalleryInner() {
     if (!isVideo) {
       return refImages
         .filter(r => !r.uploading && !r.error && r.cdnUrl)
-        .map((r, i) => ({ ...r, kind: "image" as const, label: `img${i + 1}`, role: `Reference ${i + 1}` }));
+        .map((r, i) => ({ ...r, kind: "image" as const, label: `image${i + 1}`, role: `Reference ${i + 1}` }));
     } else {
       const isVeo = modelId === "veo3" || modelId === "veo3_fast" || modelId === "veo3_lite";
       const assets: (RefImage & { kind: "image" | "video" | "audio"; label: string; role: string })[] = [];
@@ -2111,7 +2111,7 @@ function GalleryInner() {
         if (endOk) imgs.push({ ref: vidEndFrame!, role: "End Frame" });
         resOk.forEach((r, i) => imgs.push({ ref: r, role: `Reference ${i + 1}` }));
       }
-      assets.push(...imgs.map((item, i) => ({ ...item.ref, kind: "image" as const, label: `img${i + 1}`, role: item.role })));
+      assets.push(...imgs.map((item, i) => ({ ...item.ref, kind: "image" as const, label: `image${i + 1}`, role: item.role })));
 
       // Videos (hide for Veo)
       if (!isVeo) {
@@ -2140,9 +2140,22 @@ function GalleryInner() {
 
   useEffect(() => { setMentionSelIdx(0); }, [filteredMentions.length]);
 
-  // Sync: remove chips whose @label was deleted from the prompt
+  // Sync: remove stale chips; auto-tag @mentions that match attached assets (paste support)
   useEffect(() => {
-    setTaggedImages(prev => prev.filter(t => prompt.includes(`@${t.label}`)));
+    setTaggedImages(prev => {
+      const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const filtered = prev.filter(t => new RegExp(`@${esc(t.label)}(?!\\w)`).test(prompt));
+      const newTags: TaggedImage[] = [];
+      for (const asset of mentionableAssets) {
+        if (!filtered.some(t => t.label === asset.label) && asset.cdnUrl) {
+          if (new RegExp(`@${esc(asset.label)}(?!\\w)`).test(prompt)) {
+            newTags.push({ label: asset.label, refId: asset.id, url: asset.cdnUrl, kind: asset.kind });
+          }
+        }
+      }
+      if (newTags.length === 0) return filtered.length === prev.length ? prev : filtered;
+      return [...filtered, ...newTags];
+    });
     if (inputRef.current && !multiPromptMode) {
       const maxH = promptExpanded ? window.innerHeight * 0.75 - 220 : 264;
       resizeTextarea(inputRef.current, maxH);
@@ -2151,8 +2164,7 @@ function GalleryInner() {
       const st = inputRef.current?.scrollTop ?? 0;
       overlayInnerRef.current.style.transform = st > 0 ? `translateY(-${st}px)` : "";
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [prompt]);
+  }, [prompt, mentionableAssets]);
 
   const openDurPicker = useCallback(() => {
     const r = durPillRef.current?.getBoundingClientRect();
@@ -2221,7 +2233,7 @@ function GalleryInner() {
   }, [promptExpanded]);
 
   const insertMention = (ref: RefImage & { kind?: "image" | "video" | "audio"; label?: string }) => {
-    const label = ref.label || "img1";
+    const label = ref.label || "image1";
     if (!taggedImages.some(t => t.refId === ref.id))
       setTaggedImages(prev => [...prev, { label, refId: ref.id, url: ref.cdnUrl!, kind: isVideo ? (ref.kind || "image") : "image" }]);
 
@@ -2370,7 +2382,7 @@ function GalleryInner() {
     newArr.splice(targetIdx, 0, moved);
     setter(() => newArr);
 
-    const { newTaggedImages, newPrompt } = reorderAndRenumberTags(oldArr, newArr, "img", taggedImages, prompt);
+    const { newTaggedImages, newPrompt } = reorderAndRenumberTags(oldArr, newArr, "image", taggedImages, prompt);
     setTaggedImages(newTaggedImages);
     setPrompt(newPrompt);
   };
@@ -2384,12 +2396,12 @@ function GalleryInner() {
     const tagged: TaggedImage[] = [];
 
     if (refUrls?.length) {
-      // Attempt to un-resolve mentions: <<<image N>>> or @imageN -> @imgN
+      // Attempt to un-resolve mentions: <<<image N>>> or @imageN -> @imageN
       processedText = text.replace(/<<<image (\d+)>>>|@image(\d+)/gi, (m, g1, g2) => {
         const n = parseInt(g1 || g2);
         const url = refUrls[n - 1];
         if (url) {
-          const label = `img${n}`;
+          const label = `image${n}`;
           if (!tagged.some(t => t.label === label)) {
             tagged.push({ label, refId: url, url });
           }
@@ -2895,7 +2907,7 @@ function GalleryInner() {
                                 const token = await getToken();
                                 if (!token) { setPendingGens(prev => prev.map(p => p.id === newId ? { ...p, error: "Please sign in." } : p)); return; }
                                 const storedRefs = pg.referenceImageUrls ?? [];
-                                const syntheticTagged: TaggedImage[] = storedRefs.map((url, i) => ({ label: `img${i + 1}`, refId: url, url }));
+                                const syntheticTagged: TaggedImage[] = storedRefs.map((url, i) => ({ label: `image${i + 1}`, refId: url, url }));
                                 const { resolvedPrompt, extraUrls } = resolveGalleryMentions(pg.prompt, syntheticTagged);
                                 const dedupedExtra = new Set(extraUrls);
                                 const imageUrls = [...extraUrls, ...storedRefs.filter(u => !dedupedExtra.has(u))];
