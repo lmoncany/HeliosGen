@@ -1971,6 +1971,36 @@ function GalleryInner() {
     if (isVideo && [vidStartFrame, vidEndFrame, vidVideoRef, ...vidResources, ...vidRefVideos, ...vidRefAudios].some(r => r?.uploading)) {
       setGenError("References still uploading…"); setTimeout(() => setGenError(""), 3_000); return;
     }
+    if (isVideo) {
+      const vm = VIDEO_MODELS.find(m => m.id === modelId);
+      if (vm?.requiredHandles?.length) {
+        const handleHasContent = (h: string) => {
+          if (h === "resource")        return vidResources.some(r => r.cdnUrl && !r.error);
+          if (h === "startFrame")      return !!(vidStartFrame?.cdnUrl && !vidStartFrame.error);
+          if (h === "endFrame")        return !!(vidEndFrame?.cdnUrl && !vidEndFrame.error);
+          if (h === "videoRef")        return !!(vidVideoRef?.cdnUrl && !vidVideoRef.error);
+          if (h === "referenceVideo")  return vidRefVideos.some(r => r.cdnUrl && !r.error);
+          if (h === "audioRef")        return vidRefAudios.some(r => r.cdnUrl && !r.error);
+          if (h === "prompt")          return !!prompt.trim();
+          return true;
+        };
+        const HANDLE_LABELS: Record<string, string> = {
+          resource: "Reference image",
+          startFrame: "Start frame image",
+          endFrame: "End frame image",
+          videoRef: "Reference video",
+          referenceVideo: "Reference video",
+          audioRef: "Reference audio",
+          prompt: "Text prompt",
+        };
+        const missing = vm.requiredHandles.filter(h => !handleHasContent(h));
+        if (missing.length > 0) {
+          const labels = missing.map(h => HANDLE_LABELS[h] ?? h).join(", ");
+          addToast(`Missing required input${missing.length > 1 ? "s" : ""}: ${labels}.`, "error");
+          return;
+        }
+      }
+    }
     if (!user && process.env.NEXT_PUBLIC_GUEST_MODE !== "true") {
       setAuthModalOpen(true);
       return;

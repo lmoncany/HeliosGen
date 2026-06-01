@@ -299,6 +299,11 @@ export interface VideoModel {
   defaultRatio: string;
   /** Active target handles for this model */
   handles: VideoHandle[];
+  /**
+   * Handles that must have content before generation is allowed.
+   * The gallery validates these and shows an error modal if any are empty.
+   */
+  requiredHandles?: VideoHandle[];
   /** Show sound toggle in controls */
   sound: boolean;
   /** When true, prompt is not required to generate */
@@ -535,6 +540,7 @@ export const VIDEO_MODELS: VideoModel[] = [
     defaultDuration: 8,
     defaultRatio: "auto",
     handles: ["prompt", "resource"],
+    requiredHandles: ["resource"],
     sound: false,
     promptOptional: true,
     maxResources: 1,
@@ -658,6 +664,7 @@ export const VIDEO_MODELS: VideoModel[] = [
     defaultDuration: 0,
     defaultRatio: "9:16",
     handles: ["prompt", "startFrame", "videoRef"],
+    requiredHandles: ["startFrame", "videoRef"],
     sound: false,
     promptOptional: true,
     // character_orientation: "image" keeps subject pose from reference image (max 10s)
