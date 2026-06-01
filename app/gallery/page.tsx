@@ -5366,13 +5366,17 @@ function GalleryCard({
 
   // Lazy-load observer: request a concurrency slot when the card nears the viewport.
   useEffect(() => {
-    if (preloaded || isVideo) return; // already loaded or video — skip queue
+    if (preloaded) return;
     const el = cardRef.current;
     if (!el) return;
     const observer = new IntersectionObserver(
       ([entry]) => {
-        if (entry.isIntersecting && !cancelSlotRef.current) {
-          cancelSlotRef.current = requestImageSlot(() => setShouldLoad(true));
+        if (entry.isIntersecting) {
+          if (isVideo) {
+            setShouldLoad(true);
+          } else if (!cancelSlotRef.current) {
+            cancelSlotRef.current = requestImageSlot(() => setShouldLoad(true));
+          }
         }
       },
       { root: scrollContainer?.current ?? null, rootMargin: "200px", threshold: 0 },
