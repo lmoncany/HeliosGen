@@ -2513,7 +2513,8 @@ function GalleryInner() {
   }, [hasMore, items, clearDeletedFromNodes]);
 
   const handleDownload = useCallback(async (url: string, itemIsVideo: boolean): Promise<void> => {
-    const ext = itemIsVideo ? "mp4" : "jpg";
+    const urlExt = url.split("?")[0].split(".").pop()?.toLowerCase();
+    const ext = itemIsVideo ? "mp4" : (urlExt && ["png","jpg","jpeg","webp","gif"].includes(urlExt) ? urlExt : "png");
     const filename = `${Date.now()}.${ext}`;
     const taskId = randomUUID();
     setDownloads(prev => [...prev, { id: taskId, filename, status: "preparing" }]);
@@ -6004,7 +6005,8 @@ function Lightbox({ item, onClose, onCopyPrompt, onPrev, onNext }: { item: Galle
     if (downloading) return;
     setDownloading(true);
     try {
-      const ext = isVideo ? "mp4" : "jpg";
+      const urlExt = lightboxUrl.split("?")[0].split(".").pop()?.toLowerCase();
+      const ext = isVideo ? "mp4" : (urlExt && ["png","jpg","jpeg","webp","gif"].includes(urlExt) ? urlExt : "png");
       const filename = `${isVideo ? "video" : "image"}-${item.id.slice(0, 8)}.${ext}`;
       const res = await fetch(`/api/download?url=${encodeURIComponent(lightboxUrl)}&filename=${filename}`);
       if (!res.ok) throw new Error("Download failed");
