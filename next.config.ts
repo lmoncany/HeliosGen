@@ -13,6 +13,7 @@ const nextConfig: NextConfig = {
       { protocol: "https", hostname: "*.replicate.delivery" },
       { protocol: "https", hostname: "pbxt.replicate.delivery" },
       { protocol: "https", hostname: "*.replicate.com" },
+      { protocol: "https", hostname: "*.aiquickdraw.com" },
     ],
   },
 };

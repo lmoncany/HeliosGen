@@ -15,8 +15,18 @@ const SHIMMER_CSS = `
   100% { opacity: 1; transform: translateY(0); }
 }`;
 
+const NEXT_IMG_WIDTHS = [16, 32, 48, 64, 96, 128, 256, 384, 640, 750, 828, 1080, 1200, 1920, 2048, 3840];
+
+function thumbSrc(url: string, w = 128): string {
+  if (!url || url.startsWith("blob:") || url.startsWith("data:") || url.startsWith("/_next/")) return url;
+  const target = w * 2;
+  const snapped = NEXT_IMG_WIDTHS.find(s => s >= target) ?? NEXT_IMG_WIDTHS[NEXT_IMG_WIDTHS.length - 1];
+  return `/_next/image?url=${encodeURIComponent(url)}&w=${snapped}&q=75`;
+}
+
 function PickerImage({ src }: { src: string }) {
   const [status, setStatus] = useState<"loading" | "loaded" | "error">("loading");
+  const optimizedSrc = thumbSrc(src);
   return (
     <div style={{ position: "absolute", inset: 0 }}>
       {status === "loading" && (
@@ -30,7 +40,7 @@ function PickerImage({ src }: { src: string }) {
       {status !== "error" && (
         <img
           alt=""
-          src={src}
+          src={optimizedSrc}
           loading="eager"
           decoding="async"
           onLoad={() => setStatus("loaded")}

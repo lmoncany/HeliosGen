@@ -1129,6 +1129,8 @@ function GalleryInner() {
   const loadingRef = useRef(false);
   const loadingMoreRef = useRef(false);
   const hasMoreRef = useRef(true);
+  const postLoadCheckRef = useRef<() => void>(() => {});
+  const prevScrollHeightRef = useRef(0);
   const [windowWidth, setWindowWidth] = useState(0);
 
   // Cleanup object URLs on unmount
@@ -1259,6 +1261,7 @@ function GalleryInner() {
       if (cached) { setItems(cached.items); setHasMore(cached.hasMore); }
       else setLoading(true);
     } else {
+      loadingMoreRef.current = true; // synchronous lock — prevents concurrent fetches before React re-renders
       setLoadingMore(true);
     }
     const token = await getToken();
@@ -1288,6 +1291,18 @@ function GalleryInner() {
     } finally {
       setLoading(false);
       setLoadingMore(false);
+      loadingMoreRef.current = false;
+      // Only auto-trigger next load if visible content didn't grow (all-filtered pages)
+      // or the grid doesn't fill the viewport. Skip when a folder is active — the sparse
+      // match rate would cascade into many empty-page fetches; let scroll drive it instead.
+      requestAnimationFrame(() => {
+        const el = gridOuterRef.current;
+        if (!el || !hasMoreRef.current) return;
+        if (useFolderStore.getState().selectedFolderId) return;
+        const grew = el.scrollHeight > prevScrollHeightRef.current;
+        const fillsViewport = el.scrollHeight > el.clientHeight + 1;
+        if (!fillsViewport || !grew) postLoadCheckRef.current();
+      });
     }
   }, []);
 
@@ -1446,8 +1461,8 @@ function GalleryInner() {
   useEffect(() => { loadingMoreRef.current = loadingMore; }, [loadingMore]);
   useEffect(() => { hasMoreRef.current = hasMore; }, [hasMore]);
 
-  // Infinite scroll — scroll events are reliable; the immediate checkAndLoad() call handles
-  // the case where content doesn't fill the container after a page loads (no scroll event fires)
+  // Infinite scroll — scroll events are reliable; postLoadCheckRef handles the case where
+  // content doesn't fill the container after a page loads (no scroll event fires).
   useEffect(() => {
     const container = gridOuterRef.current;
     if (!container || !hasMore) return;
@@ -1455,15 +1470,20 @@ function GalleryInner() {
     const checkAndLoad = () => {
       if (!hasMoreRef.current || loadingRef.current || loadingMoreRef.current) return;
       if (container.scrollHeight - container.scrollTop - container.clientHeight < 800) {
+        prevScrollHeightRef.current = container.scrollHeight;
         loadItems(tabRef.current, pageRef.current + 1);
       }
     };
 
+    postLoadCheckRef.current = checkAndLoad;
     container.addEventListener("scroll", checkAndLoad, { passive: true });
     checkAndLoad();
-    return () => container.removeEventListener("scroll", checkAndLoad);
+    return () => {
+      container.removeEventListener("scroll", checkAndLoad);
+      postLoadCheckRef.current = () => {};
+    };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hasMore, loadItems, loading, loadingMore, authLoaded]);
+  }, [hasMore, loadItems, authLoaded]);
 
   // Persist settings
   useEffect(() => {
