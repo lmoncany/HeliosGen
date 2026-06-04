@@ -2120,7 +2120,7 @@ function GalleryInner() {
     }
     setGenError("");
 
-    const multiPrompts = multiPromptMode && !isVideo ? prompt.split(/\n\n+/).map(p => p.trim()).filter(Boolean) : null;
+    const multiPrompts = multiPromptMode ? prompt.split(/\n\n+/).map(p => p.trim()).filter(Boolean) : null;
     const n = multiPrompts ? multiPrompts.length : (isVideo ? 1 : count);
     const snapshotRefUrls = [...new Set(refImages.filter(r => r.cdnUrl && !r.error).map(r => r.cdnUrl!))];
     const snapshotFolderId = selectedFolderId;
@@ -4351,50 +4351,48 @@ function GalleryInner() {
                 )}
 
                 {/* Multi-prompt toggle */}
-                {!isVideo && (
-                  <button
-                    onClick={() => {
-                      setMultiPromptMode(m => {
-                        if (m) {
-                          // switching OFF — resize the single textarea once it's visible again
-                          requestAnimationFrame(() => {
-                            if (inputRef.current) resizeTextarea(inputRef.current);
-                          });
-                        }
-                        return !m;
-                      });
-                      setExpandedPromptIdx(null);
-                    }}
-                    disabled={submitting}
-                    style={{
-                      display: "flex", alignItems: "center", gap: "7px",
-                      height: "36px", padding: "0 12px",
-                      borderRadius: "8px",
-                      border: "1px solid rgba(255,255,255,0.1)",
-                      background: multiPromptMode ? "rgba(45,212,191,0.12)" : "rgba(255,255,255,0.05)",
-                      color: multiPromptMode ? "#2DD4BF" : "rgba(255,255,255,0.55)",
-                      fontSize: "13px", fontFamily: "inherit",
-                      cursor: submitting ? "not-allowed" : "pointer",
-                      transition: "background 150ms, color 150ms",
-                      flexShrink: 0,
-                    }}>
+                <button
+                  onClick={() => {
+                    setMultiPromptMode(m => {
+                      if (m) {
+                        // switching OFF — resize the single textarea once it's visible again
+                        requestAnimationFrame(() => {
+                          if (inputRef.current) resizeTextarea(inputRef.current);
+                        });
+                      }
+                      return !m;
+                    });
+                    setExpandedPromptIdx(null);
+                  }}
+                  disabled={submitting}
+                  style={{
+                    display: "flex", alignItems: "center", gap: "7px",
+                    height: "36px", padding: "0 12px",
+                    borderRadius: "8px",
+                    border: "1px solid rgba(255,255,255,0.1)",
+                    background: multiPromptMode ? "rgba(45,212,191,0.12)" : "rgba(255,255,255,0.05)",
+                    color: multiPromptMode ? "#2DD4BF" : "rgba(255,255,255,0.55)",
+                    fontSize: "13px", fontFamily: "inherit",
+                    cursor: submitting ? "not-allowed" : "pointer",
+                    transition: "background 150ms, color 150ms",
+                    flexShrink: 0,
+                  }}>
+                  <span style={{
+                    width: "28px", height: "16px", borderRadius: "8px",
+                    background: multiPromptMode ? "#2DD4BF" : "rgba(255,255,255,0.18)",
+                    position: "relative", flexShrink: 0,
+                    transition: "background 150ms",
+                  }}>
                     <span style={{
-                      width: "28px", height: "16px", borderRadius: "8px",
-                      background: multiPromptMode ? "#2DD4BF" : "rgba(255,255,255,0.18)",
-                      position: "relative", flexShrink: 0,
-                      transition: "background 150ms",
-                    }}>
-                      <span style={{
-                        position: "absolute", top: "2px",
-                        left: multiPromptMode ? "14px" : "2px",
-                        width: "12px", height: "12px", borderRadius: "50%",
-                        background: multiPromptMode ? "#0B3B38" : "#ffffff",
-                        transition: "left 150ms",
-                      }} />
-                    </span>
-                    Multi
-                  </button>
-                )}
+                      position: "absolute", top: "2px",
+                      left: multiPromptMode ? "14px" : "2px",
+                      width: "12px", height: "12px", borderRadius: "50%",
+                      background: multiPromptMode ? "#0B3B38" : "#ffffff",
+                      transition: "left 150ms",
+                    }} />
+                  </span>
+                  Multi
+                </button>
 
                 {/* Text / JSON / YAML mode toggle */}
                 <button
