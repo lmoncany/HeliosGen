@@ -17,12 +17,8 @@ const SHIMMER_CSS = `
 
 const NEXT_IMG_WIDTHS = [16, 32, 48, 64, 96, 128, 256, 384, 640, 750, 828, 1080, 1920, 3840];
 
-// R2 images are served from our own CDN — load directly to avoid the Next.js
-// image proxy timeout under high concurrency. Everything else (Replicate, etc.)
-// goes through the proxy which handles CORS server-side.
 function pickerThumbSrc(url: string, w = 96): string {
   if (!url || url.startsWith("blob:") || url.startsWith("data:")) return url;
-  if (url.includes(".r2.dev/")) return url;
   const target = w * 2;
   const snapped = NEXT_IMG_WIDTHS.find(s => s >= target) ?? NEXT_IMG_WIDTHS[NEXT_IMG_WIDTHS.length - 1];
   return `/_next/image?url=${encodeURIComponent(url)}&w=${snapped}&q=75`;
