@@ -6176,7 +6176,6 @@ function Lightbox({ item, onClose, onCopyPrompt, onPrev, onNext }: { item: Galle
   const copyPrompt = () => {
     if (!item.prompt) return;
     navigator.clipboard.writeText(item.prompt).catch(() => { });
-    onCopyPrompt?.(item.prompt, item.referenceImageUrls, { model: item.model, aspectRatio: item.aspect_ratio, quality: item.quality, azureResolution: item.azure_resolution });
     setCopied(true);
     setTimeout(() => setCopied(false), 1800);
   };
