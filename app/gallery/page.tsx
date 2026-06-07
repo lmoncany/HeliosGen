@@ -3691,7 +3691,6 @@ function GalleryInner() {
             flexDirection: "column",
             gap: "10px",
             flex: promptExpanded ? 1 : undefined,
-            overflowY: promptExpanded ? "auto" : undefined,
           }}>
             {/* Multi-prompt mode strip */}
             {multiPromptMode && (
@@ -4118,7 +4117,7 @@ function GalleryInner() {
             })()}
 
             {/* Bottom row: controls + generate button — always stays at the bottom, never moves on expand */}
-            <div style={{ display: "flex", alignItems: "center", gap: "12px", borderTop: "1px solid rgba(255,255,255,0.05)", paddingTop: "12px", marginTop: "4px" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "12px", borderTop: "1px solid rgba(255,255,255,0.05)", paddingTop: "12px", marginTop: promptExpanded ? "auto" : "4px" }}>
               {/* Controls group */}
               <div style={{ flex: 1, display: "flex", alignItems: "center", gap: "7px", flexWrap: "wrap" }}>
                 {/* Model picker */}
