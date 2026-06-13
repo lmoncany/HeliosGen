@@ -399,11 +399,17 @@ function randomUUID(): string {
 
 const NEXT_IMG_WIDTHS = [16, 32, 48, 64, 96, 128, 256, 384, 640, 750, 828, 1080, 1200, 1920, 2048, 3840];
 
-function thumbSrc(url: string, w = 128): string {
-  if (!url || url.startsWith("blob:") || url.startsWith("data:") || url.startsWith("/_next/")) return url;
-  // Target 2× the CSS pixel width for HiDPI displays; snap up to the nearest allowed size.
+function snapWidth(w: number): number {
   const target = w * 2;
-  const snapped = NEXT_IMG_WIDTHS.find(s => s >= target) ?? NEXT_IMG_WIDTHS[NEXT_IMG_WIDTHS.length - 1];
+  return NEXT_IMG_WIDTHS.find(s => s >= target) ?? NEXT_IMG_WIDTHS[NEXT_IMG_WIDTHS.length - 1];
+}
+
+function thumbSrc(url: string, snapped: number): string {
+  if (!url || url.startsWith("blob:") || url.startsWith("data:") || url.startsWith("/_next/")) return url;
+  // R2 URLs: use our own proxy to avoid Cloudflare ECONNRESET on Next.js's undici fetcher
+  if (url.includes(".r2.dev/")) {
+    return `/api/thumb?url=${encodeURIComponent(url)}&w=${snapped}`;
+  }
   return `/_next/image?url=${encodeURIComponent(url)}&w=${snapped}&q=75`;
 }
 
@@ -955,6 +961,7 @@ function GalleryInner() {
     return galleryCache.get(`${tab}-${initSrc}`)?.hasMore ?? true;
   });
   const [lightboxItem, setLightboxItem] = useState<GalleryItem | null>(null);
+  const [lightboxThumb, setLightboxThumb] = useState<string>("");
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const anySelected = selectedIds.size > 0;
   const toggleSelect = (id: string) => setSelectedIds(prev => { const s = new Set(prev); s.has(id) ? s.delete(id) : s.add(id); return s; });
@@ -3187,7 +3194,7 @@ function GalleryInner() {
                       <GalleryCard
                         item={layoutItem.item}
                         displayWidth={layoutItem.width}
-                        onOpen={() => setLightboxItem(layoutItem.item)}
+                        onOpen={(thumbUrl) => { setLightboxItem(layoutItem.item); setLightboxThumb(thumbUrl); }}
                         onAddReference={layoutItem.item.mediaType === "image" && canAddImgs ? handleAddReference : undefined}
                         onCopyPrompt={handleCopyPrompt}
                         onDownload={handleDownload}
@@ -3580,7 +3587,7 @@ function GalleryInner() {
                   return (
                     <div key={img.id} onMouseDown={e => e.preventDefault()} onPointerDown={e => { if (refImages.length <= 1 || img.uploading || img.error) return; _reorderDragItem = { id: img.id, listTarget: "refImage" }; _reorderOverId = null; setDraggingId(img.id); }} onPointerEnter={() => { if (!_reorderDragItem || _reorderDragItem.id === img.id || _reorderDragItem.listTarget !== "refImage") return; _reorderOverId = img.id; setReorderOverId(img.id); }} onPointerUp={e => { const info = _reorderDragItem; if (!info || info.listTarget !== "refImage") return; e.stopPropagation(); if (_reorderOverId) e.preventDefault(); const target = _reorderOverId ?? img.id; handleReorderDrop(target, "refImage"); }} onMouseEnter={() => { if (!draggingId) setHoveredRefId(img.id); }} onMouseLeave={() => setHoveredRefId(null)} onClick={() => { if (_reorderJustDropped) { _reorderJustDropped = false; return; } if (!img.uploading && !img.error && !draggingId) setRefPreview({ url: img.objectUrl, mediaKind: "image" }); }} onDragOver={e => { if (!e.dataTransfer.types.includes("application/x-gallery-item")) return; e.preventDefault(); e.stopPropagation(); e.dataTransfer.dropEffect = "copy"; setDragOverSlotKey(`refimg-filled-${img.id}`); }} onDragLeave={() => setDragOverSlotKey(null)} onDrop={e => handleGalleryItemDrop(e, "refImage", "image")} style={{ position: "relative", width: "64px", height: "64px", borderRadius: "8px", overflow: "hidden", background: "#1A1C1F", flexShrink: 0, touchAction: refImages.length > 1 ? "none" : undefined, transition: "border 120ms, box-shadow 120ms, opacity 120ms", border: img.error ? "1px solid rgba(248,113,113,0.4)" : dragOverSlotKey === `refimg-filled-${img.id}` ? "2.5px solid #2DD4BF" : taggedImages.some(t => t.refId === img.id) ? "2.5px solid #10b981" : "1px solid rgba(255,255,255,0.08)", boxShadow: dragOverSlotKey === `refimg-filled-${img.id}` ? "0 0 0 3px rgba(45,212,191,0.25)" : undefined, cursor: (!img.uploading && !img.error) ? (refImages.length > 1 ? (draggingId === img.id ? "grabbing" : "grab") : "zoom-in") : "default", animation: isRemoving ? "none" : (isDragging ? "none" : "refImgIn 260ms cubic-bezier(0.16,1,0.3,1)"), opacity: isDragging ? 0.3 : undefined, ...(isRemoving ? { transition: "opacity 170ms, transform 170ms", opacity: 0, transform: "translateY(-10px) scale(0.92)" } : {}) }}>
                       {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img src={thumbSrc(img.objectUrl)} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
+                      <img src={thumbSrc(img.objectUrl, snapWidth(64))} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
                       {isHovered && !img.uploading && !img.error && (
                         <div onClick={e => { if (_reorderJustDropped || draggingId) { _reorderJustDropped = false; e.stopPropagation(); return; } e.stopPropagation(); setRefPreview({ url: img.objectUrl, mediaKind: "image" }); }} style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,0.35)", display: "flex", alignItems: "center", justifyContent: "center", cursor: "zoom-in" }}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.9)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg></div>
                       )}
@@ -3696,7 +3703,7 @@ function GalleryInner() {
                         const isSlotDragging = draggingId === r.id;
                         return (
                         <div key={r.id} onMouseDown={e => e.preventDefault()} onPointerDown={e => { if (!isMultiTarget || listForSlot.length <= 1 || r.uploading || r.error) return; _reorderDragItem = { id: r.id, listTarget: slot.target as "resource"|"referenceVideo"|"audioRef" }; _reorderOverId = null; setDraggingId(r.id); }} onPointerEnter={() => { if (!_reorderDragItem || _reorderDragItem.id === r.id || _reorderDragItem.listTarget !== slot.target) return; _reorderOverId = r.id; setReorderOverId(r.id); }} onPointerUp={e => { const info = _reorderDragItem; if (!info || info.listTarget !== slot.target) return; e.stopPropagation(); if (_reorderOverId) e.preventDefault(); const target = _reorderOverId ?? r.id; handleReorderDrop(target, slot.target as "resource"|"referenceVideo"|"audioRef"); }} onMouseEnter={() => { if (!draggingId) setHoveredRefId(hovId); }} onMouseLeave={() => setHoveredRefId(null)} onDragOver={e => { if (slot.mediaKind === "audio" || !e.dataTransfer.types.includes("application/x-gallery-item")) return; e.preventDefault(); e.stopPropagation(); e.dataTransfer.dropEffect = "copy"; setDragOverSlotKey(dragKey); }} onDragLeave={() => setDragOverSlotKey(null)} onDrop={e => { if (slot.mediaKind !== "audio") handleGalleryItemDrop(e, slot.target as any, slot.mediaKind as "image" | "video"); }} style={{ position: "relative", width: "64px", height: "64px", borderRadius: "8px", overflow: "hidden", flexShrink: 0, background: "#1a1c1f", touchAction: (isMultiTarget && listForSlot.length > 1) ? "none" : undefined, transition: "border 120ms, box-shadow 120ms, opacity 120ms", border: r.error ? "1px solid rgba(248,113,113,0.4)" : dragOverSlotKey === dragKey ? "2.5px solid #2DD4BF" : taggedImages.some(t => t.refId === r.id) ? "2.5px solid #10b981" : "1px solid rgba(255,255,255,0.12)", boxShadow: dragOverSlotKey === dragKey ? "0 0 0 3px rgba(45,212,191,0.25)" : undefined, opacity: isSlotDragging ? 0.3 : undefined, cursor: (isMultiTarget && listForSlot.length > 1 && !r.uploading && !r.error) ? (draggingId === r.id ? "grabbing" : "grab") : undefined }}>
-                          {slot.mediaKind === "image" ? <img src={thumbSrc(r.objectUrl)} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} /> : slot.mediaKind === "video" ? <video src={r.objectUrl} autoPlay muted loop playsInline style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} /> : <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(255,255,255,0.04)" }}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg></div>}
+                          {slot.mediaKind === "image" ? <img src={thumbSrc(r.objectUrl, snapWidth(64))} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} /> : slot.mediaKind === "video" ? <video src={r.objectUrl} autoPlay muted loop playsInline style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} /> : <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(255,255,255,0.04)" }}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg></div>}
                           {hoveredRefId === hovId && !r.uploading && !r.error && slot.mediaKind !== "audio" && (
                             <div onClick={() => { if (_reorderJustDropped || draggingId) { _reorderJustDropped = false; return; } setRefPreview({ url: r.objectUrl, mediaKind: slot.mediaKind }); }} style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,0.35)", display: "flex", alignItems: "center", justifyContent: "center", cursor: "zoom-in", zIndex: 1 }}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.9)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg></div>
                           )}
@@ -4591,7 +4598,7 @@ function GalleryInner() {
               >
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
-                  src={thumbSrc(ref.objectUrl)}
+                  src={thumbSrc(ref.objectUrl, snapWidth(128))}
                   alt=""
                   style={{ width: "30px", height: "30px", borderRadius: "6px", objectFit: "cover", flexShrink: 0, background: "#1a1c1f" }}
                 />
@@ -4643,7 +4650,7 @@ function GalleryInner() {
           >
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
-              src={thumbSrc(chipPreview.tag.url, 256)}
+              src={thumbSrc(chipPreview.tag.url, snapWidth(256))}
               alt=""
               style={{ display: "block", maxWidth: "200px", maxHeight: "160px", width: "auto", height: "auto", objectFit: "contain" }}
             />
@@ -4657,10 +4664,19 @@ function GalleryInner() {
         return (
           <Lightbox
             item={lightboxItem}
+            thumbUrl={lightboxThumb}
             onClose={() => setLightboxItem(null)}
             onCopyPrompt={handleCopyPrompt}
-            onPrev={idx > 0 ? () => setLightboxItem(orderedGalleryItems[idx - 1]) : undefined}
-            onNext={idx < orderedGalleryItems.length - 1 ? () => setLightboxItem(orderedGalleryItems[idx + 1]) : undefined}
+            onPrev={idx > 0 ? () => {
+              const prev = orderedGalleryItems[idx - 1];
+              setLightboxItem(prev);
+              setLightboxThumb(thumbSrc(prev.imageUrls?.[0] ?? prev.url, snapWidth(300)));
+            } : undefined}
+            onNext={idx < orderedGalleryItems.length - 1 ? () => {
+              const next = orderedGalleryItems[idx + 1];
+              setLightboxItem(next);
+              setLightboxThumb(thumbSrc(next.imageUrls?.[0] ?? next.url, snapWidth(300)));
+            } : undefined}
           />
         );
       })()}
@@ -5524,7 +5540,7 @@ function GalleryCard({
 }: {
   item: GalleryItem;
   displayWidth?: number;
-  onOpen?: () => void;
+  onOpen?: (thumbUrl: string) => void;
   onAddReference?: (url: string) => void;
   onCopyPrompt?: (prompt: string, refUrls?: string[], meta?: { model?: string; aspectRatio?: string; quality?: string; azureResolution?: string }) => void;
   onDownload?: (url: string, isVideo: boolean) => Promise<void>;
@@ -5544,6 +5560,9 @@ function GalleryCard({
   const cardRef = useRef<HTMLDivElement>(null);
   const cancelSlotRef = useRef<(() => void) | null>(null);
   const slotReleasedRef = useRef(false);
+  const thumbFailedUrls = useRef<Set<string>>(new Set());
+  const [thumbFailRevision, setThumbFailRevision] = useState(0);
+  const lockedWidths = useRef<Map<string, number>>(new Map());
   const preloaded = loadedImageUrls.has(item.url);
   const [playing, setPlaying] = useState(false);
   const [failed, setFailed] = useState(false);
@@ -5558,6 +5577,13 @@ function GalleryCard({
   const isVideo = item.mediaType === "video";
   const allUrls = item.imageUrls ?? [item.url];
   const displayUrl = allUrls[cardImgIdx] ?? item.url;
+  const isThumbFailed = thumbFailedUrls.current.has(displayUrl);
+  void thumbFailRevision;
+  // Lock the snapped width on first render for each URL; only ratchet up, never reshuffle on resize.
+  const requested = snapWidth(displayWidth ?? 400);
+  const locked = lockedWidths.current.get(displayUrl) ?? 0;
+  if (requested > locked) lockedWidths.current.set(displayUrl, requested);
+  const stableSnap = lockedWidths.current.get(displayUrl)!;
 
   // Lazy-load observer: request a concurrency slot when the card nears the viewport.
   useEffect(() => {
@@ -5671,7 +5697,7 @@ function GalleryCard({
       onDragEnd={() => { _galleryDragItem = null; }}
       onMouseEnter={() => { setIsHovered(true); onMarkSeen?.(); }}
       onMouseLeave={() => setIsHovered(false)}
-      onClick={anySelected ? onSelect : onOpen}
+      onClick={anySelected ? onSelect : () => onOpen?.(isThumbFailed ? displayUrl : thumbSrc(displayUrl, stableSnap))}
     >
       {/* ── NEW badge (top-right) ── */}
       {isNew && (
@@ -5730,7 +5756,7 @@ function GalleryCard({
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             key={displayUrl}
-            src={shouldLoad ? thumbSrc(displayUrl, displayWidth ?? 400) : undefined}
+            src={shouldLoad ? (isThumbFailed ? displayUrl : thumbSrc(displayUrl, stableSnap)) : undefined}
             alt={item.prompt ?? ""}
             draggable={false}
             decoding="async"
@@ -5749,10 +5775,15 @@ function GalleryCard({
               loadedImageUrls.add(item.url);
             }}
             onError={() => {
-              if (!slotReleasedRef.current) { slotReleasedRef.current = true; releaseImageSlot(); }
-              setFailed(true);
-              loadedImageUrls.delete(item.url);
-              try { sessionStorage.setItem("hg-loaded", JSON.stringify([...loadedImageUrls])); } catch {}
+              if (!isThumbFailed) {
+                thumbFailedUrls.current.add(displayUrl);
+                setThumbFailRevision(r => r + 1);
+              } else {
+                if (!slotReleasedRef.current) { slotReleasedRef.current = true; releaseImageSlot(); }
+                setFailed(true);
+                loadedImageUrls.delete(item.url);
+                try { sessionStorage.setItem("hg-loaded", JSON.stringify([...loadedImageUrls])); } catch {}
+              }
             }}
             style={{ display: "block", width: "100%", height: "100%", objectFit: "cover", opacity: imgLoaded ? 1 : 0, transition: "opacity 400ms ease" }}
           />
@@ -6159,7 +6190,7 @@ function renderLightboxPrompt(
       }}>
         {imgUrl && (
           // eslint-disable-next-line @next/next/no-img-element
-          <img src={thumbSrc(imgUrl)} alt="" style={{ width: 20, height: 20, borderRadius: 4, objectFit: "cover", flexShrink: 0 }} />
+          <img src={thumbSrc(imgUrl, snapWidth(20))} alt="" style={{ width: 20, height: 20, borderRadius: 4, objectFit: "cover", flexShrink: 0 }} />
         )}
         Image {n}
       </span>
@@ -6174,10 +6205,11 @@ function renderLightboxPrompt(
 
 // ── Lightbox ──────────────────────────────────────────────────────────────────
 
-function Lightbox({ item, onClose, onCopyPrompt, onPrev, onNext }: { item: GalleryItem; onClose: () => void; onCopyPrompt?: (prompt: string, refUrls?: string[], meta?: { model?: string; aspectRatio?: string; quality?: string; azureResolution?: string }) => void; onPrev?: () => void; onNext?: () => void }) {
+function Lightbox({ item, thumbUrl, onClose, onCopyPrompt, onPrev, onNext }: { item: GalleryItem; thumbUrl?: string; onClose: () => void; onCopyPrompt?: (prompt: string, refUrls?: string[], meta?: { model?: string; aspectRatio?: string; quality?: string; azureResolution?: string }) => void; onPrev?: () => void; onNext?: () => void }) {
   const [visible, setVisible] = useState(false);
   const [fullLoaded, setFullLoaded] = useState(false);
   const [imgIdx, setImgIdx] = useState(0);
+  const [placeholderSrc, setPlaceholderSrc] = useState(thumbUrl ?? "");
   const [zoomed, setZoomed] = useState(false);
   const [copied, setCopied] = useState(false);
   const [downloading, setDownloading] = useState(false);
@@ -6185,7 +6217,9 @@ function Lightbox({ item, onClose, onCopyPrompt, onPrev, onNext }: { item: Galle
   const allUrls = item.imageUrls ?? [item.url];
   const lightboxUrl = allUrls[imgIdx] ?? item.url;
 
-  useEffect(() => { setImgIdx(0); setFullLoaded(false); setResolution(null); }, [item.id]);
+  useEffect(() => { setImgIdx(0); setFullLoaded(false); setResolution(null); setPlaceholderSrc(thumbUrl ?? ""); }, [item.id, thumbUrl]);
+  // When navigating within a multi-image item, compute a fresh placeholder from cache
+  useEffect(() => { if (imgIdx > 0) { setPlaceholderSrc(thumbSrc(lightboxUrl, snapWidth(300))); setFullLoaded(false); setResolution(null); } }, [imgIdx]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { const id = requestAnimationFrame(() => setVisible(true)); return () => cancelAnimationFrame(id); }, []);
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -6353,20 +6387,20 @@ function Lightbox({ item, onClose, onCopyPrompt, onPrev, onNext }: { item: Galle
             />
           ) : (
             <>
+              {/* Thumbnail placeholder — already in browser cache, shows instantly */}
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img key={`blur-${lightboxUrl}`} src={lightboxUrl} alt="" aria-hidden style={{
+              <img key={`thumb-${lightboxUrl}`} src={placeholderSrc} alt="" aria-hidden style={{
                 display: "block",
                 maxHeight: zoomed ? "100vh" : "calc(100vh - 48px)",
                 maxWidth: zoomed ? "100vw" : "100%",
                 width: "auto", height: "auto",
-                filter: fullLoaded ? "none" : "blur(12px)",
-                transform: fullLoaded ? "scale(1)" : "scale(1.04)",
-                transition: "filter 400ms ease, transform 400ms ease",
+                opacity: fullLoaded ? 0 : 1,
+                transition: "opacity 400ms ease",
               }} />
+              {/* Full-res — opacity:1 immediately so browser paints rows progressively */}
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img key={`full-${lightboxUrl}`} src={lightboxUrl} alt={item.prompt ?? ""} onLoad={e => { setFullLoaded(true); const img = e.currentTarget; if (img.naturalWidth && img.naturalHeight) setResolution(`${img.naturalWidth} × ${img.naturalHeight}`); }} style={{
                 position: "absolute", inset: 0, display: "block", width: "100%", height: "100%", objectFit: "contain",
-                opacity: fullLoaded ? 1 : 0, transition: "opacity 400ms ease",
               }} />
               {/* Dot indicators */}
               {allUrls.length > 1 && (
@@ -6432,7 +6466,7 @@ function Lightbox({ item, onClose, onCopyPrompt, onPrev, onNext }: { item: Galle
                 {item.referenceImageUrls.map((url, i) => (
                   <div key={i} style={{ position: "relative", width: 76, height: 68, borderRadius: 10, overflow: "hidden", border: "1px solid rgba(255,255,255,0.1)", flexShrink: 0 }}>
                     {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={thumbSrc(url)} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
+                    <img src={thumbSrc(url, snapWidth(76))} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
                     <div style={{
                       position: "absolute", bottom: 4, right: 4,
                       background: "rgba(0,0,0,0.65)", borderRadius: 4,
