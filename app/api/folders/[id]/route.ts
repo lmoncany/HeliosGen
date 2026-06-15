@@ -8,12 +8,13 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
-  const body = await req.json() as { name?: string; parentId?: string | null; orderIndex?: number };
+  const body = await req.json() as { name?: string; parentId?: string | null; orderIndex?: number; color?: string | null };
 
-  const updates: { name?: string; parent_id?: string | null; order_index?: number } = {};
+  const updates: { name?: string; parent_id?: string | null; order_index?: number; color?: string | null } = {};
   if (body.name !== undefined) updates.name = body.name;
   if (body.parentId !== undefined) updates.parent_id = body.parentId;
   if (body.orderIndex !== undefined) updates.order_index = body.orderIndex;
+  if (body.color !== undefined) updates.color = body.color;
 
   // ── Guest mode ──────────────────────────────────────────────────────────────
   if (GUEST_MODE) {
@@ -21,6 +22,7 @@ export async function PATCH(
       ...(updates.name !== undefined ? { name: updates.name } : {}),
       ...(updates.parent_id !== undefined ? { parent_id: updates.parent_id ?? null } : {}),
       ...(updates.order_index !== undefined ? { order_index: updates.order_index } : {}),
+      ...(updates.color !== undefined ? { color: updates.color } : {}),
     });
     return NextResponse.json({ ok: true });
   }

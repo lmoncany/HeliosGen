@@ -160,6 +160,18 @@ function GitHubButtons() {
 // ── Module-level drag tracker (avoids stale closures across re-renders) ──────
 let _dragFolderId: string | null = null;
 
+const FOLDER_COLORS: { color: string | null; label: string }[] = [
+  { color: null, label: "Default" },
+  { color: "#3B82F6", label: "Blue" },
+  { color: "#2DD4BF", label: "Cyan" },
+  { color: "#A855F7", label: "Purple" },
+  { color: "#EC4899", label: "Pink" },
+  { color: "#EF4444", label: "Red" },
+  { color: "#F97316", label: "Orange" },
+  { color: "#EAB308", label: "Yellow" },
+  { color: "#22C55E", label: "Green" },
+];
+
 // ── Clean failed pending generations from localStorage + notify gallery page ──
 function cleanFailedJobs(folderId: string | null) {
   try {
@@ -188,6 +200,7 @@ interface FolderRowProps {
   onSelect: (id: string) => void;
   onDelete: (id: string) => void;
   onRename: (id: string, name: string) => void;
+  onColorChange: (id: string, color: string | null) => void;
   onMove: (id: string, newParentId: string | null, newOrderIndex: number) => void;
   creatingInFolderId: string | null;
   newFolderName: string;
@@ -202,7 +215,7 @@ interface FolderRowProps {
 
 const FolderRow = React.memo(function FolderRow({
   folder, allFolders, depth, expandedIds, selectedFolderId,
-  onToggleExpand, onSelect, onDelete, onRename, onMove,
+  onToggleExpand, onSelect, onDelete, onRename, onColorChange, onMove,
   creatingInFolderId, newFolderName, onNameChange, onNameKeyDown, onNameBlur, inputRef,
   getCount, generatingFolderIds, unseenFolderIds,
 }: FolderRowProps) {
@@ -270,7 +283,7 @@ const FolderRow = React.memo(function FolderRow({
 
   const sharedChildProps = {
     allFolders, expandedIds, selectedFolderId,
-    onToggleExpand, onSelect, onDelete, onRename, onMove,
+    onToggleExpand, onSelect, onDelete, onRename, onColorChange, onMove,
     creatingInFolderId, newFolderName, onNameChange, onNameKeyDown, onNameBlur, inputRef,
     getCount, generatingFolderIds, unseenFolderIds,
   };
@@ -340,8 +353,8 @@ const FolderRow = React.memo(function FolderRow({
         </button>
 
         {isActive
-          ? <FolderOpen size={13} className="shrink-0 text-white/70" />
-          : <Folder size={13} className="shrink-0 text-white/35" />}
+          ? <FolderOpen size={13} className="shrink-0" style={{ color: folder.color ?? "rgba(255,255,255,0.70)" }} />
+          : <Folder size={13} className="shrink-0" style={{ color: folder.color ?? "rgba(255,255,255,0.35)" }} />}
 
         {isRenaming ? (
           <input
@@ -419,6 +432,37 @@ const FolderRow = React.memo(function FolderRow({
             boxShadow: "0 6px 24px rgba(0,0,0,0.6)",
           }}
         >
+          {/* Color swatches */}
+          <div style={{ padding: "6px 10px 6px", display: "flex", gap: 5, alignItems: "center", flexWrap: "wrap" }}>
+            {FOLDER_COLORS.map(({ color, label }) => {
+              const isSelected = color === null ? !folder.color : folder.color === color;
+              return (
+                <button
+                  key={label}
+                  title={label}
+                  onClick={e => { e.stopPropagation(); setMenuOpen(false); onColorChange(folder.id, color); }}
+                  style={{
+                    width: 14, height: 14, borderRadius: "50%",
+                    background: color ?? "rgba(255,255,255,0.18)",
+                    border: isSelected ? "2px solid rgba(255,255,255,0.85)" : "2px solid transparent",
+                    outline: isSelected ? "1px solid rgba(0,0,0,0.4)" : "none",
+                    outlineOffset: -1,
+                    cursor: "pointer",
+                    padding: 0,
+                    flexShrink: 0,
+                    position: "relative",
+                  }}
+                >
+                  {color === null && (
+                    <svg width="10" height="10" viewBox="0 0 10 10" style={{ position: "absolute", inset: 0, margin: "auto", display: "block" }}>
+                      <line x1="2" y1="8" x2="8" y2="2" stroke="rgba(255,255,255,0.45)" strokeWidth="1.5" strokeLinecap="round" />
+                    </svg>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+          <div style={{ height: 1, background: "rgba(255,255,255,0.07)", margin: "2px 0 4px" }} />
           <button
             onClick={e => { e.stopPropagation(); startRename(); }}
             style={{
@@ -898,6 +942,7 @@ export function AppSidebar() {
                 onSelect={selectFolder}
                 onDelete={deleteFolder}
                 onRename={(id, name) => updateFolder(id, { name })}
+                onColorChange={(id, color) => updateFolder(id, { color })}
                 onMove={moveFolder}
                 creatingInFolderId={creatingFolder ? selectedFolderId : null}
                 newFolderName={newFolderName}

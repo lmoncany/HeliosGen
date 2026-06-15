@@ -45,6 +45,7 @@ interface FolderRecord {
   order_index: number;
   created_at: string;
   updated_at: string;
+  color?: string | null;
 }
 
 interface FolderItemRecord {
@@ -225,7 +226,7 @@ export function insertFolder(data: Omit<FolderRecord, "created_at" | "updated_at
 export function updateFolder(
   id: string,
   userId: string,
-  updates: Partial<Pick<FolderRecord, "name" | "parent_id" | "order_index">>,
+  updates: Partial<Pick<FolderRecord, "name" | "parent_id" | "order_index" | "color">>,
 ): void {
   const db = read();
   const folder = db.folders.find((f) => f.id === id && f.user_id === userId);

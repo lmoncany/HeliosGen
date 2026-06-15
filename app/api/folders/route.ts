@@ -25,7 +25,7 @@ export async function GET(req: NextRequest) {
 
   const { data: folders, error: fErr } = await supabaseAdmin
     .from("folders")
-    .select("id, name, parent_id, order_index, created_at, updated_at")
+    .select("id, name, parent_id, order_index, created_at, updated_at, color")
     .eq("user_id", userId)
     .order("order_index", { ascending: true });
 
@@ -74,7 +74,7 @@ export async function POST(req: NextRequest) {
   const { data: folder, error } = await supabaseAdmin
     .from("folders")
     .insert({ user_id: userId, name, parent_id: parentId ?? null, order_index: orderIndex })
-    .select("id, name, parent_id, order_index, created_at, updated_at")
+    .select("id, name, parent_id, order_index, created_at, updated_at, color")
     .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });

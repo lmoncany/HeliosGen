@@ -7,6 +7,7 @@ export interface Folder {
   parentId: string | null;
   orderIndex: number;
   createdAt: string;
+  color?: string | null;
 }
 
 interface FolderState {
@@ -21,7 +22,7 @@ interface FolderState {
   loadFromServer: () => Promise<void>;
   createFolder: (name: string, parentId?: string | null) => Promise<Folder>;
   deleteFolder: (id: string) => Promise<void>;
-  updateFolder: (id: string, updates: Partial<Pick<Folder, "name">>) => Promise<void>;
+  updateFolder: (id: string, updates: Partial<Pick<Folder, "name" | "color">>) => Promise<void>;
   moveFolder: (id: string, newParentId: string | null, newOrderIndex: number) => Promise<void>;
   reorderFolder: (id: string, newOrderIndex: number) => void;
   selectFolder: (id: string | null) => void;
@@ -84,6 +85,7 @@ export const useFolderStore = create<FolderState>()(
             parentId: f.parent_id,
             orderIndex: f.order_index,
             createdAt: f.created_at,
+            color: (f as { color?: string | null }).color ?? null,
           }));
 
           const serverMap: Record<string, string[]> = {};
@@ -200,7 +202,7 @@ export const useFolderStore = create<FolderState>()(
         try {
           await apiFetch(`/api/folders/${id}`, {
             method: "PATCH",
-            body: JSON.stringify({ name: updates.name }),
+            body: JSON.stringify({ name: updates.name, color: updates.color }),
           });
         } catch {
           // silently ignore
