@@ -86,15 +86,31 @@ export const useFolderStore = create<FolderState>()(
             createdAt: f.created_at,
           }));
 
-          const itemFolderMap: Record<string, string[]> = {};
+          const serverMap: Record<string, string[]> = {};
           for (const fi of data.folderItems ?? []) {
-            if (!itemFolderMap[fi.item_id]) itemFolderMap[fi.item_id] = [];
-            if (!itemFolderMap[fi.item_id].includes(fi.folder_id)) {
-              itemFolderMap[fi.item_id].push(fi.folder_id);
+            if (!serverMap[fi.item_id]) serverMap[fi.item_id] = [];
+            if (!serverMap[fi.item_id].includes(fi.folder_id)) {
+              serverMap[fi.item_id].push(fi.folder_id);
             }
           }
 
-          set({ folders, itemFolderMap });
+          // Folders that exist on the server (used to filter stale local assignments)
+          const validFolderIds = new Set(folders.map((f) => f.id));
+
+          // Merge server data with local: preserve local assignments for still-existing
+          // folders that the server is missing (happens when a POST to /api/folder-items
+          // failed silently and the server never received the assignment).
+          set((s) => {
+            const merged: Record<string, string[]> = { ...serverMap };
+            for (const [itemId, folderIds] of Object.entries(s.itemFolderMap)) {
+              for (const fid of folderIds) {
+                if (!validFolderIds.has(fid)) continue; // folder was deleted server-side
+                if (!merged[itemId]) merged[itemId] = [];
+                if (!merged[itemId].includes(fid)) merged[itemId].push(fid);
+              }
+            }
+            return { folders, itemFolderMap: merged };
+          });
         } catch {
           // silently ignore network errors
         }
@@ -257,13 +273,17 @@ export const useFolderStore = create<FolderState>()(
           return { itemFolderMap: next };
         });
 
-        try {
-          await apiFetch("/api/folder-items", {
-            method: "POST",
-            body: JSON.stringify({ folderId, itemIds }),
-          });
-        } catch {
-          // silently ignore
+        // Retry once on failure so the server stays in sync with local state.
+        for (let attempt = 0; attempt < 2; attempt++) {
+          try {
+            const res = await apiFetch("/api/folder-items", {
+              method: "POST",
+              body: JSON.stringify({ folderId, itemIds }),
+            });
+            if (res.ok) break;
+          } catch {
+            if (attempt === 0) await new Promise((r) => setTimeout(r, 1500));
+          }
         }
       },
 

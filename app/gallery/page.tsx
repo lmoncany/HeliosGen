@@ -2839,13 +2839,28 @@ function GalleryInner() {
 
   const GALLERY_GAP = 1;
 
+  // All folder IDs in the selected folder's subtree (selected + all descendants).
+  const selectedFolderIds = useMemo<Set<string> | null>(() => {
+    if (!selectedFolderId) return null;
+    const ids = new Set<string>();
+    const queue = [selectedFolderId];
+    while (queue.length > 0) {
+      const id = queue.shift()!;
+      ids.add(id);
+      for (const f of folders) {
+        if (f.parentId === id) queue.push(f.id);
+      }
+    }
+    return ids;
+  }, [selectedFolderId, folders]);
+
   const filteredItems = useMemo(() => {
     const bySource = sourceFilter === "generated"
       ? items.filter(item => item.source === "generation")
       : items.filter(item => item.source === "upload");
-    if (!selectedFolderId) return bySource;
-    return bySource.filter(item => itemFolderMap[item.id]?.includes(selectedFolderId));
-  }, [items, sourceFilter, selectedFolderId, itemFolderMap]);
+    if (!selectedFolderIds) return bySource;
+    return bySource.filter(item => itemFolderMap[item.id]?.some(fid => selectedFolderIds.has(fid)));
+  }, [items, sourceFilter, selectedFolderIds, itemFolderMap]);
 
   type GalleryLayoutItem =
     | { kind: "pending"; pg: PendingGen; ratio: number; width: number }
@@ -2881,7 +2896,7 @@ function GalleryInner() {
 
     // Pending gens are only shown in the "generated" source filter, not "uploaded".
     const allPendingVisible = sourceFilter === "generated"
-      ? pendingGens.filter(pg => (pg.tab == null || pg.tab === tab) && (!selectedFolderId || pg.folderId === selectedFolderId))
+      ? pendingGens.filter(pg => (pg.tab == null || pg.tab === tab) && (!selectedFolderIds || (pg.folderId != null && selectedFolderIds.has(pg.folderId))))
       : [];
     const activePendings = allPendingVisible.filter(pg => !pg.error && !pg.retried);
     const mixedPendings = allPendingVisible.filter(pg => !!pg.error || !!pg.retried);
@@ -2926,7 +2941,7 @@ function GalleryInner() {
     }
 
     return rows;
-  }, [containerWidth, zoom, pendingGens, filteredItems, GALLERY_GAP, natRatioVersion, tab, sourceFilter]);
+  }, [containerWidth, zoom, pendingGens, filteredItems, GALLERY_GAP, natRatioVersion, tab, sourceFilter, selectedFolderIds]);
 
   // Fixed-column justified layout: exactly `zoom` items per row, each row fills full width.
   // Last partial row keeps column widths consistent with full rows; empty slots are padded.
@@ -3678,7 +3693,7 @@ function GalleryInner() {
                   const isHovered = hoveredRefId === img.id;
                   const isDragging = draggingId === img.id;
                   return (
-                    <div key={img.id} onMouseDown={e => e.preventDefault()} onPointerDown={e => { if (refImages.length <= 1 || img.uploading || img.error) return; _reorderDragItem = { id: img.id, listTarget: "refImage" }; _reorderOverId = null; setDraggingId(img.id); }} onPointerEnter={() => { if (!_reorderDragItem || _reorderDragItem.id === img.id || _reorderDragItem.listTarget !== "refImage") return; _reorderOverId = img.id; setReorderOverId(img.id); }} onPointerUp={e => { const info = _reorderDragItem; if (!info || info.listTarget !== "refImage") return; e.stopPropagation(); if (_reorderOverId) e.preventDefault(); const target = _reorderOverId ?? img.id; handleReorderDrop(target, "refImage"); }} onMouseEnter={() => { if (!draggingId) setHoveredRefId(img.id); }} onMouseLeave={() => setHoveredRefId(null)} onClick={() => { if (_reorderJustDropped) { _reorderJustDropped = false; return; } if (!img.uploading && !img.error && !draggingId) setRefPreview({ url: img.objectUrl, mediaKind: "image" }); }} onDragOver={e => { if (!e.dataTransfer.types.includes("application/x-gallery-item")) return; e.preventDefault(); e.stopPropagation(); e.dataTransfer.dropEffect = "copy"; setDragOverSlotKey(`refimg-filled-${img.id}`); }} onDragLeave={() => setDragOverSlotKey(null)} onDrop={e => handleGalleryItemDrop(e, "refImage", "image")} style={{ position: "relative", width: "64px", height: "64px", borderRadius: "8px", overflow: "hidden", background: "#1A1C1F", flexShrink: 0, touchAction: refImages.length > 1 ? "none" : undefined, transition: "border 120ms, box-shadow 120ms, opacity 120ms", border: img.error ? "1px solid rgba(248,113,113,0.4)" : dragOverSlotKey === `refimg-filled-${img.id}` ? "2.5px solid #2DD4BF" : taggedImages.some(t => t.refId === img.id) ? "2.5px solid #10b981" : "1px solid rgba(255,255,255,0.08)", boxShadow: dragOverSlotKey === `refimg-filled-${img.id}` ? "0 0 0 3px rgba(45,212,191,0.25)" : undefined, cursor: (!img.uploading && !img.error) ? (refImages.length > 1 ? (draggingId === img.id ? "grabbing" : "grab") : "zoom-in") : "default", animation: isRemoving ? "none" : (isDragging ? "none" : "refImgIn 260ms cubic-bezier(0.16,1,0.3,1)"), opacity: isDragging ? 0.3 : undefined, ...(isRemoving ? { transition: "opacity 170ms, transform 170ms", opacity: 0, transform: "translateY(-10px) scale(0.92)" } : {}) }}>
+                    <div key={img.id} onMouseDown={e => e.preventDefault()} onPointerDown={e => { if (refImages.length <= 1 || img.uploading || img.error) return; _reorderDragItem = { id: img.id, listTarget: "refImage" }; _reorderOverId = null; setDraggingId(img.id); }} onPointerEnter={() => { if (!_reorderDragItem || _reorderDragItem.id === img.id || _reorderDragItem.listTarget !== "refImage") return; _reorderOverId = img.id; setReorderOverId(img.id); }} onPointerUp={e => { const info = _reorderDragItem; if (!info || info.listTarget !== "refImage") return; e.stopPropagation(); if (_reorderOverId) e.preventDefault(); const target = _reorderOverId ?? img.id; handleReorderDrop(target, "refImage"); }} onMouseEnter={() => { if (!draggingId) setHoveredRefId(img.id); }} onMouseLeave={() => setHoveredRefId(null)} onClick={() => { if (_reorderJustDropped) { _reorderJustDropped = false; return; } if (!img.uploading && !img.error && !draggingId) setRefPreview({ url: img.objectUrl, mediaKind: "image" }); }} onDragOver={e => { if (!e.dataTransfer.types.includes("application/x-gallery-item")) return; e.preventDefault(); e.stopPropagation(); e.dataTransfer.dropEffect = "copy"; setDragOverSlotKey(`refimg-filled-${img.id}`); }} onDragLeave={() => setDragOverSlotKey(null)} onDrop={e => handleGalleryItemDrop(e, "refImage", "image")} style={{ position: "relative", width: "64px", height: "64px", borderRadius: "8px", overflow: "hidden", background: "#1A1C1F", flexShrink: 0, touchAction: refImages.length > 1 ? "none" : undefined, transition: "border 120ms, box-shadow 120ms, opacity 120ms", border: img.error ? "1px solid rgba(248,113,113,0.4)" : dragOverSlotKey === `refimg-filled-${img.id}` ? "2.5px solid #2DD4BF" : taggedImages.some(t => t.refId === img.id) ? "2.5px solid #10b981" : "1px solid rgba(255,255,255,0.08)", boxShadow: dragOverSlotKey === `refimg-filled-${img.id}` ? "0 0 0 3px rgba(45,212,191,0.25)" : undefined, cursor: (!img.uploading && !img.error) ? (refImages.length > 1 ? (draggingId === img.id ? "grabbing" : "grab") : "zoom-in") : "default", animation: isRemoving ? "none" : (isDragging ? "none" : "refImgIn 260ms cubic-bezier(0.16,1,0.3,1) backwards"), opacity: isDragging ? 0.3 : undefined, ...(isRemoving ? { transition: "opacity 170ms, transform 170ms", opacity: 0, transform: "translateY(-10px) scale(0.92)" } : {}) }}>
                       {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img src={thumbSrc(img.objectUrl, snapWidth(64))} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
                       {isHovered && !img.uploading && !img.error && (
