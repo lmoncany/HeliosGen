@@ -231,7 +231,7 @@ export const IMAGE_MODELS: ImageModel[] = [
         "auto":  "auto",
         "1:1":   "1024x1024",  // square
         "16:9":  "1536x1024",  // landscape (Azure canonical; 3:2 in practice)
-        "9:16":  "1080x1920",  // portrait  — 1080p vertical
+        "9:16":  "1008x1792",  // portrait  — both edges /16 (1080 is not a multiple of 16)
         "4:3":   "1280x960",   // adapted 4:3 — 1 228 800 px, both /16
         "3:4":   "960x1280",   // adapted 3:4 — 1 228 800 px, both /16
       },
