@@ -2405,6 +2405,9 @@ function GalleryInner() {
 
   useEffect(() => { setMentionSelIdx(0); }, [filteredMentions.length]);
 
+  // Stable content key so the effect only re-runs when assets actually change, not just reference
+  const mentionableAssetsKey = mentionableAssets.map(a => `${a.id}:${a.label}:${a.cdnUrl ?? ""}`).join("|");
+
   // Sync: remove stale chips; auto-tag @mentions that match attached assets (paste support)
   useEffect(() => {
     setTaggedImages(prev => {
@@ -2418,8 +2421,9 @@ function GalleryInner() {
           }
         }
       }
-      if (newTags.length === 0) return filtered.length === prev.length ? prev : filtered;
-      return [...filtered, ...newTags];
+      const next = newTags.length === 0 ? filtered : [...filtered, ...newTags];
+      if (next.length === prev.length && next.every((t, i) => t.refId === prev[i].refId && t.label === prev[i].label)) return prev;
+      return next;
     });
     if (inputRef.current && !multiPromptMode) {
       const maxH = promptExpanded ? window.innerHeight * 0.75 - 220 : 264;
@@ -2429,7 +2433,8 @@ function GalleryInner() {
       const st = inputRef.current?.scrollTop ?? 0;
       overlayInnerRef.current.style.transform = st > 0 ? `translateY(-${st}px)` : "";
     }
-  }, [prompt, mentionableAssets]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prompt, mentionableAssetsKey]);
 
   const openDurPicker = useCallback(() => {
     const r = durPillRef.current?.getBoundingClientRect();
